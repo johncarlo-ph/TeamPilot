@@ -1,0 +1,166 @@
+using TeamPilot.Domain.Common;
+using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
+
+namespace TeamPilot.Domain.Entities;
+
+/// <summary>
+/// The aggregate root representing a unit of work moving through the Kanban board
+/// (To Do -&gt; In Progress -&gt; For Review -&gt; Done), with its assigned agents, commits,
+/// reviews, and detected conflicts.
+/// </summary>
+public class Ticket : Entity
+{
+    private readonly List<TicketAgentAssignment> _assignments = [];
+    private readonly List<Commit> _commits = [];
+    private readonly List<Review> _reviews = [];
+    private readonly List<Conflict> _conflicts = [];
+
+    public Guid ProjectId { get; private set; }
+
+    public string Title { get; private set; } = string.Empty;
+
+    public string Description { get; private set; } = string.Empty;
+
+    public TicketStatus Status { get; private set; }
+
+    public string? BranchName { get; private set; }
+
+    public IReadOnlyCollection<TicketAgentAssignment> Assignments => _assignments.AsReadOnly();
+
+    public IReadOnlyCollection<Commit> Commits => _commits.AsReadOnly();
+
+    public IReadOnlyCollection<Review> Reviews => _reviews.AsReadOnly();
+
+    public IReadOnlyCollection<Conflict> Conflicts => _conflicts.AsReadOnly();
+
+    private Ticket()
+    {
+    }
+
+    public static Ticket Create(Guid projectId, string title, string? description)
+    {
+        if (projectId == Guid.Empty)
+        {
+            throw new ArgumentException("Project id is required.", nameof(projectId));
+        }
+
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            throw new ArgumentException("Title is required.", nameof(title));
+        }
+
+        return new Ticket
+        {
+            ProjectId = projectId,
+            Title = title.Trim(),
+            Description = description?.Trim() ?? string.Empty,
+            Status = TicketStatus.ToDo,
+        };
+    }
+
+    /// <summary>
+    /// Assigns an agent to this ticket. The first assignment moves the ticket out of To Do.
+    /// Assigning the same agent twice is a no-op.
+    /// </summary>
+    public void AssignAgent(Agent agent)
+    {
+        ArgumentNullException.ThrowIfNull(agent);
+
+        if (Status is not (TicketStatus.ToDo or TicketStatus.InProgress))
+        {
+            throw new InvalidTicketStateTransitionException(Status, "assign an agent");
+        }
+
+        if (_assignments.Any(a => a.AgentId == agent.Id))
+        {
+            return;
+        }
+
+        _assignments.Add(TicketAgentAssignment.Create(Id, agent.Id, agent.Role));
+
+        if (Status == TicketStatus.ToDo)
+        {
+            Status = TicketStatus.InProgress;
+        }
+
+        MarkUpdated();
+    }
+
+    public void LinkBranch(string branchName)
+    {
+        if (string.IsNullOrWhiteSpace(branchName))
+        {
+            throw new ArgumentException("Branch name is required.", nameof(branchName));
+        }
+
+        BranchName = branchName;
+        MarkUpdated();
+    }
+
+    public void AddCommit(Commit commit)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        _commits.Add(commit);
+        MarkUpdated();
+    }
+
+    public void MoveToReview()
+    {
+        if (Status != TicketStatus.InProgress)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "move to review");
+        }
+
+        Status = TicketStatus.ForReview;
+        MarkUpdated();
+    }
+
+    public void Approve()
+    {
+        if (Status != TicketStatus.ForReview)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "approve");
+        }
+
+        Status = TicketStatus.Done;
+        MarkUpdated();
+    }
+
+    public void RequestChanges()
+    {
+        if (Status != TicketStatus.ForReview)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "request changes");
+        }
+
+        Status = TicketStatus.InProgress;
+        MarkUpdated();
+    }
+
+    public void RecordReview(Review review)
+    {
+        ArgumentNullException.ThrowIfNull(review);
+
+        if (review.TicketId != Id)
+        {
+            throw new ArgumentException("Review does not belong to this ticket.", nameof(review));
+        }
+
+        _reviews.Add(review);
+        MarkUpdated();
+    }
+
+    public void RaiseConflict(Conflict conflict)
+    {
+        ArgumentNullException.ThrowIfNull(conflict);
+
+        if (conflict.TicketId != Id)
+        {
+            throw new ArgumentException("Conflict does not belong to this ticket.", nameof(conflict));
+        }
+
+        _conflicts.Add(conflict);
+        MarkUpdated();
+    }
+}

@@ -1,0 +1,153 @@
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using TeamPilot.Application.Approval;
+using TeamPilot.Application.Common.Exceptions;
+using TeamPilot.Application.Common.Interfaces;
+using TeamPilot.Application.Git;
+using TeamPilot.Application.Pipelines;
+using TeamPilot.Application.Pipelines.Dtos;
+using TeamPilot.Application.Projects;
+using TeamPilot.Application.Reviews.Dtos;
+using TeamPilot.Application.Reviews.Validators;
+using TeamPilot.Application.Tickets;
+using TeamPilot.Domain.Entities;
+using TeamPilot.Domain.Enums;
+using Xunit;
+
+namespace TeamPilot.Application.Tests.Approval;
+
+public class ApprovalGateServiceTests
+{
+    private readonly Mock<ITicketRepository> _ticketRepository = new();
+    private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<IGitService> _gitService = new();
+    private readonly Mock<IPipelineService> _pipelineService = new();
+    private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
+    private readonly Mock<ICurrentUserContext> _currentUser = new();
+    private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly ApprovalGateService _sut;
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+
+    public ApprovalGateServiceTests()
+    {
+        _unitOfWork
+            .Setup(u => u.ExecuteInTransactionAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
+            .Returns((Func<Task> action, CancellationToken _) => action());
+
+        _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+
+        // Default to Developer so the existing Approve-path tests exercise the happy path;
+        // the Analyst-specific tests override this per-test.
+        _currentUser.Setup(c => c.IsInRole(UserRole.Developer)).Returns(true);
+
+        _pipelineService
+            .Setup(p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid projectId, Guid? ticketId, string reason, CancellationToken _) =>
+                new PipelineRunDto(Guid.NewGuid(), projectId, ticketId, PipelineRunStatus.Queued, reason, null, null, null, DateTime.UtcNow));
+
+        _sut = new ApprovalGateService(
+            _ticketRepository.Object,
+            _projectRepository.Object,
+            _gitService.Object,
+            _pipelineService.Object,
+            _projectAccessGuard.Object,
+            _currentUser.Object,
+            _unitOfWork.Object,
+            new SubmitReviewRequestValidator(),
+            NullLogger<ApprovalGateService>.Instance);
+    }
+
+    private Ticket CreateTicketInReview(string branchName)
+    {
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+        ticket.LinkBranch(branchName);
+        ticket.MoveToReview();
+        return ticket;
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenDecisionIsApprove_MergesBranchAndCompletesTicket()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.Done, result.Status);
+        _gitService.Verify(
+            g => g.MergeBranchAsync(_project.RepositoryPath, "feature/add-feature", "main", "Alice", It.IsAny<CancellationToken>()),
+            Times.Once);
+        _pipelineService.Verify(
+            p => p.TriggerAsync(_project.Id, ticket.Id, It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenDecisionIsRequestChanges_MovesTicketBackToInProgress()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Bob", ReviewDecision.RequestChanges, "Needs work");
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.InProgress, result.Status);
+        _gitService.Verify(
+            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _pipelineService.Verify(
+            p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenApprovingWithoutLinkedBranch_ThrowsInvalidOperationException()
+    {
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+        ticket.MoveToReview();
+
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, null);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenAnalystSubmitsApprove_ThrowsForbiddenException()
+    {
+        _currentUser.Setup(c => c.IsInRole(UserRole.Developer)).Returns(false);
+        _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(false);
+
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, null);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+        _gitService.Verify(
+            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenAnalystSubmitsRequestChanges_Succeeds()
+    {
+        _currentUser.Setup(c => c.IsInRole(UserRole.Developer)).Returns(false);
+        _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(false);
+
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.RequestChanges, "Needs work");
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.InProgress, result.Status);
+    }
+}

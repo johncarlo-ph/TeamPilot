@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TeamPilot.API/TeamPilot.API.csproj" />
+    <Project Path="src/TeamPilot.Application/TeamPilot.Application.csproj" />
+    <Project Path="src/TeamPilot.Domain/TeamPilot.Domain.csproj" />
+    <Project Path="src/TeamPilot.Infrastructure/TeamPilot.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TeamPilot.Application.Tests/TeamPilot.Application.Tests.csproj" />
+    <Project Path="tests/TeamPilot.Domain.Tests/TeamPilot.Domain.Tests.csproj" />
+  </Folder>
+</Solution>

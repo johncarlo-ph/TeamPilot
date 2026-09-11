@@ -1,8 +1,8 @@
 # TeamPilot
 
 TeamPilot is an AI-powered ticketing and development-orchestration system. It combines a
-Kanban-style ticket board, AI agent orchestration (research/design/coding agents managed by a
-per-project orchestrator), Git integration, and a human approval gate, so that a project's
+Kanban-style ticket board, AI agent orchestration (research/design/coding/testing agents managed
+by a per-project orchestrator), Git integration, and a human approval gate, so that a project's
 day-to-day development work can be tracked, delegated to AI agents, reviewed, and merged
 through one system.
 
@@ -30,7 +30,8 @@ against a real Git repository, and route the result through a human approval gat
 merges — with role-based access so people only see and act on the projects they're assigned to.
 
 **Scope (current).**
-- Multi-project support: each `Project` owns its own Git repository, orchestrator + sub-agents,
+- Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
+  server-managed sandbox on creation, kept in sync via push/fetch), orchestrator + sub-agents,
   ticket board, and CI/CD pipeline run history.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, with agent assignment, LLM-driven
   agent work, Git commits, merge-conflict detection/resolution, and an approval gate.
@@ -62,7 +63,7 @@ polling trade-off specifically).
 |---|---|
 | [.NET 10 SDK](https://dotnet.microsoft.com/download) | `dotnet --version` should report `10.0.x` |
 | SQL Server | A local SQL Server instance reachable at `localhost` (Developer/Express edition, or an existing instance) — see [appsettings.json](src/TeamPilot.API/appsettings.json) to point elsewhere |
-| Git | Required at runtime too — each `Project.RepositoryPath` must point at a real, already-`git init`'d local repository with at least one commit |
+| A remote Git repository + access token | Each `Project` connects to a remote (HTTPS URL + a Personal Access Token with read/write access) — TeamPilot clones it into a server-managed sandbox itself, under `Git:SandboxRoot`, when the project is created. No local `git init` needed. |
 
 ### Clone and restore
 

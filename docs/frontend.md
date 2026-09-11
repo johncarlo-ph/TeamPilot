@@ -118,6 +118,12 @@ follow-up work, not fixed as part of this frontend change.
 - Reusable dialogs (`create-ticket-form`, `assign-agents-modal`, `review-form`,
   `project-form`, `agent-form`, `user-edit-modal`) all wrap the shared `Modal` component and
   follow the same `open` input / `closed` output / `<action>` output contract.
+- `project-form`'s Access Token field (`type="password"`) is the first masked input in this
+  codebase - no prior precedent existed to follow. It's required when creating a project and
+  optional when editing (blank = keep the currently stored token); the validator is
+  added/cleared on the `accessToken` control inside the same `effect()` that already resets the
+  form per the `project()` input. Remote URL is rendered as read-only text instead of a form
+  control when editing, since `Project.RemoteUrl` is immutable after creation.
 - New Angular control-flow syntax (`@if`/`@for`/`@switch`) is used throughout; no `*ngIf`/`*ngFor`.
 
 ## Configuration
@@ -181,3 +187,8 @@ than a toast).
 - **No delete endpoints** exist for `Project`/`Ticket`/`Agent` on the API, so the UI has no
   delete affordance for any of them either — test/demo data created through the UI can't be
   removed without going directly to the database.
+- **No inline server-error handling on any form**, `project-form` included: `project-list.ts`'s
+  `save()` has no `error` callback on its `subscribe`, so a failed create (e.g. an unreachable
+  remote or bad access token, surfaced by the API as 422) only shows the generic
+  `errorInterceptor` toast, and the modal stays open with whatever was typed. Consistent with
+  every other form today, not a regression specific to this one.

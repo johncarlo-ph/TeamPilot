@@ -2,6 +2,7 @@ using FluentValidation;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
+using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects.Dtos;
 using TeamPilot.Application.Users;
 using TeamPilot.Domain.Entities;
@@ -14,6 +15,8 @@ public sealed class ProjectService(
     IUserRepository userRepository,
     ICurrentUserContext currentUser,
     IProjectAccessGuard projectAccessGuard,
+    IGitService gitService,
+    IGitCredentialProtector credentialProtector,
     IUnitOfWork unitOfWork,
     IValidator<CreateProjectRequest> createValidator,
     IValidator<UpdateProjectRequest> updateValidator) : IProjectService
@@ -22,7 +25,14 @@ public sealed class ProjectService(
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
 
-        var project = Project.Create(request.Name, request.Description, request.RepositoryPath);
+        var encryptedAccessToken = credentialProtector.Protect(request.AccessToken);
+        var project = Project.Create(request.Name, request.Description, request.RemoteUrl, encryptedAccessToken, request.BaseBranch);
+
+        // Clone before persisting: if the remote can't be reached with the given token, nothing
+        // is saved - no partial/orphaned project row to clean up or retry.
+        var sandboxPath = await gitService.CloneAsync(project.Id, project.RemoteUrl, request.AccessToken, cancellationToken);
+        project.AssignSandboxPath(sandboxPath);
+
         await projectRepository.AddAsync(project, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -63,7 +73,13 @@ public sealed class ProjectService(
         var project = await projectRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), id);
 
-        project.UpdateDetails(request.Name, request.Description, request.RepositoryPath);
+        project.UpdateDetails(request.Name, request.Description, request.BaseBranch);
+
+        if (!string.IsNullOrWhiteSpace(request.AccessToken))
+        {
+            project.RotateAccessToken(credentialProtector.Protect(request.AccessToken));
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(project);
@@ -73,7 +89,8 @@ public sealed class ProjectService(
         project.Id,
         project.Name,
         project.Description,
-        project.RepositoryPath,
+        project.RemoteUrl,
+        project.BaseBranch,
         project.CreatedAtUtc,
         project.UpdatedAtUtc);
 }

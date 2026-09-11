@@ -16,13 +16,55 @@
         formControlName="description"
       ></textarea>
     </div>
+
+    @if (isEditing()) {
+      <div class="mb-3">
+        <span class="form-label d-block">Remote URL</span>
+        <code>{{ project()?.remoteUrl }}</code>
+        <div class="form-text">Can't be changed after the project is created.</div>
+      </div>
+    } @else {
+      <div class="mb-3">
+        <label for="project-remote-url" class="form-label">Remote URL</label>
+        <input
+          id="project-remote-url"
+          type="text"
+          class="form-control"
+          placeholder="https://github.com/org/repo.git"
+          formControlName="remoteUrl"
+        />
+        @if (form.controls.remoteUrl.invalid && form.controls.remoteUrl.touched) {
+          <div class="text-danger small mt-1">Enter a valid https:// repository URL.</div>
+        }
+      </div>
+    }
+
     <div class="mb-3">
-      <label for="project-repo" class="form-label">Repository path</label>
-      <input id="project-repo" type="text" class="form-control" formControlName="repositoryPath" />
-      @if (form.controls.repositoryPath.invalid && form.controls.repositoryPath.touched) {
-        <div class="text-danger small mt-1">Repository path is required.</div>
+      <label for="project-access-token" class="form-label">Access Token</label>
+      <input
+        id="project-access-token"
+        type="password"
+        class="form-control"
+        autocomplete="new-password"
+        formControlName="accessToken"
+      />
+      @if (form.controls.accessToken.invalid && form.controls.accessToken.touched) {
+        <div class="text-danger small mt-1">Access token is required.</div>
+      }
+      @if (isEditing()) {
+        <div class="form-text">Leave blank to keep the current token.</div>
       }
     </div>
+
+    <div class="mb-3">
+      <label for="project-base-branch" class="form-label">Base branch</label>
+      <input id="project-base-branch" type="text" class="form-control" formControlName="baseBranch" />
+      <div class="form-text">Every ticket's branch is cut from here, and approvals merge back into it.</div>
+      @if (form.controls.baseBranch.invalid && form.controls.baseBranch.touched) {
+        <div class="text-danger small mt-1">Base branch is required.</div>
+      }
+    </div>
+
     <div class="d-flex justify-content-end gap-2">
       <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">Cancel</button>
       <button type="submit" class="btn btn-primary">Save</button>

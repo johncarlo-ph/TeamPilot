@@ -14,6 +14,7 @@ public sealed class TicketService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
     IGitService gitService,
+    IGitCredentialProtector credentialProtector,
     IProjectAccessGuard projectAccessGuard,
     IUnitOfWork unitOfWork,
     IValidator<CreateTicketRequest> createValidator,
@@ -77,7 +78,14 @@ public sealed class TicketService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, cancellationToken);
+        var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+
+        // Fetch first so the new branch is cut from the remote's current tip of the base
+        // branch, not a possibly-stale local one.
+        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
+        await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
+        await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
+
         ticket.LinkBranch(branchName);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 

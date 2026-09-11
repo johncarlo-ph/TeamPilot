@@ -1,25 +1,90 @@
 using LibGit2Sharp;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Git;
 
 namespace TeamPilot.Infrastructure.Git;
 
 /// <summary>
-/// Git operations against a project's local sandbox repository via LibGit2Sharp. The caller
-/// resolves <c>repositoryPath</c> from the owning Project - this service holds no per-project
-/// state. Opens and disposes a <see cref="Repository"/> handle per call rather than holding
-/// one open for the service's lifetime, so it can safely be registered at any lifetime.
+/// Git operations against a project's local sandbox clone via LibGit2Sharp. The caller resolves
+/// <c>repositoryPath</c> from the owning Project - this service holds no per-project state.
+/// Opens and disposes a <see cref="Repository"/> handle per call rather than holding one open
+/// for the service's lifetime, so it can safely be registered at any lifetime. Operations that
+/// talk to the remote (clone/push/fetch) wrap LibGit2Sharp failures as
+/// <see cref="GitOperationException"/>.
 /// </summary>
-public class LibGit2SharpGitService(IOptions<GitOptions> options) : IGitService
+public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironment environment) : IGitService
 {
     private readonly GitOptions _options = options.Value;
 
-    public Task EnsureBranchAsync(string repositoryPath, string branchName, CancellationToken cancellationToken = default) =>
+    public Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                var localPath = Path.Combine(ResolveSandboxRoot(), projectId.ToString());
+
+                try
+                {
+                    var cloneOptions = new CloneOptions();
+                    cloneOptions.FetchOptions.CredentialsProvider = (_, _, _) => BuildCredentials(accessToken);
+                    Repository.Clone(remoteUrl, localPath, cloneOptions);
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    throw new GitOperationException($"Could not clone '{remoteUrl}'. Check the repository URL and access token.", ex);
+                }
+
+                return localPath;
+            },
+            cancellationToken);
+
+    public Task PushAsync(string repositoryPath, string branchName, string accessToken, CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
             {
                 using var repo = OpenRepository(repositoryPath);
-                GetOrCreateBranch(repo, branchName);
+                var branch = GetExistingBranch(repo, branchName);
+                var remote = GetOriginRemote(repo);
+                var pushOptions = new PushOptions { CredentialsProvider = (_, _, _) => BuildCredentials(accessToken) };
+
+                try
+                {
+                    repo.Network.Push(remote, branch.CanonicalName, pushOptions);
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    throw new GitOperationException($"Could not push branch '{branchName}' to the remote.", ex);
+                }
+            },
+            cancellationToken);
+
+    public Task FetchAsync(string repositoryPath, string accessToken, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                var remote = GetOriginRemote(repo);
+                var fetchOptions = new FetchOptions { CredentialsProvider = (_, _, _) => BuildCredentials(accessToken) };
+
+                try
+                {
+                    var refSpecs = remote.FetchRefSpecs.Select(spec => spec.Specification);
+                    Commands.Fetch(repo, remote.Name, refSpecs, fetchOptions, null);
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    throw new GitOperationException("Could not fetch from the remote.", ex);
+                }
+            },
+            cancellationToken);
+
+    public Task EnsureBranchAsync(string repositoryPath, string branchName, string baseBranchName, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                GetOrCreateBranch(repo, branchName, baseBranchName);
             },
             cancellationToken);
 
@@ -133,19 +198,50 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options) : IGitService
             },
             cancellationToken);
 
+    private string ResolveSandboxRoot() =>
+        Path.IsPathRooted(_options.SandboxRoot)
+            ? _options.SandboxRoot
+            : Path.Combine(environment.ContentRootPath, _options.SandboxRoot);
+
+    private static Remote GetOriginRemote(Repository repo) =>
+        repo.Network.Remotes["origin"]
+            ?? throw new InvalidOperationException("Repository has no 'origin' remote configured.");
+
+    /// <summary>PAT-over-HTTPS convention accepted by GitHub and GitLab (token as username,
+    /// blank password). Azure DevOps/Bitbucket may need the token in the password slot instead -
+    /// this is the one place that would need to change to support those.</summary>
+    private static Credentials BuildCredentials(string accessToken) =>
+        new UsernamePasswordCredentials { Username = accessToken, Password = string.Empty };
+
     private static Repository OpenRepository(string repositoryPath)
     {
         if (string.IsNullOrWhiteSpace(repositoryPath) || !Repository.IsValid(repositoryPath))
         {
             throw new InvalidOperationException(
-                $"'{repositoryPath}' is not a valid Git repository. Initialize it (git init) with at least one commit before using Git-backed features.");
+                $"'{repositoryPath}' is not a valid Git repository. Clone or initialize it before using Git-backed features.");
         }
 
         return new Repository(repositoryPath);
     }
 
-    private static Branch GetOrCreateBranch(Repository repo, string branchName) =>
-        repo.Branches[branchName] ?? repo.CreateBranch(branchName);
+    private static Branch GetOrCreateBranch(Repository repo, string branchName, string? baseBranchName = null)
+    {
+        var existing = repo.Branches[branchName];
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        if (baseBranchName is null)
+        {
+            return repo.CreateBranch(branchName);
+        }
+
+        var baseBranch = repo.Branches[baseBranchName]
+            ?? throw new InvalidOperationException($"Base branch '{baseBranchName}' does not exist in the repository.");
+
+        return repo.CreateBranch(branchName, baseBranch.Tip);
+    }
 
     private static Branch GetExistingBranch(Repository repo, string branchName) =>
         repo.Branches[branchName]

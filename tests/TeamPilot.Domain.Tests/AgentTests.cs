@@ -14,15 +14,37 @@ public class AgentTests
         Assert.Throws<ArgumentException>(() => Agent.Create(Guid.Empty, "Coder", AgentRole.Coding));
     }
 
+    [Theory]
+    [InlineData(AgentRole.Orchestrator)]
+    [InlineData(AgentRole.Research)]
+    [InlineData(AgentRole.Design)]
+    [InlineData(AgentRole.Coding)]
+    [InlineData(AgentRole.Testing)]
+    public void Create_SeedsCurrentDefaultInstructionForEveryType(AgentRole role)
+    {
+        var agent = Agent.Create(ProjectId, "Agent", role);
+
+        Assert.Equal(3, agent.Instructions.Count);
+        foreach (var type in Enum.GetValues<InstructionType>())
+        {
+            var current = Assert.Single(agent.Instructions, i => i.Type == type);
+            Assert.Equal(1, current.Version);
+            Assert.True(current.IsCurrent);
+            Assert.False(string.IsNullOrWhiteSpace(current.Content));
+        }
+    }
+
     [Fact]
-    public void AddInstructionVersion_FirstVersion_SetsVersionToOneAndIsCurrent()
+    public void AddInstructionVersion_AfterDefaultSeed_SupersedesDefaultAndBecomesVersionTwo()
     {
         var agent = Agent.Create(ProjectId, "Coder", AgentRole.Coding);
+        var seeded = agent.Instructions.Single(i => i.Type == InstructionType.Guideline);
 
-        var instruction = agent.AddInstructionVersion(InstructionType.Guideline, "Follow SOLID", "admin");
+        var updated = agent.AddInstructionVersion(InstructionType.Guideline, "Follow SOLID", "admin");
 
-        Assert.Equal(1, instruction.Version);
-        Assert.True(instruction.IsCurrent);
+        Assert.False(seeded.IsCurrent);
+        Assert.True(updated.IsCurrent);
+        Assert.Equal(2, updated.Version);
     }
 
     [Fact]
@@ -35,8 +57,7 @@ public class AgentTests
 
         Assert.False(first.IsCurrent);
         Assert.True(second.IsCurrent);
-        Assert.Equal(2, second.Version);
-        Assert.Equal(2, agent.Instructions.Count);
+        Assert.Equal(3, second.Version);
     }
 
     [Fact]
@@ -47,8 +68,8 @@ public class AgentTests
         var guideline = agent.AddInstructionVersion(InstructionType.Guideline, "g1", "admin");
         var requirement = agent.AddInstructionVersion(InstructionType.Requirement, "r1", "admin");
 
-        Assert.Equal(1, guideline.Version);
-        Assert.Equal(1, requirement.Version);
+        Assert.Equal(2, guideline.Version);
+        Assert.Equal(2, requirement.Version);
         Assert.True(guideline.IsCurrent);
         Assert.True(requirement.IsCurrent);
     }

@@ -5,5 +5,6 @@ public enum AgentRole
     Orchestrator,
     Research,
     Design,
-    Coding
+    Coding,
+    Testing
 }

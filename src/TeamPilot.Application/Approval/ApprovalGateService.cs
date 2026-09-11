@@ -18,6 +18,7 @@ public sealed class ApprovalGateService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
     IGitService gitService,
+    IGitCredentialProtector credentialProtector,
     IPipelineService pipelineService,
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
@@ -25,8 +26,6 @@ public sealed class ApprovalGateService(
     IValidator<SubmitReviewRequest> validator,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
-    private const string DefaultTargetBranch = "main";
-
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
     {
         await validator.EnsureValidAsync(request, cancellationToken);
@@ -81,15 +80,26 @@ public sealed class ApprovalGateService(
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
         var branchName = ticket.BranchName;
+        var targetBranch = project.BaseBranch;
+        var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+
+        // Fetch first to reduce the odds of merging against a stale local copy of the base
+        // branch (e.g. if someone pushed to it directly, outside TeamPilot).
+        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
 
         await unitOfWork.ExecuteInTransactionAsync(
             async () =>
             {
-                await gitService.MergeBranchAsync(project.RepositoryPath, branchName, DefaultTargetBranch, reviewerName, cancellationToken);
+                await gitService.MergeBranchAsync(project.RepositoryPath, branchName, targetBranch, reviewerName, cancellationToken);
                 ticket.Approve();
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             },
             cancellationToken);
+
+        // Pushed after the transaction commits: the local approval already stands even if this
+        // push fails transiently, so a push failure here is surfaced as an error but does not
+        // roll back the approval.
+        await gitService.PushAsync(project.RepositoryPath, targetBranch, accessToken, cancellationToken);
 
         logger.LogInformation(
             "Ticket {TicketId} in project {ProjectId} approved and merged by {ReviewerName}; triggering pipeline run",

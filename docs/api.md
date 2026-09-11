@@ -48,7 +48,7 @@ decides HTTP status codes from exceptions — no controller has its own try/catc
 | Controller | Base route | Notes |
 |---|---|---|
 | `AuthController` | `/api/auth` | `[AllowAnonymous]` login/refresh/logout; `GET /me` requires auth but no specific role |
-| `ProjectsController` | `/api/projects` | `Create`/`Update` are `[Authorize(Roles="Admin")]`; `List`/`GetById` are project-scoped in the service |
+| `ProjectsController` | `/api/projects` | `Create`/`Update` are `[Authorize(Roles="Admin")]`; `List`/`GetById` are project-scoped in the service. `Create` synchronously clones the submitted `RemoteUrl` before returning - can be slow for large repos, and returns 422 (`GitOperationException`) if the clone fails |
 | `TicketsController` | `/api/projects/{projectId}/tickets`, `/api/tickets/{id}/...` | Ticket board CRUD and actions |
 | `AgentsController` | `/api/projects/{projectId}/agents`, `/api/agents/{id}` | Agent CRUD |
 | `InstructionsController` | `/api/agents/{agentId}/instructions` | Versioned instructions |
@@ -104,6 +104,7 @@ Full pipeline configuration lives in [`Program.cs`](../src/TeamPilot.API/Program
 | `ConnectionStrings:DefaultConnection` | SQL Server connection string |
 | `Llm:*` | Claude API configuration (`ApiKey` is a secret) |
 | `Git:DefaultAuthorEmail` | Commit author email used for agent-authored commits |
+| `Git:SandboxRoot` | Root folder under which each project's cloned sandbox lives, one subfolder per project id (resolved against the content root when relative) |
 
 ## Cross-origin requests (CORS)
 
@@ -147,6 +148,7 @@ curl -X POST https://localhost:7085/api/auth/refresh -b cookies.txt -c cookies.t
 | `Application.Common.Exceptions.AuthenticationFailedException` | 401 |
 | `Application.Common.Exceptions.ForbiddenException` | 403 |
 | `Application.Common.Exceptions.NotFoundException` | 404 |
+| `Application.Common.Exceptions.GitOperationException` | 422 (clone/push/fetch against a project's remote failed - bad URL/token, unreachable host) |
 | `Domain.Exceptions.DomainException` (any subtype) | 409 |
 | anything else | 500 (message is generic; the real exception is logged, never returned to the client) |
 

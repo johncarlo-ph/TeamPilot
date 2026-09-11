@@ -51,9 +51,9 @@ concerns, not violations of a business rule about the entity's own state.
 
 | Entity | Represents | Key behavior methods |
 |---|---|---|
-| `Project` | A project with its own repo, agents, and ticket board | `Create`, `UpdateDetails` |
+| `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
 | `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict` |
-| `Agent` | An AI agent (Orchestrator/Research/Design/Coding) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
+| `Agent` | An AI agent (Orchestrator/Research/Design/Coding/Testing) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
 | `Review` | A human approval-gate decision | *(immutable once created)* |
@@ -64,6 +64,19 @@ concerns, not violations of a business rule about the entity's own state.
 | `RefreshToken` | A rotatable session refresh token | `Revoke` |
 | `UserProjectAssignment` | Join record: which projects a user can access | *(managed by repository "set" semantics, not through `User`)* |
 | `AuditLogEntry` | An immutable security-event record | *(created once, never mutated)* |
+
+## Default agent instructions
+
+`Agent.Create` seeds every new agent with a current (version 1) `Instruction` for each of the
+three `InstructionType`s (Constitution, Guideline, Requirement), via the internal
+`AgentDefaultInstructions` lookup keyed by `AgentRole`
+([`Entities/AgentDefaultInstructions.cs`](../src/TeamPilot.Domain/Entities/AgentDefaultInstructions.cs)).
+The seeded text is generic and technology-agnostic — it describes each role's general
+responsibilities (e.g. Research investigates, Coding implements, Testing verifies) without
+naming any framework or language, so it applies to any project. An admin edits it like any other
+instruction: calling `Agent.AddInstructionVersion` for a type that already has a default adds a
+new version that supersedes it, rather than replacing it in place — the default is never mutated,
+only superseded.
 
 ## Code style notes
 
@@ -127,9 +140,9 @@ does not catch or wrap its own exceptions.
 - **Domain events:** none are raised today (e.g., "TicketApproved"); if a future feature needs
   to react to state changes (notifications, webhooks) without coupling services directly
   together, a lightweight domain event dispatcher would be the natural next step.
-- **Value objects:** `Ticket.Title`, `User.Email`, and `Project.RepositoryPath` are plain
-  `string`s today. If validation rules for these grow more complex, promoting them to value
-  objects (e.g. an `EmailAddress` type) would centralize that logic.
+- **Value objects:** `Ticket.Title`, `User.Email`, and `Project.RemoteUrl` are plain `string`s
+  today. If validation rules for these grow more complex, promoting them to value objects (e.g.
+  an `EmailAddress` type) would centralize that logic.
 - **Instruction versioning as its own aggregate:** `Instruction` is currently a child of
   `Agent`. If instruction history needs its own access patterns (e.g. bulk diffing across
   versions, independent pagination) it may outgrow being a pure `Agent` child.

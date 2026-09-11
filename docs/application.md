@@ -30,6 +30,7 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Pipelines/`](../src/TeamPilot.Application/Pipelines) | CI/CD status-tracking use cases |
 | [`AuditLog/`](../src/TeamPilot.Application/AuditLog) | Read-side of the audit log |
 | [`Git/`](../src/TeamPilot.Application/Git), [`Llm/`](../src/TeamPilot.Application/Llm) | `IGitService`/`ILlmConnector` port declarations (implemented in Infrastructure) |
+| [`Common/Interfaces/IGitCredentialProtector.cs`](../src/TeamPilot.Application/Common/Interfaces/IGitCredentialProtector.cs) | Encrypts/decrypts a project's remote access token for storage (implemented in Infrastructure via Data Protection) |
 | [`Reviews/`](../src/TeamPilot.Application/Reviews), [`Commits/`](../src/TeamPilot.Application/Commits) | Read-only repository interfaces for child records |
 | [`Common/`](../src/TeamPilot.Application/Common) | `IUnitOfWork`, `ICurrentUserContext`, `IProjectAccessGuard`, shared exceptions, validator extensions |
 | [`DependencyInjection/`](../src/TeamPilot.Application/DependencyInjection) | `AddApplication()` DI registration |
@@ -72,6 +73,23 @@ express "these steps are atomic" without importing an EF Core type.
 `TicketDto`, `CreateTicketRequest`, etc. are used directly by controllers. This avoids a
 duplicate mapping layer; the trade-off is that Application DTOs are, by construction, also part
 of the public HTTP contract, so changing one is a breaking API change.
+
+**Projects are tied to a remote repository, not a pre-existing local one.** `ProjectService.CreateAsync`
+encrypts the submitted access token via `IGitCredentialProtector`, then calls
+`IGitService.CloneAsync` *before* persisting anything — a bad URL/token throws
+`GitOperationException` and nothing is saved, so there's no partial/orphaned project row to
+retry or clean up. The clone runs synchronously within the request; there's no background
+job/status-polling for it (see "Future considerations"). `Project.RemoteUrl` is immutable after
+creation (re-pointing it would orphan the existing sandbox clone) — only `Name`/`Description`/
+`BaseBranch` and the access token (via `RotateAccessToken`) can be changed later.
+
+**Every ticket branch is cut from, and merges back into, `Project.BaseBranch`** — not a
+hardcoded `"main"`. `TicketService.LinkBranchAsync` fetches the remote, creates the branch from
+the base branch's current tip, and pushes it; `OrchestrationService.CommitAgentWorkAsync` pushes
+after every agent commit; `ApprovalGateService.ApproveAsync` fetches, merges locally, commits
+the transaction, and *then* pushes the base branch — a push failure at that last step surfaces
+as an error but does not roll back the already-committed local approval (a deliberate
+simplification, not a full saga/outbox pattern).
 
 ## Code style notes
 
@@ -160,6 +178,7 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.NotFoundException` | Referenced entity doesn't exist | Any `GetByIdAsync` call site |
 | `Common.Exceptions.ForbiddenException` | Wrong role or no project access | `IProjectAccessGuard`, role checks |
 | `Common.Exceptions.AuthenticationFailedException` | Bad/expired/reused token, disabled account | `AuthService` |
+| `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host) | `IGitService` implementation (Infrastructure), propagated through `ProjectService`/`TicketService`/`OrchestrationService`/`ApprovalGateService` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |
 
 None of these are caught within Application — they propagate to the API's
@@ -174,6 +193,13 @@ None of these are caught within Application — they propagate to the API's
 - **Real pipeline execution:** `PipelineService` only tracks status today; wiring it to an
   actual `ICiCdPipelineRunner` abstraction (mentioned as an option during Phase 2 planning but
   deferred) is the natural next step once real CI needs exist.
+- **Async project cloning:** `ProjectService.CreateAsync` clones synchronously, which is fine
+  for typical dev-repo sizes but would block the request for a very large repository. Mirroring
+  `PipelineRun`'s Queued/Running/Succeeded/Failed status-tracking pattern for the clone itself
+  would be the natural next step if that becomes a real problem.
+- **Non-GitHub/GitLab credential conventions:** the PAT-as-username convention `IGitService`
+  uses today is what GitHub and GitLab accept; Azure DevOps/Bitbucket/SSH deploy keys aren't
+  supported yet.
 - **Caching:** `ProjectService.ListAsync`'s per-request `GetAssignedProjectIdsAsync` lookup for
   non-admins is a candidate for short-lived caching if project-assignment churn stays low
   relative to read volume.

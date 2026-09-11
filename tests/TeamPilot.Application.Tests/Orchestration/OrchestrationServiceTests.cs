@@ -21,21 +21,24 @@ public class OrchestrationServiceTests
     private readonly Mock<IAgentRepository> _agentRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IGitService> _gitService = new();
+    private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<ILlmConnector> _llmConnector = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly OrchestrationService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
     public OrchestrationServiceTests()
     {
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
 
         _sut = new OrchestrationService(
             _ticketRepository.Object,
             _agentRepository.Object,
             _projectRepository.Object,
             _gitService.Object,
+            _credentialProtector.Object,
             _llmConnector.Object,
             _projectAccessGuard.Object,
             _unitOfWork.Object,
@@ -98,6 +101,9 @@ public class OrchestrationServiceTests
         Assert.NotNull(result.Commit);
         Assert.Equal("abc123", result.Commit!.CommitHash);
         Assert.Single(ticket.Commits);
+        _gitService.Verify(
+            g => g.PushAsync(_project.RepositoryPath, "feature/build-feature", "plaintext-token", It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

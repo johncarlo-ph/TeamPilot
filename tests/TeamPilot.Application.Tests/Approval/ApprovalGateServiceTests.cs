@@ -21,12 +21,13 @@ public class ApprovalGateServiceTests
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IGitService> _gitService = new();
+    private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IPipelineService> _pipelineService = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ApprovalGateService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
     public ApprovalGateServiceTests()
     {
@@ -35,6 +36,7 @@ public class ApprovalGateServiceTests
             .Returns((Func<Task> action, CancellationToken _) => action());
 
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
 
         // Default to Developer so the existing Approve-path tests exercise the happy path;
         // the Analyst-specific tests override this per-test.
@@ -49,6 +51,7 @@ public class ApprovalGateServiceTests
             _ticketRepository.Object,
             _projectRepository.Object,
             _gitService.Object,
+            _credentialProtector.Object,
             _pipelineService.Object,
             _projectAccessGuard.Object,
             _currentUser.Object,
@@ -78,7 +81,13 @@ public class ApprovalGateServiceTests
 
         Assert.Equal(TicketStatus.Done, result.Status);
         _gitService.Verify(
-            g => g.MergeBranchAsync(_project.RepositoryPath, "feature/add-feature", "main", "Alice", It.IsAny<CancellationToken>()),
+            g => g.FetchAsync(_project.RepositoryPath, "plaintext-token", It.IsAny<CancellationToken>()),
+            Times.Once);
+        _gitService.Verify(
+            g => g.MergeBranchAsync(_project.RepositoryPath, "feature/add-feature", _project.BaseBranch, "Alice", It.IsAny<CancellationToken>()),
+            Times.Once);
+        _gitService.Verify(
+            g => g.PushAsync(_project.RepositoryPath, _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
             Times.Once);
         _pipelineService.Verify(
             p => p.TriggerAsync(_project.Id, ticket.Id, It.IsAny<string>(), It.IsAny<CancellationToken>()),

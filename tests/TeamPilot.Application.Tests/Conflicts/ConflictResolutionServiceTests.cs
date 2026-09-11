@@ -23,7 +23,7 @@ public class ConflictResolutionServiceTests
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ConflictResolutionService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
     public ConflictResolutionServiceTests()
     {

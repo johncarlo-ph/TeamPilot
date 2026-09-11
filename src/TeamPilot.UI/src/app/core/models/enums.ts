@@ -5,9 +5,9 @@ export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done';
 
 export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done'];
 
-export type AgentRole = 'Orchestrator' | 'Research' | 'Design' | 'Coding';
+export type AgentRole = 'Orchestrator' | 'Research' | 'Design' | 'Coding' | 'Testing';
 
-export const AGENT_ROLES: AgentRole[] = ['Orchestrator', 'Research', 'Design', 'Coding'];
+export const AGENT_ROLES: AgentRole[] = ['Orchestrator', 'Research', 'Design', 'Coding', 'Testing'];
 
 export type AgentStatus = 'Active' | 'Inactive';
 

@@ -39,7 +39,7 @@ public class Agent : Entity
             throw new ArgumentException("Agent name is required.", nameof(name));
         }
 
-        return new Agent
+        var agent = new Agent
         {
             ProjectId = projectId,
             Name = name.Trim(),
@@ -47,6 +47,13 @@ public class Agent : Entity
             Status = AgentStatus.Active,
             ConfigurationJson = string.IsNullOrWhiteSpace(configurationJson) ? "{}" : configurationJson,
         };
+
+        foreach (var (type, content) in AgentDefaultInstructions.For(role))
+        {
+            agent.AddInstructionVersion(type, content, AgentDefaultInstructions.Author);
+        }
+
+        return agent;
     }
 
     public void Activate()

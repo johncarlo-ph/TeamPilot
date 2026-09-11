@@ -1,6 +1,7 @@
 using Moq;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
+using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Projects.Dtos;
 using TeamPilot.Application.Projects.Validators;
@@ -17,38 +18,88 @@ public class ProjectServiceTests
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
+    private readonly Mock<IGitService> _gitService = new();
+    private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ProjectService _sut;
 
     public ProjectServiceTests()
     {
+        _credentialProtector.Setup(p => p.Protect(It.IsAny<string>())).Returns((string plaintext) => $"encrypted:{plaintext}");
+        _gitService
+            .Setup(g => g.CloneAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid projectId, string _, string _, CancellationToken _) => $"C:/git-sandboxes/{projectId}");
+
         _sut = new ProjectService(
             _projectRepository.Object,
             _userRepository.Object,
             _currentUser.Object,
             _projectAccessGuard.Object,
+            _gitService.Object,
+            _credentialProtector.Object,
             _unitOfWork.Object,
             new CreateProjectRequestValidator(),
             new UpdateProjectRequestValidator());
     }
 
     [Fact]
-    public async Task CreateAsync_WithValidRequest_AddsProjectAndSavesChanges()
+    public async Task CreateAsync_WithValidRequest_ClonesAndAddsProjectAndSavesChanges()
     {
-        var request = new CreateProjectRequest("TeamPilot", "AI ticketing system", "C:/repos/teampilot");
+        var request = new CreateProjectRequest("TeamPilot", "AI ticketing system", "https://github.com/org/teampilot.git", "pat-123", "develop");
 
         var result = await _sut.CreateAsync(request);
 
         Assert.Equal("TeamPilot", result.Name);
-        Assert.Equal("C:/repos/teampilot", result.RepositoryPath);
+        Assert.Equal("https://github.com/org/teampilot.git", result.RemoteUrl);
+        Assert.Equal("develop", result.BaseBranch);
+        _gitService.Verify(g => g.CloneAsync(It.IsAny<Guid>(), request.RemoteUrl, request.AccessToken, It.IsAny<CancellationToken>()), Times.Once);
         _projectRepository.Verify(r => r.AddAsync(It.IsAny<Project>(), It.IsAny<CancellationToken>()), Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task CreateAsync_WithEmptyRepositoryPath_ThrowsValidationException()
+    public async Task CreateAsync_EncryptsTheAccessTokenBeforeStoringIt()
     {
-        var request = new CreateProjectRequest("TeamPilot", "desc", string.Empty);
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "pat-123", "main");
+
+        Project? added = null;
+        _projectRepository
+            .Setup(r => r.AddAsync(It.IsAny<Project>(), It.IsAny<CancellationToken>()))
+            .Callback<Project, CancellationToken>((project, _) => added = project)
+            .Returns(Task.CompletedTask);
+
+        await _sut.CreateAsync(request);
+
+        Assert.NotNull(added);
+        Assert.Equal("encrypted:pat-123", added!.EncryptedAccessToken);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCloneFails_PropagatesAndDoesNotPersistProject()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "bad-token", "main");
+        _gitService
+            .Setup(g => g.CloneAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new GitOperationException("Could not clone."));
+
+        await Assert.ThrowsAsync<GitOperationException>(() => _sut.CreateAsync(request));
+
+        _projectRepository.Verify(r => r.AddAsync(It.IsAny<Project>(), It.IsAny<CancellationToken>()), Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithEmptyRemoteUrl_ThrowsValidationException()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", string.Empty, "pat-123", "main");
+
+        await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(request));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithEmptyAccessToken_ThrowsValidationException()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", string.Empty, "main");
 
         await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(request));
     }
@@ -62,23 +113,49 @@ public class ProjectServiceTests
     }
 
     [Fact]
-    public async Task UpdateAsync_WhenProjectExists_UpdatesDetails()
+    public async Task UpdateAsync_WhenProjectExists_UpdatesDetailsButNotRemoteUrl()
     {
-        var project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
         _projectRepository.Setup(r => r.GetByIdAsync(project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(project);
 
-        var request = new UpdateProjectRequest("TeamPilot Renamed", "New description", "C:/repos/teampilot-v2");
+        var request = new UpdateProjectRequest("TeamPilot Renamed", "New description", null, "develop");
         var result = await _sut.UpdateAsync(project.Id, request);
 
         Assert.Equal("TeamPilot Renamed", result.Name);
-        Assert.Equal("C:/repos/teampilot-v2", result.RepositoryPath);
+        Assert.Equal("develop", result.BaseBranch);
+        Assert.Equal("https://github.com/org/teampilot.git", result.RemoteUrl);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WithNoAccessToken_KeepsExistingToken()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+        _projectRepository.Setup(r => r.GetByIdAsync(project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+
+        var request = new UpdateProjectRequest("TeamPilot", "desc", null, "main");
+        await _sut.UpdateAsync(project.Id, request);
+
+        Assert.Equal("encrypted-token", project.EncryptedAccessToken);
+        _credentialProtector.Verify(p => p.Protect(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WithNewAccessToken_RotatesTheEncryptedToken()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "old-encrypted-token", "main");
+        _projectRepository.Setup(r => r.GetByIdAsync(project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(project);
+
+        var request = new UpdateProjectRequest("TeamPilot", "desc", "new-pat", "main");
+        await _sut.UpdateAsync(project.Id, request);
+
+        Assert.Equal("encrypted:new-pat", project.EncryptedAccessToken);
     }
 
     [Fact]
     public async Task ListAsync_WhenCallerIsAdmin_ReturnsAllProjects()
     {
-        var projectA = Project.Create("A", "desc", "C:/repos/a");
-        var projectB = Project.Create("B", "desc", "C:/repos/b");
+        var projectA = Project.Create("A", "desc", "https://github.com/org/a.git", "encrypted-token", "main");
+        var projectB = Project.Create("B", "desc", "https://github.com/org/b.git", "encrypted-token", "main");
         _projectRepository.Setup(r => r.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync([projectA, projectB]);
         _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(true);
 
@@ -90,8 +167,8 @@ public class ProjectServiceTests
     [Fact]
     public async Task ListAsync_WhenCallerIsNotAdmin_ReturnsOnlyAssignedProjects()
     {
-        var projectA = Project.Create("A", "desc", "C:/repos/a");
-        var projectB = Project.Create("B", "desc", "C:/repos/b");
+        var projectA = Project.Create("A", "desc", "https://github.com/org/a.git", "encrypted-token", "main");
+        var projectB = Project.Create("B", "desc", "https://github.com/org/b.git", "encrypted-token", "main");
         _projectRepository.Setup(r => r.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync([projectA, projectB]);
         _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(false);
         _currentUser.Setup(c => c.UserId).Returns(Guid.NewGuid());

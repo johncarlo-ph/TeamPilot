@@ -21,6 +21,7 @@ public sealed class OrchestrationService(
     IAgentRepository agentRepository,
     IProjectRepository projectRepository,
     IGitService gitService,
+    IGitCredentialProtector credentialProtector,
     ILlmConnector llmConnector,
     IProjectAccessGuard projectAccessGuard,
     IUnitOfWork unitOfWork,
@@ -114,6 +115,9 @@ public sealed class OrchestrationService(
             message,
             agent.Name,
             cancellationToken);
+
+        var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+        await gitService.PushAsync(project.RepositoryPath, ticket.BranchName, accessToken, cancellationToken);
 
         var commit = Commit.Create(ticket.Id, ticket.BranchName, commitResult.CommitHash, message, commitResult.DiffContent, agent.Id);
         ticket.AddCommit(commit);

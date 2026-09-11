@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TeamPilot.Infrastructure.Persistence;
 
@@ -11,9 +12,11 @@ using TeamPilot.Infrastructure.Persistence;
 namespace TeamPilot.Infrastructure.Migrations
 {
     [DbContext(typeof(TeamPilotDbContext))]
-    partial class TeamPilotDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260911213641_AddProjectRemoteGitFields")]
+    partial class AddProjectRemoteGitFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

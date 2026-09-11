@@ -47,6 +47,8 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.Configure<GitOptions>(configuration.GetSection(GitOptions.SectionName));
         services.AddScoped<IGitService, LibGit2SharpGitService>();
+        services.AddDataProtection();
+        services.AddSingleton<IGitCredentialProtector, DataProtectionGitCredentialProtector>();
 
         services.Configure<LlmOptions>(configuration.GetSection(LlmOptions.SectionName));
         AddLlmConnector(services, configuration);

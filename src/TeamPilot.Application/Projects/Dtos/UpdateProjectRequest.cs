@@ -1,3 +1,5 @@
 namespace TeamPilot.Application.Projects.Dtos;
 
-public sealed record UpdateProjectRequest(string Name, string? Description, string RepositoryPath);
+/// <summary>AccessToken null/blank means "keep the currently stored token" - RemoteUrl is not
+/// editable here since it's immutable after creation (see Project.RemoteUrl).</summary>
+public sealed record UpdateProjectRequest(string Name, string? Description, string? AccessToken, string BaseBranch);

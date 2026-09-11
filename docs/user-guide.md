@@ -55,16 +55,20 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 ## Projects
 
 `/projects` — the landing page after sign-in. One card per project the account is assigned to,
-showing name, description, and the local Git repository path, with an **Open Board** button.
+showing name, description, and the connected remote repository URL, with an **Open Board**
+button.
 
 **New Project / Edit Project** — Admin only; the button and each card's Edit link are hidden
-for Analysts and Developers.
+for Analysts and Developers. Creating a project clones its remote repository right away, so the
+request can take a few seconds and fails if the URL or token is wrong.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Name | Text | Yes | Display name — shown on the project card and the board header. |
 | Description | Text | No | Shown on the card; blank shows "No description." |
-| Repository path | Text | Yes | Local path to this project's Git repository — must already be `git init`'d with at least one commit. Agents commit and branch here. |
+| Remote URL | Text | Yes (create only) | The `https://` URL of the Git repository to connect, e.g. `https://github.com/org/repo.git`. Can't be changed after the project is created — shown as read-only text when editing. |
+| Access Token | Password | Yes on create, optional on edit | A Personal Access Token for that repository, with permission to read and write it. On edit, leave blank to keep the currently stored token (e.g. after rotating it on the host, paste the new one). Never shown again once saved. |
+| Base branch | Text | Yes (defaults to `main`) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. |
 
 ## Ticket board
 
@@ -108,17 +112,18 @@ panels. This page also polls for updates, roughly every 10 seconds.
 
 **Agent assignments & commits** — lists every agent assigned to the ticket and when. While the
 ticket is In Progress, each assignment has an **Execute** button, which sets the agent working
-and produces commits. The Commits panel lists every commit the ticket has picked up (short
-hash, message, branch, line-by-line diff).
+and produces commits — each one pushed to the remote as soon as it's made. The Commits panel
+lists every commit the ticket has picked up (short hash, message, branch, line-by-line diff).
 
 ### Git
 
-A ticket does its work on a Git branch. This panel links that branch and compares any two
-branches in the project's repository.
+A ticket does its work on a Git branch, cut from the project's [base branch](#projects) and
+pushed to the project's connected remote as soon as it's linked. This panel links that branch
+and compares any two branches in the project's repository.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| Branch name | Text | Required to link | e.g. `feature/my-branch`, paired with **Link Branch**. Only shown before a branch is linked — a ticket can only ever have one linked branch. |
+| Branch name | Text | Required to link | e.g. `feature/my-branch`, paired with **Link Branch**. Only shown before a branch is linked — a ticket can only ever have one linked branch. Creates the branch from the project's base branch and pushes it to the remote right away, so it's visible there immediately. |
 | Source | Text | No | Branch to diff from, for the comparison below. |
 | Target | Text | No | Branch to diff against — defaults to the ticket's own linked branch if left blank. **View Diff** lists every changed file with its patch. |
 
@@ -149,7 +154,7 @@ Approve is Admin/Developer only.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Reviewer name | Text | Yes | Pre-filled with the signed-in user's name. |
-| Decision | Select | Yes | **Approve** (merges the branch; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress), or **Resolve Conflict**. |
+| Decision | Select | Yes | **Approve** (merges the branch into the project's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress), or **Resolve Conflict**. |
 | Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. |
 
 ## Agents & instructions
@@ -164,13 +169,15 @@ rather than trying to delete it.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Name | Text | Yes | How the agent appears in assignments and on the board. |
-| Role | Select | Yes | Orchestrator, Research, Design, or Coding. |
+| Role | Select | Yes | Orchestrator, Research, Design, Coding, or Testing. |
 | Configuration | JSON | No | Raw JSON passed to the agent's runtime configuration; blank uses defaults. |
 
 **Editing instructions** — each agent has three instruction fields: **Constitution**,
-**Guideline**, and **Requirement** — the standing text given to an agent before it works. Each
-shows its current version number and, if there's history, a disclosure listing every prior
-version with author and date.
+**Guideline**, and **Requirement** — the standing text given to an agent before it works. A new
+agent starts with a generic, technology-agnostic default for each field based on its role (shown
+as version 1, authored by "System"); edit and save any field to add project- or
+technology-specific instructions on top of that default. Each field shows its current version
+number and, if there's history, a disclosure listing every prior version with author and date.
 
 > **Saving creates a new version.** **Save & Ingest** never overwrites — it adds a new version
 > for every field that was changed and leaves the others untouched. A field left blank is
@@ -231,3 +238,8 @@ or project activity).
   effect. Request Changes, Resolve Conflict, and comments just record a decision.
 - **New sign-ins start with nothing.** A first-time sign-in has zero roles and zero project
   assignments — see [Admin: Users](#admin-users).
+- **A project's remote URL is set once.** It can't be edited after the project is created — get
+  it right the first time, or create a new project if it needs to point somewhere else.
+- **Everything pushes to the remote as it happens.** Linking a branch, an agent's commit, and an
+  approval's merge each push immediately — there's no local-only staging step, and no "sync"
+  button to press.

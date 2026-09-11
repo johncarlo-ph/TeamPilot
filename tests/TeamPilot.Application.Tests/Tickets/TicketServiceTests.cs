@@ -17,19 +17,22 @@ public class TicketServiceTests
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IGitService> _gitService = new();
+    private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly TicketService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "C:/repos/teampilot");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
     public TicketServiceTests()
     {
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
 
         _sut = new TicketService(
             _ticketRepository.Object,
             _projectRepository.Object,
             _gitService.Object,
+            _credentialProtector.Object,
             _projectAccessGuard.Object,
             _unitOfWork.Object,
             new CreateTicketRequestValidator(),
@@ -104,6 +107,8 @@ public class TicketServiceTests
         var result = await _sut.LinkBranchAsync(ticket.Id, "feature/fix-bug");
 
         Assert.Equal("feature/fix-bug", result.BranchName);
-        _gitService.Verify(g => g.EnsureBranchAsync(_project.RepositoryPath, "feature/fix-bug", It.IsAny<CancellationToken>()), Times.Once);
+        _gitService.Verify(g => g.FetchAsync(_project.RepositoryPath, "plaintext-token", It.IsAny<CancellationToken>()), Times.Once);
+        _gitService.Verify(g => g.EnsureBranchAsync(_project.RepositoryPath, "feature/fix-bug", _project.BaseBranch, It.IsAny<CancellationToken>()), Times.Once);
+        _gitService.Verify(g => g.PushAsync(_project.RepositoryPath, "feature/fix-bug", "plaintext-token", It.IsAny<CancellationToken>()), Times.Once);
     }
 }

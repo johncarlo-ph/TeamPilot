@@ -78,9 +78,35 @@ the matching connector; an unsupported value throws `NotSupportedException`. Add
 Mistral later means adding a new `case` and a new connector class — no changes to any caller.
 
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
-`Project` owns its own Git repository, the service holds no per-project state; every method
-(`EnsureBranchAsync`, `CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`,
-`MergeBranchAsync`) opens and disposes its own `LibGit2Sharp.Repository` handle per call.
+`Project` owns its own sandbox clone, the service holds no per-project state; every method
+(`CloneAsync`, `PushAsync`, `FetchAsync`, `EnsureBranchAsync`, `CommitFileAsync`, `GetDiffAsync`,
+`DetectMergeConflictsAsync`, `MergeBranchAsync`) opens and disposes its own
+`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
+repository rather than opening an existing one).
+
+**Projects are cloned into a server-managed sandbox, not pointed at a path someone else prepared.**
+`LibGit2SharpGitService.CloneAsync(projectId, remoteUrl, accessToken, ct)` computes
+`{Git:SandboxRoot}/{projectId}` (resolved against `IHostEnvironment.ContentRootPath` when
+`SandboxRoot` is relative), clones there with `Repository.Clone`, and returns the resulting
+path for `ProjectService` to store as `Project.RepositoryPath`. `PushAsync`/`FetchAsync` open
+that same sandbox and talk to its `origin` remote. All three wrap `LibGit2SharpException` as
+the Application's `GitOperationException` (→ HTTP 422) instead of letting it bubble to a
+generic 500, since a bad URL/token is a client-facing, actionable error.
+
+**Credentials: PAT-over-HTTPS, GitHub/GitLab convention.** `BuildCredentials` builds a
+`UsernamePasswordCredentials { Username = accessToken, Password = "" }` for every remote
+operation — the convention GitHub and GitLab both accept. Azure DevOps/Bitbucket may need the
+token in the password slot instead; this is centralized in one private helper, so supporting
+another host is a one-line change there, not a wider refactor.
+
+**Access tokens are encrypted at rest via ASP.NET Core Data Protection, not stored plaintext.**
+`DataProtectionGitCredentialProtector` (`Infrastructure/Git/`) wraps
+`IDataProtectionProvider.CreateProtector("TeamPilot.Git.AccessToken.v1")`; `ProjectService`
+encrypts a submitted token before calling `Project.Create`/`RotateAccessToken`, and decrypts it
+just before passing it to `IGitService`. **Caveat:** Data Protection's default key ring is
+persisted per-machine — if the API is ever scaled out to multiple instances/containers, the key
+ring must be persisted somewhere shared (e.g. a file share or blob store), or a token encrypted
+on one instance won't decrypt on another.
 
 ## Code style notes
 
@@ -144,11 +170,14 @@ var commit = repo.Commit(message, signature, signature);
 ## Error handling
 
 Infrastructure mostly lets exceptions propagate rather than translating them:
-`DbUpdateException` (constraint violations), `HttpRequestException` (Claude API failures), and
-LibGit2Sharp exceptions all currently bubble up to the API's `GlobalExceptionHandler` and are
-mapped generically to HTTP 500. The one place Infrastructure *does* translate an error is
-`ExternalIdentityValidator`, which wraps any token-validation failure as the Application's own
-`AuthenticationFailedException` so the API can return 401 instead of 500.
+`DbUpdateException` (constraint violations) and `HttpRequestException` (Claude API failures)
+currently bubble up to the API's `GlobalExceptionHandler` and are mapped generically to HTTP
+500. Two places Infrastructure *does* translate an error: `ExternalIdentityValidator` wraps any
+token-validation failure as the Application's own `AuthenticationFailedException` (→ 401), and
+`LibGit2SharpGitService`'s remote operations (`CloneAsync`/`PushAsync`/`FetchAsync`) wrap
+`LibGit2SharpException` as `GitOperationException` (→ 422) — local-only Git operations
+(commit/diff/detect-conflicts/merge) still let `LibGit2SharpException`/`InvalidOperationException`
+bubble to 500/409, since those failures point at a server-side bug rather than bad user input.
 
 ## Future considerations
 

@@ -1,4 +1,4 @@
-import { Component, effect, inject, input, output } from '@angular/core';
+import { Component, computed, effect, inject, input, output } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Modal } from '../../../shared/components/modal/modal';
 import { CreateProjectRequest, ProjectDto, UpdateProjectRequest } from '../../../core/models';
@@ -16,10 +16,14 @@ export class ProjectForm {
   readonly closed = output<void>();
   readonly saved = output<CreateProjectRequest | UpdateProjectRequest>();
 
+  readonly isEditing = computed(() => this.project() !== null);
+
   readonly form = this.fb.nonNullable.group({
     name: ['', Validators.required],
     description: [''],
-    repositoryPath: ['', Validators.required],
+    remoteUrl: ['', [Validators.required, Validators.pattern(/^https:\/\/\S+/)]],
+    accessToken: ['', Validators.required],
+    baseBranch: ['main', Validators.required],
   });
 
   constructor() {
@@ -28,13 +32,25 @@ export class ProjectForm {
       this.form.reset({
         name: project?.name ?? '',
         description: project?.description ?? '',
-        repositoryPath: project?.repositoryPath ?? '',
+        remoteUrl: project?.remoteUrl ?? '',
+        accessToken: '',
+        baseBranch: project?.baseBranch ?? 'main',
       });
+
+      // Access token is required to create a project, but optional on edit (blank = keep the
+      // currently stored token).
+      const accessToken = this.form.controls.accessToken;
+      if (project) {
+        accessToken.clearValidators();
+      } else {
+        accessToken.setValidators(Validators.required);
+      }
+      accessToken.updateValueAndValidity();
     });
   }
 
   get title(): string {
-    return this.project() ? 'Edit Project' : 'New Project';
+    return this.isEditing() ? 'Edit Project' : 'New Project';
   }
 
   submit(): void {
@@ -42,11 +58,25 @@ export class ProjectForm {
       this.form.markAllAsTouched();
       return;
     }
+
     const value = this.form.getRawValue();
+
+    if (this.isEditing()) {
+      this.saved.emit({
+        name: value.name,
+        description: value.description || null,
+        accessToken: value.accessToken || null,
+        baseBranch: value.baseBranch,
+      } satisfies UpdateProjectRequest);
+      return;
+    }
+
     this.saved.emit({
       name: value.name,
       description: value.description || null,
-      repositoryPath: value.repositoryPath,
-    });
+      remoteUrl: value.remoteUrl,
+      accessToken: value.accessToken,
+      baseBranch: value.baseBranch || null,
+    } satisfies CreateProjectRequest);
   }
 }

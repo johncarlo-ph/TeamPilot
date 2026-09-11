@@ -4,6 +4,7 @@ public sealed record ProjectDto(
     Guid Id,
     string Name,
     string Description,
-    string RepositoryPath,
+    string RemoteUrl,
+    string BaseBranch,
     DateTime CreatedAtUtc,
     DateTime? UpdatedAtUtc);

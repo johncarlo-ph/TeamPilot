@@ -74,6 +74,9 @@ including authentication/authorization failures.
 
 Full pipeline configuration lives in [`Program.cs`](../src/TeamPilot.API/Program.cs):
 
+- `Program.cs` fails fast at startup if `Jwt:SigningKey` is shorter than 32 characters (256
+  bits) — the minimum HS256 requires — so a misconfigured key is caught immediately rather than
+  silently padded and causing every issued token to fail validation.
 - `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(...)` validates
   tokens **we** issued — `ValidIssuer`/`ValidAudience` from `Jwt:Issuer`/`Jwt:Audience`,
   `IssuerSigningKey` from `Jwt:SigningKey`. `MapInboundClaims = false` so claim types
@@ -101,6 +104,21 @@ Full pipeline configuration lives in [`Program.cs`](../src/TeamPilot.API/Program
 | `ConnectionStrings:DefaultConnection` | SQL Server connection string |
 | `Llm:*` | Claude API configuration (`ApiKey` is a secret) |
 | `Git:DefaultAuthorEmail` | Commit author email used for agent-authored commits |
+
+## Cross-origin requests (CORS)
+
+Now that the Angular frontend (`src/TeamPilot.UI`) runs on its own origin (`http://localhost:4200`
+in development), `Program.cs` registers a named CORS policy (`AngularClient`) and applies it via
+`app.UseCors(...)`, placed after `UseHttpsRedirection` and before `UseAuthentication` so
+preflight (`OPTIONS`) requests are handled before the auth pipeline runs.
+
+The policy allows only the origins listed in `Cors:AllowedOrigins` (`appsettings.json`; defaults
+to `http://localhost:4200` and `https://localhost:4200`) plus any header/method, and calls
+`AllowCredentials()`. Credentials must be paired with explicit origins rather than
+`AllowAnyOrigin()` — this is a hard browser/CORS-spec requirement, and it matters here because
+`POST /api/auth/refresh` and `POST /api/auth/login/{provider}` rely on the browser sending the
+`teampilot_rt` cookie cross-origin (`withCredentials: true` client-side). Add the deployed
+frontend's origin to `Cors:AllowedOrigins` for any non-dev environment.
 
 ## Example
 
@@ -134,10 +152,13 @@ curl -X POST https://localhost:7085/api/auth/refresh -b cookies.txt -c cookies.t
 
 ## Future considerations
 
-- **CORS**: not configured yet — required once the Angular frontend is a separate origin.
 - **Rate limiting**: none yet, particularly relevant for `/api/auth/login/{provider}` and
   `/api/auth/refresh`.
 - **API versioning**: the API has no version prefix; fine for a single first-party client, may
   need revisiting if external consumers appear.
-- **Generated TypeScript client**: once the Angular frontend starts, generating a typed client
-  from the Swagger document would keep the two in sync automatically.
+- **Generated TypeScript client**: the Angular frontend (`src/TeamPilot.UI`) currently uses
+  hand-written TypeScript interfaces and enum string-unions mirroring each DTO/enum by hand
+  (see `src/TeamPilot.UI/src/app/core/models`) rather than a client generated from the Swagger
+  document. This was a deliberate scope choice for the initial frontend build, not a rejection
+  of the idea — generating a typed client would remove the manual-sync burden and is still worth
+  adopting if the DTO surface keeps growing.

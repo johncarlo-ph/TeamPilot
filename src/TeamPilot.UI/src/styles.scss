@@ -1,0 +1,37 @@
+// TeamPilot theme overrides — applied before Bootstrap's own variable defaults.
+$primary: #2c3e50;
+$secondary: #6c7a89;
+$success: #2f9e44;
+$warning: #e8a33d;
+$danger: #c0392b;
+$info: #2f6fa8;
+$body-bg: #f4f6f8;
+$border-radius: 0.5rem;
+$font-family-sans-serif:
+  system-ui,
+  -apple-system,
+  'Segoe UI',
+  Roboto,
+  Helvetica,
+  Arial,
+  sans-serif;
+
+@import 'bootstrap/scss/bootstrap';
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--bs-body-bg);
+}
+
+.status-badge {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}

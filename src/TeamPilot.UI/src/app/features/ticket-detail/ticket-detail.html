@@ -1,0 +1,122 @@
+@if (loading()) {
+  <div class="text-body-secondary">Loading ticket...</div>
+} @else if (ticket(); as ticket) {
+  <a [routerLink]="['/projects', ticket.projectId, 'board']" class="small text-decoration-none">
+    &larr; Back to board
+  </a>
+
+  <div class="d-flex align-items-start justify-content-between mt-2 mb-4">
+    <div>
+      <h1 class="h3 mb-1">{{ ticket.title }}</h1>
+      <p class="text-body-secondary mb-0">{{ ticket.description || 'No description.' }}</p>
+    </div>
+    <app-status-badge [value]="ticket.status"></app-status-badge>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-12 col-lg-7">
+      <div class="card mb-3">
+        <div class="card-header">Agent Assignments</div>
+        <div class="card-body">
+          @if (!ticket.assignments.length) {
+            <p class="text-body-secondary mb-0">No agents assigned yet.</p>
+          } @else {
+            <ul class="list-group list-group-flush">
+              @for (assignment of ticket.assignments; track assignment.agentId) {
+                <li class="list-group-item d-flex align-items-center justify-content-between px-0">
+                  <div>
+                    <div class="fw-semibold">{{ agentName(assignment.agentId) }}</div>
+                    <div class="small text-body-secondary">
+                      {{ assignment.roleAtAssignment }} &middot; assigned
+                      {{ assignment.assignedAtUtc | date: 'short' }}
+                    </div>
+                  </div>
+                  @if (ticket.status === 'InProgress') {
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-primary"
+                      (click)="executeAgent(assignment.agentId)"
+                    >
+                      Execute
+                    </button>
+                  }
+                </li>
+              }
+            </ul>
+          }
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header">Commits</div>
+        <div class="card-body">
+          @if (!ticket.commits.length) {
+            <p class="text-body-secondary mb-0">No commits yet.</p>
+          } @else {
+            @for (commit of ticket.commits; track commit.id) {
+              <div class="mb-3">
+                <p class="mb-1">
+                  <code class="me-2">{{ commit.commitHash.slice(0, 8) }}</code
+                  >{{ commit.message }}
+                </p>
+                <p class="small text-body-secondary mb-1">
+                  {{ commit.branchName }} &middot; {{ commit.createdAtUtc | date: 'short' }}
+                </p>
+                <app-diff-viewer [content]="commit.diffContent"></app-diff-viewer>
+              </div>
+            }
+          }
+        </div>
+      </div>
+
+      <app-branch-panel [ticket]="ticket" (branchCreated)="onBranchCreated()"></app-branch-panel>
+    </div>
+
+    <div class="col-12 col-lg-5">
+      <div class="card mb-3">
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span>Reviews</span>
+          @if (ticket.status === 'ForReview') {
+            <button type="button" class="btn btn-sm btn-primary" (click)="reviewFormOpen.set(true)">
+              Submit Review
+            </button>
+          }
+        </div>
+        <div class="card-body">
+          @if (!ticket.reviews.length) {
+            <p class="text-body-secondary mb-0">No reviews yet.</p>
+          } @else {
+            <ul class="list-group list-group-flush">
+              @for (review of ticket.reviews; track review.id) {
+                <li class="list-group-item px-0">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <span class="fw-semibold">{{ review.reviewerName }}</span>
+                    <app-status-badge [value]="review.decision"></app-status-badge>
+                  </div>
+                  @if (review.comments) {
+                    <p class="small mb-0 mt-1">{{ review.comments }}</p>
+                  }
+                  <p class="small text-body-secondary mb-0">{{ review.createdAtUtc | date: 'short' }}</p>
+                </li>
+              }
+            </ul>
+          }
+        </div>
+      </div>
+
+      <app-conflicts-panel
+        [ticketId]="ticket.id"
+        [conflicts]="ticket.conflicts"
+        (changed)="onConflictsChanged()"
+      ></app-conflicts-panel>
+    </div>
+  </div>
+
+  <app-review-form
+    [open]="reviewFormOpen()"
+    [initialDecision]="reviewInitialDecision"
+    [hasLinkedBranch]="!!ticket.branchName"
+    (closed)="reviewFormOpen.set(false)"
+    (submitted)="submitReview($event)"
+  ></app-review-form>
+}

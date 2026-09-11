@@ -1,0 +1,46 @@
+<h1 class="h3 mb-4">Users</h1>
+
+@if (loading()) {
+  <div class="text-body-secondary">Loading users...</div>
+} @else {
+  <div class="table-responsive">
+    <table class="table table-hover align-middle">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Roles</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (user of users(); track user.id) {
+          <tr>
+            <td>{{ user.name }}</td>
+            <td>{{ user.email }}</td>
+            <td>
+              @for (role of user.roles; track role) {
+                <span class="badge text-bg-light border me-1">{{ role }}</span>
+              }
+            </td>
+            <td><app-status-badge [value]="user.status"></app-status-badge></td>
+            <td class="text-end">
+              <button type="button" class="btn btn-sm btn-outline-secondary" (click)="edit(user)">
+                Edit
+              </button>
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+}
+
+<app-user-edit-modal
+  [open]="editingUser() !== null"
+  [user]="editingUser()"
+  (closed)="editingUser.set(null)"
+  (rolesChanged)="saveRoles($event)"
+  (statusToggled)="toggleStatus()"
+></app-user-edit-modal>

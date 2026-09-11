@@ -1,0 +1,68 @@
+<div class="card">
+  <div class="card-header d-flex align-items-center justify-content-between">
+    <span>Conflicts</span>
+    <button
+      type="button"
+      class="btn btn-sm btn-outline-secondary"
+      [disabled]="detecting()"
+      (click)="detectConflicts()"
+    >
+      Detect Conflicts
+    </button>
+  </div>
+  <div class="card-body">
+    @if (!conflicts().length) {
+      <p class="text-body-secondary mb-0">No conflicts detected.</p>
+    } @else {
+      @for (conflict of conflicts(); track conflict.id) {
+        <div class="border rounded-3 p-3 mb-3">
+          <div class="d-flex align-items-center justify-content-between mb-2">
+            <span class="fw-semibold">{{ conflict.filePath }}</span>
+            <app-status-badge [value]="conflict.status"></app-status-badge>
+          </div>
+
+          <app-diff-viewer [content]="conflict.conflictingDiffContent" class="d-block mb-2"></app-diff-viewer>
+
+          @if (conflict.aiSuggestedResolution) {
+            <p class="small fw-semibold mb-1 mt-2">AI-suggested resolution</p>
+            <app-diff-viewer [content]="conflict.aiSuggestedResolution" class="d-block mb-2"></app-diff-viewer>
+          }
+
+          @if (conflict.status === 'ResolvedManually' || conflict.status === 'ResolvedWithAiSuggestion') {
+            <p class="small text-body-secondary mb-0">
+              Resolved by {{ conflict.resolvedBy }} on {{ conflict.resolvedAtUtc | date: 'short' }}
+              @if (conflict.resolutionNote) {
+                &mdash; {{ conflict.resolutionNote }}
+              }
+            </p>
+          } @else {
+            <div class="d-flex flex-wrap gap-2 mt-2">
+              @if (conflict.status === 'Detected') {
+                <button type="button" class="btn btn-sm btn-outline-primary" (click)="suggestResolution(conflict)">
+                  Suggest AI Resolution
+                </button>
+              }
+              @if (conflict.status === 'AiResolutionSuggested') {
+                <button type="button" class="btn btn-sm btn-success" (click)="acceptAiSuggestion(conflict)">
+                  Accept AI Suggestion
+                </button>
+              }
+              <div class="input-group input-group-sm" style="max-width: 22rem">
+                <input
+                  type="text"
+                  class="form-control"
+                  placeholder="Resolution note"
+                  [ngModel]="noteFor(conflict.id)"
+                  (ngModelChange)="setNote(conflict.id, $event)"
+                />
+                <button type="button" class="btn btn-outline-secondary" (click)="resolveManually(conflict)">
+                  Resolve Manually
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    }
+  </div>
+</div>

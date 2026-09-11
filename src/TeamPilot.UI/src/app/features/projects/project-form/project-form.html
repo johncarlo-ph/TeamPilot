@@ -1,0 +1,31 @@
+<app-modal [open]="open()" [title]="title" (closed)="closed.emit()">
+  <form [formGroup]="form" (ngSubmit)="submit()">
+    <div class="mb-3">
+      <label for="project-name" class="form-label">Name</label>
+      <input id="project-name" type="text" class="form-control" formControlName="name" />
+      @if (form.controls.name.invalid && form.controls.name.touched) {
+        <div class="text-danger small mt-1">Name is required.</div>
+      }
+    </div>
+    <div class="mb-3">
+      <label for="project-description" class="form-label">Description</label>
+      <textarea
+        id="project-description"
+        class="form-control"
+        rows="3"
+        formControlName="description"
+      ></textarea>
+    </div>
+    <div class="mb-3">
+      <label for="project-repo" class="form-label">Repository path</label>
+      <input id="project-repo" type="text" class="form-control" formControlName="repositoryPath" />
+      @if (form.controls.repositoryPath.invalid && form.controls.repositoryPath.touched) {
+        <div class="text-danger small mt-1">Repository path is required.</div>
+      }
+    </div>
+    <div class="d-flex justify-content-end gap-2">
+      <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</app-modal>

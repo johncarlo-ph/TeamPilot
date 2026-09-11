@@ -1,0 +1,36 @@
+<div class="d-flex align-items-center justify-content-center vh-100 bg-body-tertiary">
+  <div class="card shadow-sm" style="width: 24rem">
+    <div class="card-body p-4">
+      <h1 class="h4 mb-1 text-center">TeamPilot</h1>
+      <p class="text-body-secondary text-center mb-4">AI-powered ticketing &amp; orchestration</p>
+
+      @if (errorMessage(); as message) {
+        <div class="alert alert-danger py-2" role="alert">{{ message }}</div>
+      }
+
+      <div class="d-flex flex-column align-items-center gap-3">
+        @if (googleConfigured) {
+          <div id="google-signin-button"></div>
+        }
+
+        @if (microsoftConfigured) {
+          <button
+            type="button"
+            class="btn btn-outline-primary w-100"
+            [disabled]="loading()"
+            (click)="signInWithMicrosoft()"
+          >
+            Sign in with Microsoft
+          </button>
+        }
+
+        @if (!googleConfigured && !microsoftConfigured) {
+          <p class="text-body-secondary text-center mb-0">
+            No sign-in providers are configured. Set <code>auth.googleClientId</code> and/or
+            <code>auth.microsoft.clientId</code> in the environment file.
+          </p>
+        }
+      </div>
+    </div>
+  </div>
+</div>

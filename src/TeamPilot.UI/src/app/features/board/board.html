@@ -1,0 +1,66 @@
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <a routerLink="/projects" class="small text-decoration-none">&larr; All projects</a>
+    <h1 class="h3 mb-0">Ticket Board</h1>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']">Agents</a>
+    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'pipeline-runs']">
+      Pipeline Runs
+    </a>
+    <button type="button" class="btn btn-primary" (click)="createFormOpen.set(true)">New Ticket</button>
+  </div>
+</div>
+
+@if (loading()) {
+  <div class="text-body-secondary">Loading board...</div>
+} @else {
+  <div class="row g-3">
+    @for (column of columns; track column.status) {
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="bg-body-tertiary rounded-3 p-2 h-100">
+          <h2 class="h6 text-uppercase text-body-secondary px-1 mb-2">
+            {{ column.title }}
+            <span class="badge text-bg-light border ms-1">{{ ticketsByStatus()[column.status].length }}</span>
+          </h2>
+          <div
+            cdkDropList
+            [id]="columnIdFor(column.status)"
+            [cdkDropListConnectedTo]="columnIds"
+            [cdkDropListData]="ticketsByStatus()[column.status]"
+            (cdkDropListDropped)="onDrop($event, column.status)"
+            class="d-flex flex-column"
+            style="min-height: 4rem"
+          >
+            @for (ticket of ticketsByStatus()[column.status]; track ticket.id) {
+              <div cdkDrag [cdkDragData]="ticket">
+                <app-ticket-card [ticket]="ticket"></app-ticket-card>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+}
+
+<app-create-ticket-form
+  [open]="createFormOpen()"
+  (closed)="createFormOpen.set(false)"
+  (created)="createTicket($event)"
+></app-create-ticket-form>
+
+<app-assign-agents-modal
+  [open]="assignTarget() !== null"
+  [agents]="agents()"
+  (closed)="assignTarget.set(null)"
+  (assigned)="confirmAssignAgents($event)"
+></app-assign-agents-modal>
+
+<app-review-form
+  [open]="reviewTarget() !== null"
+  [initialDecision]="reviewInitialDecision()"
+  [hasLinkedBranch]="!!reviewTarget()?.branchName"
+  (closed)="reviewTarget.set(null)"
+  (submitted)="confirmReview($event)"
+></app-review-form>

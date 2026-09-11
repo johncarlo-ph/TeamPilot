@@ -41,10 +41,32 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
+const string AngularClientCorsPolicy = "AngularClient";
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options =>
+{
+    // AllowCredentials requires explicit origins (no AllowAnyOrigin) because the
+    // refresh-token cookie flow (/api/auth/refresh) relies on credentialed requests.
+    options.AddPolicy(AngularClientCorsPolicy, policy => policy
+        .WithOrigins(allowedOrigins)
+        .AllowAnyHeader()
+        .AllowAnyMethod()
+        .AllowCredentials());
+});
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
+
+// HS256 requires a key of at least 256 bits (32 bytes); failing fast here avoids a key that's
+// silently padded (or otherwise mismatched) between signing and validation.
+if (Encoding.UTF8.GetByteCount(jwtOptions.SigningKey) < 32)
+{
+    throw new InvalidOperationException(
+        $"{JwtOptions.SectionName}:{nameof(JwtOptions.SigningKey)} must be at least 32 characters " +
+        "(HS256 requires a 256-bit key). Set it via `dotnet user-secrets set \"Jwt:SigningKey\" \"<value>\"`.");
+}
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -60,7 +82,7 @@ builder.Services
             ValidateAudience = true,
             ValidAudience = jwtOptions.Audience,
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey.PadRight(32, '0'))),
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30),
         };
@@ -81,6 +103,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseExceptionHandler();
+app.UseCors(AngularClientCorsPolicy);
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -1,0 +1,34 @@
+@if (loading()) {
+  <div class="text-body-secondary">Loading instructions...</div>
+} @else {
+  <form [formGroup]="form" (ngSubmit)="save()">
+    @for (type of types; track type) {
+      <div class="mb-3">
+        <label class="form-label d-flex justify-content-between">
+          <span>{{ type }}</span>
+          <span class="text-body-secondary small">current: {{ currentVersionLabel(type) }}</span>
+        </label>
+        <textarea class="form-control" rows="4" [formControlName]="type"></textarea>
+        @if (historyByType()[type].length > 1) {
+          <details class="small text-body-secondary mt-1">
+            <summary>Version history ({{ historyByType()[type].length }})</summary>
+            <ul class="mb-0">
+              @for (instruction of historyByType()[type]; track instruction.id) {
+                <li>
+                  v{{ instruction.version }} &mdash; {{ instruction.createdAtUtc | date: 'short' }}
+                  @if (instruction.createdBy) {
+                    ({{ instruction.createdBy }})
+                  }
+                  @if (instruction.isCurrent) {
+                    <span class="badge text-bg-success ms-1">current</span>
+                  }
+                </li>
+              }
+            </ul>
+          </details>
+        }
+      </div>
+    }
+    <button type="submit" class="btn btn-primary">Save &amp; Ingest</button>
+  </form>
+}

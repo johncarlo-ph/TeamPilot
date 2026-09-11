@@ -1,0 +1,72 @@
+<a [routerLink]="['/projects', projectId, 'board']" class="small text-decoration-none">&larr; Back to board</a>
+
+<div class="d-flex align-items-center justify-content-between mt-2 mb-4">
+  <h1 class="h3 mb-0">Agents</h1>
+  <button type="button" class="btn btn-primary" (click)="formOpen.set(true)">New Agent</button>
+</div>
+
+@if (loading()) {
+  <div class="text-body-secondary">Loading agents...</div>
+} @else {
+  <div class="row g-3">
+    <div class="col-12 col-lg-5">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (agent of agents(); track agent.id) {
+              <tr
+                class="cursor-pointer"
+                [class.table-active]="agent.id === selectedAgentId()"
+                (click)="selectedAgentId.set(agent.id)"
+              >
+                <td>{{ agent.name }}</td>
+                <td>{{ agent.role }}</td>
+                <td><app-status-badge [value]="agent.status"></app-status-badge></td>
+                <td class="text-end">
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-outline-secondary"
+                    (click)="toggleStatus(agent); $event.stopPropagation()"
+                  >
+                    {{ agent.status === 'Active' ? 'Deactivate' : 'Activate' }}
+                  </button>
+                </td>
+              </tr>
+            } @empty {
+              <tr>
+                <td colspan="4" class="text-body-secondary">No agents yet for this project.</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-7">
+      @if (selectedAgentId(); as agentId) {
+        <div class="card">
+          <div class="card-header">Edit Agent Instructions</div>
+          <div class="card-body">
+            <app-instruction-editor [agentId]="agentId"></app-instruction-editor>
+          </div>
+        </div>
+      } @else {
+        <p class="text-body-secondary">Select an agent to manage its instructions.</p>
+      }
+    </div>
+  </div>
+}
+
+<app-agent-form
+  [open]="formOpen()"
+  (closed)="formOpen.set(false)"
+  (created)="create($event)"
+></app-agent-form>

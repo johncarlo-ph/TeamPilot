@@ -1,0 +1,16 @@
+<a
+  class="card shadow-sm text-decoration-none text-body mb-2"
+  [routerLink]="['/tickets', ticket().id]"
+>
+  <div class="card-body p-2">
+    <h3 class="h6 mb-1">{{ ticket().title }}</h3>
+    @if (ticket().branchName) {
+      <p class="small text-body-secondary mb-1">
+        <code>{{ ticket().branchName }}</code>
+      </p>
+    }
+    <p class="small text-body-secondary mb-0">
+      Updated {{ (ticket().updatedAtUtc || ticket().createdAtUtc) | date: 'short' }}
+    </p>
+  </div>
+</a>

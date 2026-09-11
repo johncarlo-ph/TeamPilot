@@ -51,8 +51,10 @@ case is handled explicitly).
 - **API-level tests** using `Microsoft.AspNetCore.Mvc.Testing`'s `WebApplicationFactory`, to
   exercise the full HTTP pipeline (auth, routing, model binding, `GlobalExceptionHandler`)
   end-to-end without a browser.
-- **End-to-end tests** once the Angular frontend exists, covering the full login → create
-  ticket → approve → merge flow through the UI.
+- **End-to-end tests** covering the full login → create ticket → approve → merge flow through
+  the UI. The Angular frontend (`src/TeamPilot.UI`) now exists, so this is unblocked, but no
+  e2e suite has been added yet — today its automated coverage is a small representative sample
+  of unit specs (`AuthService`, `StatusBadge`) run via `ng test`, not full-flow coverage.
 
 ## Security practices
 
@@ -85,19 +87,35 @@ case is handled explicitly).
 - **Secrets never committed**: `Jwt:SigningKey`, `Auth:Providers:*:Audience`, `Llm:ApiKey` are
   all empty in `appsettings.json` and expected to be supplied via `dotnet user-secrets` in
   development or a real secret store (Key Vault, environment variables, etc.) in production.
+- **CORS is origin-allowlisted, not wide open**: the `AngularClient` policy (see
+  [docs/api.md](api.md#cross-origin-requests-cors)) pairs `AllowCredentials()` with an explicit
+  `Cors:AllowedOrigins` list rather than `AllowAnyOrigin()` — required because the refresh-token
+  cookie flow is credentialed, and it also means an unlisted origin can't call the API from a
+  browser at all, credentialed or not.
 
 ## Deployment workflow
 
-**Build artifacts.** Standard ASP.NET Core publish:
+**Build artifacts.** Two separately deployed artifacts now that the frontend exists:
 
 ```bash
 dotnet publish src/TeamPilot.API -c Release -o ./publish
 ```
 
+```bash
+cd src/TeamPilot.UI && npm run build   # ng build, production config — outputs to dist/TeamPilot.UI
+```
+
+The Angular build is a static site (no Node server required at runtime) and can be hosted from
+any static host/CDN in front of, or alongside, the API's own origin.
+
 **Environment configuration.** `appsettings.json` holds non-secret defaults;
 `appsettings.{ASPNETCORE_ENVIRONMENT}.json` overrides per environment; secrets are supplied
 out-of-band (user-secrets in dev, a real secret store in any deployed environment) — never
-committed alongside the non-secret config.
+committed alongside the non-secret config. On the frontend side,
+`src/TeamPilot.UI/src/environments/environment.ts` (production) holds the deployed API's
+`apiBaseUrl` and the Google/Microsoft OAuth client IDs for that environment — these are public
+client identifiers, not secrets, but still must match whatever origin they're deployed to (see
+`Cors:AllowedOrigins` above and the OAuth provider's own redirect/origin configuration).
 
 **Migrations.** Two supported approaches:
 - Run `dotnet ef database update` as a deploy step against the target database (simplest, but

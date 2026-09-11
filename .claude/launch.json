@@ -6,6 +6,12 @@
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "src/TeamPilot.API", "--launch-profile", "http"],
       "port": 5245
+    },
+    {
+      "name": "TeamPilot.UI",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start", "--prefix", "src/TeamPilot.UI"],
+      "port": 4200
     }
   ]
 }

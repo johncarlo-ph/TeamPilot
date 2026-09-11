@@ -19,7 +19,7 @@ public class TeamPilotDbContextFactory : IDesignTimeDbContextFactory<TeamPilotDb
             .Build();
 
         var connectionString = configuration.GetConnectionString("DefaultConnection")
-            ?? "Server=(localdb)\\mssqllocaldb;Database=TeamPilotDb;Trusted_Connection=True;MultipleActiveResultSets=true";
+            ?? "Server=localhost;Database=TeamPilotDb;Trusted_Connection=True;MultipleActiveResultSets=true;TrustServerCertificate=true";
 
         var optionsBuilder = new DbContextOptionsBuilder<TeamPilotDbContext>();
         optionsBuilder.UseSqlServer(connectionString);

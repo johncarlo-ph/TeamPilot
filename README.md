@@ -6,10 +6,11 @@ per-project orchestrator), Git integration, and a human approval gate, so that a
 day-to-day development work can be tracked, delegated to AI agents, reviewed, and merged
 through one system.
 
-This repository currently contains the **backend API** (`TeamPilot.API`) built with
-.NET 10 / ASP.NET Core. A companion Angular frontend is planned (see
-[constitution/Angular-20-UI-Development-Guidelines.MD](constitution/Angular-20-UI-Development-Guidelines.MD))
-but has not been started yet.
+This repository contains both the **backend API** (`TeamPilot.API`), built with
+.NET 10 / ASP.NET Core, and the **frontend** (`TeamPilot.UI`), an Angular 21 single-page
+application (see
+[constitution/Angular-20-UI-Development-Guidelines.MD](constitution/Angular-20-UI-Development-Guidelines.MD)
+for its conventions and [docs/frontend.md](docs/frontend.md) for its architecture).
 
 ## Contents
 
@@ -20,6 +21,7 @@ but has not been started yet.
 - [Workflow](#workflow)
 - [Authentication](#authentication)
 - [Module documentation](#module-documentation)
+- [User guide](#user-guide)
 
 ## Purpose, scope, and goals
 
@@ -36,10 +38,14 @@ merges — with role-based access so people only see and act on the projects the
   rotating refresh tokens, and three fixed roles (Admin, Analyst, Developer).
 - CI/CD: status tracking only (`PipelineRun` entities with a Queued → Running →
   Succeeded/Failed lifecycle) — no real build/test/deploy execution yet.
+- Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the ticket board, ticket detail,
+  and admin surfaces — see [docs/frontend.md](docs/frontend.md).
 
-**Out of scope (for now).** The Angular frontend, a real CI/CD runner, multi-provider LLM
-support beyond Claude, and asymmetric JWT signing (see each module's "Future considerations"
-for the reasoning behind these deferrals).
+**Out of scope (for now).** A real CI/CD runner, multi-provider LLM support beyond Claude,
+asymmetric JWT signing, and real-time updates via SSE/WebSockets — the board/ticket-detail pages
+poll instead (see each module's "Future considerations" for the reasoning behind these
+deferrals, including [docs/frontend.md](docs/frontend.md#future-considerations) for the
+polling trade-off specifically).
 
 **Goals.**
 1. Keep business rules in the Domain layer, independent of any framework.
@@ -55,7 +61,7 @@ for the reasoning behind these deferrals).
 | Tool | Notes |
 |---|---|
 | [.NET 10 SDK](https://dotnet.microsoft.com/download) | `dotnet --version` should report `10.0.x` |
-| SQL Server LocalDB | Ships with Visual Studio, or install the standalone [SQL Server Express LocalDB](https://learn.microsoft.com/sql/database-engine/configure-windows/sql-server-express-localdb) |
+| SQL Server | A local SQL Server instance reachable at `localhost` (Developer/Express edition, or an existing instance) — see [appsettings.json](src/TeamPilot.API/appsettings.json) to point elsewhere |
 | Git | Required at runtime too — each `Project.RepositoryPath` must point at a real, already-`git init`'d local repository with at least one commit |
 
 ### Clone and restore
@@ -107,7 +113,9 @@ dotnet tool restore        # installs the pinned dotnet-ef version from .config/
 dotnet ef database update --project src/TeamPilot.Infrastructure --startup-project src/TeamPilot.API
 ```
 
-This creates the `TeamPilotDb` database on `(localdb)\mssqllocaldb` and applies all migrations.
+This creates the `TeamPilotDb` database on your local SQL Server instance (`localhost` by
+default — see `ConnectionStrings:DefaultConnection` in
+[appsettings.json](src/TeamPilot.API/appsettings.json)) and applies all migrations.
 
 ### Build, test, run
 
@@ -123,6 +131,23 @@ docs. Every endpoint except `POST /api/auth/login/{provider}`, `POST /api/auth/r
 `POST /api/auth/logout` requires a bearer token — use Swagger's "Authorize" button once you
 have one.
 
+### Frontend (`TeamPilot.UI`)
+
+```bash
+cd src/TeamPilot.UI
+npm install
+npm start   # ng serve, http://localhost:4200
+```
+
+Set `auth.googleClientId` and/or `auth.microsoft.clientId` in
+`src/environments/environment.development.ts` to your OAuth client IDs (must match
+`Auth:Providers:{Google,Microsoft}:Audience` above) — the login page shows a "no sign-in
+providers configured" message until at least one is set. The API must be running and its
+`Cors:AllowedOrigins` (see [appsettings.json](src/TeamPilot.API/appsettings.json)) must include
+`http://localhost:4200` (the default) for the frontend to reach it. See
+[docs/frontend.md](docs/frontend.md) for the full architecture, and
+[docs/api.md](docs/api.md#cross-origin-requests-cors) for the CORS wiring.
+
 ## Architecture
 
 TeamPilot follows Clean Architecture: dependencies point inward, and the Domain layer has no
@@ -130,7 +155,8 @@ framework dependencies at all.
 
 ```mermaid
 graph TD
-    API["TeamPilot.API<br/>(Presentation)"] --> APP["TeamPilot.Application<br/>(Use Cases / Ports)"]
+    UI["TeamPilot.UI<br/>(Angular SPA, separate origin)"] -->|HTTPS + CORS| API["TeamPilot.API<br/>(Presentation)"]
+    API --> APP["TeamPilot.Application<br/>(Use Cases / Ports)"]
     API --> INFRA["TeamPilot.Infrastructure<br/>(composition root wiring only)"]
     INFRA -->|implements APP's interfaces| APP
     APP --> DOM["TeamPilot.Domain<br/>(Entities & Business Rules)"]
@@ -143,10 +169,13 @@ graph TD
 | [`TeamPilot.Application`](src/TeamPilot.Application) | Application | Domain | Use-case services, repository/service **interfaces** (the ports), validators, DTOs. |
 | [`TeamPilot.Infrastructure`](src/TeamPilot.Infrastructure) | Infrastructure | Application, Domain | EF Core persistence, LibGit2Sharp, Claude HTTP client, JWT/OIDC — the **adapters**. |
 | [`TeamPilot.API`](src/TeamPilot.API) | Presentation | Application, Infrastructure (composition root only) | ASP.NET Core controllers, auth pipeline, Swagger. |
+| [`TeamPilot.UI`](src/TeamPilot.UI) | Client | *(none — a separate deployable, talks to the API only over HTTP)* | Angular 21 SPA: ticket board, ticket detail, admin. Not part of `TeamPilot.slnx` (that solution file is .NET-project-only). |
 
 `TeamPilot.API` references `TeamPilot.Infrastructure` only to wire it up in `Program.cs`
 (`AddInfrastructure(...)`) — controllers themselves depend on `TeamPilot.Application`
-interfaces, never on Infrastructure types directly.
+interfaces, never on Infrastructure types directly. `TeamPilot.UI` is a separate origin and
+process entirely, talking to `TeamPilot.API` only through its public HTTP contract (see
+[Cross-origin requests (CORS)](docs/api.md#cross-origin-requests-cors)).
 
 See the per-module docs for what's inside each project:
 
@@ -154,6 +183,7 @@ See the per-module docs for what's inside each project:
 - [docs/application.md](docs/application.md)
 - [docs/infrastructure.md](docs/infrastructure.md)
 - [docs/api.md](docs/api.md)
+- [docs/frontend.md](docs/frontend.md)
 - [docs/cross-cutting-concerns.md](docs/cross-cutting-concerns.md)
 
 ### Request flow (typical write operation)
@@ -204,8 +234,9 @@ Full guidelines live in [constitution/](constitution) and are binding project co
   `.editorconfig` overrides beyond the SDK defaults yet.
 
 The Angular guidelines in [constitution/Angular-20-UI-Development-Guidelines.MD](constitution/Angular-20-UI-Development-Guidelines.MD)
-(standalone components, signals for local state, typed reactive forms, strict mode) apply once
-frontend work starts — there is no frontend code to check against them yet.
+(standalone components, signals for local state, typed reactive forms, strict mode) apply to
+`TeamPilot.UI` — see [docs/frontend.md](docs/frontend.md#code-style-notes) for how they're
+followed in practice.
 
 ## Workflow
 
@@ -237,7 +268,9 @@ separate concern from the *repository's own* CI — don't conflate the two.
 
 - **Unit tests only, today:** `tests/TeamPilot.Domain.Tests` (entity invariants/behavior) and
   `tests/TeamPilot.Application.Tests` (use-case services with mocked repositories/collaborators
-  via Moq). Run with `dotnet test TeamPilot.slnx`.
+  via Moq) on the backend, run with `dotnet test TeamPilot.slnx`; a small representative sample
+  of frontend unit specs (`AuthService`, `StatusBadge`) in `TeamPilot.UI`, run with
+  `npm test --prefix src/TeamPilot.UI`.
 - **Integration/E2E tests do not exist yet.** See
   [docs/cross-cutting-concerns.md](docs/cross-cutting-concerns.md#testing-strategy) for the
   recommended approach (a `WebApplicationFactory`-based API test project, and/or a real
@@ -274,5 +307,14 @@ actually enforced (in Application services, not just `[Authorize]` attributes).
 | [docs/domain.md](docs/domain.md) | Entities, invariants, the domain exception hierarchy |
 | [docs/application.md](docs/application.md) | Use-case services, RBAC/project-access enforcement, validation |
 | [docs/infrastructure.md](docs/infrastructure.md) | EF Core, Git, LLM, and JWT/OIDC implementations |
-| [docs/api.md](docs/api.md) | Controllers, auth pipeline, error responses |
+| [docs/api.md](docs/api.md) | Controllers, auth pipeline, CORS, error responses |
+| [docs/frontend.md](docs/frontend.md) | Angular SPA architecture, auth flow, board/ticket-detail/admin pages |
 | [docs/cross-cutting-concerns.md](docs/cross-cutting-concerns.md) | Logging, testing strategy, security practices, deployment |
+| [docs/user-guide.md](docs/user-guide.md) | End-user walkthrough of every page and field, by role |
+
+## User guide
+
+[docs/user-guide.md](docs/user-guide.md) is a field-by-field walkthrough of the web app for end
+users (sign-in, the ticket board, agents, pipeline runs, and the admin pages), as opposed to the
+developer-facing architecture docs above. Keep it in sync with `TeamPilot.UI` the same way as
+the other module docs — see [Keeping documentation in sync](CLAUDE.md#keeping-documentation-in-sync).

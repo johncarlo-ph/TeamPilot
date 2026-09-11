@@ -51,10 +51,15 @@ public class ExternalIdentityValidator : IExternalIdentityValidator
             ValidateIssuerSigningKey = true,
         };
 
+        // MapInboundClaims defaults to true, which silently renames "sub"/"email"/"name" to the
+        // long ClaimTypes.* URIs - disabled so the claim lookups below (by short OIDC name) work,
+        // matching the same fix already applied to the JWT bearer options in Program.cs.
+        var tokenHandler = new JwtSecurityTokenHandler { MapInboundClaims = false };
+
         System.Security.Claims.ClaimsPrincipal principal;
         try
         {
-            principal = new JwtSecurityTokenHandler().ValidateToken(idToken, validationParameters, out _);
+            principal = tokenHandler.ValidateToken(idToken, validationParameters, out _);
         }
         catch (Exception ex)
         {

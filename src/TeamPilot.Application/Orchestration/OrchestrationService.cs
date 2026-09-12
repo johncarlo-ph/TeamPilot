@@ -24,7 +24,13 @@ namespace TeamPilot.Application.Orchestration;
 /// <see cref="IWorkflowService"/>) - by default Research -&gt; Design -&gt; Coding -&gt; Testing,
 /// with Testing looping back to Coding (bounded at 3 attempts), but any sequence, agent set, or
 /// loop-back an admin has configured. When a stage with a loop-back reports failure, execution
-/// jumps back to its target stage, bounded by that stage's own <c>MaxLoopIterations</c>.
+/// jumps back to its target stage, bounded by that stage's own <c>MaxLoopIterations</c>. If the
+/// ticket's most recent review requested changes, that reviewer's comments are threaded into
+/// every stage's prompt for this run (see <c>Approval.ApprovalGateService</c>, which re-runs the
+/// pipeline immediately after such a review is submitted) - and each stage's own most recent
+/// output for this ticket (see <see cref="IStageExecutionRepository"/>) is handed back to it, so
+/// it can decide for itself whether the feedback actually changes anything for its part of the
+/// work, rather than blindly redoing it.
 /// </summary>
 public sealed class OrchestrationService(
     ITicketRepository ticketRepository,
@@ -36,6 +42,7 @@ public sealed class OrchestrationService(
     IGitCredentialProtector credentialProtector,
     ILlmConnector llmConnector,
     IInstructionRepository instructionRepository,
+    IStageExecutionRepository stageExecutionRepository,
     IProjectAccessGuard projectAccessGuard,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
@@ -43,6 +50,9 @@ public sealed class OrchestrationService(
 {
     private static readonly Regex VerdictPattern =
         new(@"RESULT:\s*(PASS|FAIL)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ChangesPattern =
+        new(@"CHANGES:\s*(NONE|MADE)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public async Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default)
     {
@@ -77,6 +87,21 @@ public sealed class OrchestrationService(
         await auditLogger.LogActionAsync(AuditEventType.TicketPipelineStarted, $"Pipeline started for ticket '{ticket.Title}'.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
+        // The most recent RequestChanges review's comments, if any - threaded into every stage's
+        // prompt for this run (see BuildStagePrompt) so a re-run after a reviewer sends a ticket
+        // back actually addresses what they flagged, rather than just repeating the same work.
+        var reviewFeedback = ticket.Reviews
+            .Where(r => r.Decision == ReviewDecision.RequestChanges && !string.IsNullOrWhiteSpace(r.Comments))
+            .OrderByDescending(r => r.CreatedAtUtc)
+            .FirstOrDefault()
+            ?.Comments;
+
+        // A snapshot of "what every agent said last time," taken once before this run adds any
+        // new StageExecution rows - only fetched when there's feedback to react to at all.
+        var priorOutputsByAgentId = reviewFeedback is not null
+            ? await stageExecutionRepository.GetLatestByTicketAsync(ticket.Id, cancellationToken)
+            : new Dictionary<Guid, StageExecution>();
+
         var steps = new List<AgentWorkResultDto>();
         var stageRunCounts = new Dictionary<Guid, int>();
         string? previousOutput = null;
@@ -104,14 +129,24 @@ public sealed class OrchestrationService(
             var attempt = previousRuns + 1;
             stageRunCounts[stage.Id] = attempt;
 
+            // Only on a stage's first invocation this run, and only when this run was itself
+            // triggered by review feedback - a stage revisited via an intra-run loop-back
+            // (attempt > 1) keeps using the rolling previousOutput instead, so the two feedback
+            // sources are never mixed. A stage with no prior execution (new to this ticket, or
+            // newly added to the pipeline) has nothing to reaffirm against, so it just does
+            // normal full-work prompting.
+            string? priorOwnOutput = attempt == 1 && reviewFeedback is not null && priorOutputsByAgentId.TryGetValue(agent.Id, out var priorExecution)
+                ? priorExecution.Output
+                : null;
+
             var instructions = await GetInstructionsBlockAsync(agent.Id, cancellationToken);
             var requiresVerdict = stage.LoopBackToStageId is not null;
-            var prompt = BuildStagePrompt(ticket, agent, previousOutput, instructions, requiresVerdict);
+            var prompt = BuildStagePrompt(ticket, agent, previousOutput, instructions, requiresVerdict, reviewFeedback, priorOwnOutput);
 
             string output;
             if (agent.Role == AgentRole.Coding)
             {
-                var (codingOutput, commit) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, cancellationToken);
+                var (codingOutput, commit) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, checkForNoChanges: priorOwnOutput is not null, cancellationToken);
                 output = codingOutput;
                 steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, commit));
             }
@@ -129,6 +164,13 @@ public sealed class OrchestrationService(
                     ticket.ProjectId,
                     output);
             }
+
+            // Persisted so a later review-triggered re-run can hand this stage's agent its own
+            // prior output back (see priorOwnOutput above) - saved together with whatever this
+            // iteration already changed (e.g. a new Commit), so it survives even if a later
+            // stage in this same run throws.
+            await stageExecutionRepository.AddAsync(StageExecution.Create(ticket.Id, agent.Id, output), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
 
             previousOutput = output;
 
@@ -182,15 +224,25 @@ public sealed class OrchestrationService(
     private Task<string?> GetInstructionsBlockAsync(Guid agentId, CancellationToken cancellationToken) =>
         AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, agentId, cancellationToken);
 
-    private async Task<(string LlmOutput, CommitDto Commit)> RunCodingStageAsync(
+    private async Task<(string LlmOutput, CommitDto? Commit)> RunCodingStageAsync(
         Ticket ticket,
         Project project,
         Agent agent,
         string prompt,
         int attempt,
+        bool checkForNoChanges,
         CancellationToken cancellationToken)
     {
         var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
+
+        // Only asked of - and only honored for - a Coding stage reaffirming its own prior output
+        // (see priorOwnOutput/BuildStagePrompt): a "no changes needed" response must not still
+        // produce a no-op commit. A missing or unparseable marker falls through and commits as
+        // usual, matching every other Coding invocation.
+        if (checkForNoChanges && ParseChanges(response.Content) == false)
+        {
+            return (response.Content, null);
+        }
 
         var message = attempt == 1
             ? $"{agent.Name} work for '{ticket.Title}'"
@@ -211,7 +263,8 @@ public sealed class OrchestrationService(
 
         var commit = Commit.Create(ticket.Id, ticket.BranchName!, commitResult.CommitHash, message, commitResult.DiffContent, agent.Id);
         ticket.AddCommit(commit);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        // Not saved here - the caller persists this together with the StageExecution it records
+        // for every stage invocation, Coding included, in one call.
 
         var commitDto = new CommitDto(commit.Id, commit.TicketId, commit.BranchName, commit.CommitHash, commit.Message, commit.DiffContent, commit.AuthorAgentId, commit.CreatedAtUtc);
 
@@ -236,20 +289,47 @@ public sealed class OrchestrationService(
     // numbering exists) - the branch is named after it directly, with no title slug or prefix.
     private static string GenerateBranchName(Ticket ticket) => ticket.Id.ToString("N")[..8];
 
-    private static string BuildStagePrompt(Ticket ticket, Agent agent, string? previousOutput, string? instructions, bool requiresVerdict)
+    private static string BuildStagePrompt(
+        Ticket ticket,
+        Agent agent,
+        string? previousOutput,
+        string? instructions,
+        bool requiresVerdict,
+        string? reviewFeedback,
+        string? priorOwnOutput)
     {
-        var prompt = $"{AgentInstructionsFormatter.FormatInstructions(instructions)}You are {agent.Name} ({agent.Role}) working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n";
+        var prompt = AgentInstructionsFormatter.FormatInstructions(instructions);
+
+        if (!string.IsNullOrWhiteSpace(reviewFeedback))
+        {
+            prompt += $"A human reviewer sent this ticket back with the following feedback - address it:\n{reviewFeedback}\n\n";
+        }
+
+        prompt += $"You are {agent.Name} ({agent.Role}) working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n";
 
         if (previousOutput is not null)
         {
             prompt += $"Previous stage output:\n{previousOutput}\n\n";
         }
 
-        prompt += "Carry out your part of the work on this ticket according to your role and instructions.";
+        if (priorOwnOutput is not null)
+        {
+            prompt += $"Your own previous output for this ticket was:\n{priorOwnOutput}\n\n" +
+                "If the reviewer's feedback above doesn't affect this, briefly reaffirm your previous conclusion instead of redoing the work. Otherwise, revise it to address the feedback.";
+        }
+        else
+        {
+            prompt += "Carry out your part of the work on this ticket according to your role and instructions.";
+        }
 
         if (requiresVerdict)
         {
             prompt += " End your response with a line reading exactly 'RESULT: PASS' or 'RESULT: FAIL'.";
+        }
+
+        if (priorOwnOutput is not null && agent.Role == AgentRole.Coding)
+        {
+            prompt += " Also end your response with a line reading exactly 'CHANGES: NONE' if you made no code changes, or 'CHANGES: MADE' if you did.";
         }
 
         return prompt;
@@ -277,5 +357,22 @@ public sealed class OrchestrationService(
         }
 
         return string.Equals(matches[^1].Groups[1].Value, "PASS", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Parses a 'CHANGES: NONE'/'CHANGES: MADE' marker - <see langword="false"/> only when the
+    /// last such marker in the output is unambiguously 'NONE'; a missing or unparseable marker
+    /// returns <see langword="null"/>, which <see cref="RunCodingStageAsync"/> treats the same as
+    /// 'MADE' (commit as usual) rather than silently dropping a real change.
+    /// </summary>
+    private static bool? ParseChanges(string output)
+    {
+        var matches = ChangesPattern.Matches(output);
+        if (matches.Count == 0)
+        {
+            return null;
+        }
+
+        return !string.Equals(matches[^1].Groups[1].Value, "NONE", StringComparison.OrdinalIgnoreCase);
     }
 }

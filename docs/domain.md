@@ -38,6 +38,16 @@ addresses conflicts by their own ID, not nested under a ticket route). This is a
 deviation from strict DDD aggregate rules, made explicitly to match how the API needs to
 address these records — not an oversight.
 
+**`StageExecution` deliberately isn't added via `Ticket` at all, unlike `Commit`/`Review`.**
+`Commit.AddCommit`/`Ticket.RecordReview` add to collections `Ticket` eagerly loads on every
+`GetByIdAsync` (called at the start of essentially every ticket-related use case), which is fine
+for records created a handful of times per ticket. `StageExecution` is created on *every* stage
+invocation - every stage, every pipeline run, every loop-back retry - so a long-lived ticket could
+accumulate far more of them than commits or reviews ever would. It's created directly via
+`StageExecution.Create` and queried standalone through its own repository (the same pattern
+`WorkflowStage` already uses), so nothing pays the cost of loading that growing history just to
+load a `Ticket`.
+
 **Domain exceptions signal invariant violations, not application errors.** Every domain
 exception derives from `DomainException` ([`Exceptions/DomainException.cs`](../src/TeamPilot.Domain/Exceptions/DomainException.cs)),
 which the API layer maps to HTTP 409 Conflict. `NotFoundException`, `ValidationException`, and
@@ -62,7 +72,10 @@ the pipeline got. It's not allowed from `Done`: the work is already merged, so t
 left to cancel, and once `Cancelled` there's no path back (no "reopen") in this pass. The
 optional reason is trimmed and stored as `CancellationReason` rather than discarded, since
 that's the whole point of the feature — capturing *why* (e.g., a requirement changed) is more
-useful later than a bare status flip.
+useful later than a bare status flip. `ReviewDecision.Reject` reuses this same method (passing
+the review's comments as the reason) rather than introducing a separate status - see
+[docs/application.md](application.md) for how `ApprovalGateService` combines it with an
+automatic branch delete.
 
 **Dependencies:** none (this is the point).
 
@@ -75,6 +88,7 @@ useful later than a bare status flip.
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
+| `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
 | `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)* |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |

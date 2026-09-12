@@ -60,7 +60,7 @@ export const INSTRUCTION_TYPES: InstructionType[] = ['Constitution', 'Guideline'
 
 export type PipelineRunStatus = 'Queued' | 'Running' | 'Succeeded' | 'Failed';
 
-export type ReviewDecision = 'Approve' | 'RequestChanges' | 'ResolveConflict';
+export type ReviewDecision = 'Approve' | 'RequestChanges' | 'Reject' | 'ResolveConflict';
 
 export type UserRole = 'Admin' | 'Analyst' | 'Developer';
 

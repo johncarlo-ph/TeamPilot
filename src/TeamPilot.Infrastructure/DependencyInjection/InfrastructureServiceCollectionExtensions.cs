@@ -12,6 +12,7 @@ using TeamPilot.Application.Instructions;
 using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.LiveAgentChat;
 using TeamPilot.Application.Llm;
+using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
@@ -40,6 +41,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
         services.AddScoped<IWorkflowStageRepository, WorkflowStageRepository>();
+        services.AddScoped<IStageExecutionRepository, StageExecutionRepository>();
         services.AddScoped<IInstructionRepository, InstructionRepository>();
         services.AddScoped<IConversationRepository, ConversationRepository>();
         services.AddScoped<IInstructionTemplateRepository, InstructionTemplateRepository>();

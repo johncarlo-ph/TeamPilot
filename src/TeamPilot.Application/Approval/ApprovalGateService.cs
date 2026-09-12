@@ -5,6 +5,7 @@ using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
+using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
@@ -20,6 +21,7 @@ public sealed class ApprovalGateService(
     IProjectRepository projectRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
+    IOrchestrationService orchestrationService,
     IPipelineService pipelineService,
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
@@ -37,11 +39,11 @@ public sealed class ApprovalGateService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
-        if (request.Decision == ReviewDecision.Approve
+        if (request.Decision is ReviewDecision.Approve or ReviewDecision.Reject
             && !currentUser.IsInRole(UserRole.Admin)
             && !currentUser.IsInRole(UserRole.Developer))
         {
-            throw new ForbiddenException("Only Developers or Admins may approve tickets.");
+            throw new ForbiddenException("Only Developers or Admins may approve or reject tickets.");
         }
 
         var review = Review.Create(ticket.Id, request.ReviewerName, request.Decision, request.Comments);
@@ -58,6 +60,16 @@ public sealed class ApprovalGateService(
             case ReviewDecision.RequestChanges:
                 ticket.RequestChanges();
                 await unitOfWork.SaveChangesAsync(cancellationToken);
+
+                // Immediately re-run the workflow rather than leaving the ticket sitting In
+                // Progress until someone manually clicks Run Pipeline - RunPipelineAsync is
+                // idempotent/re-entrant by design (see IOrchestrationService), so calling it
+                // again here is safe.
+                await orchestrationService.RunPipelineAsync(ticket.Id, cancellationToken);
+                break;
+
+            case ReviewDecision.Reject:
+                await RejectAsync(ticket, request.Comments, cancellationToken);
                 break;
 
             case ReviewDecision.ResolveConflict:
@@ -71,6 +83,39 @@ public sealed class ApprovalGateService(
         }
 
         return TicketMappings.ToDto(ticket);
+    }
+
+    /// <summary>
+    /// Cancels the ticket and, if it has a linked branch, deletes that branch from the remote -
+    /// unlike a plain <see cref="TicketService.CancelAsync"/> (which leaves the branch orphaned
+    /// for a separate, explicit <c>DeleteBranchAsync</c> call), Reject does both atomically as
+    /// one decision, since a rejected-in-review ticket's branch was never merged anywhere and so
+    /// has nothing left to protect.
+    /// </summary>
+    private async Task RejectAsync(Ticket ticket, string? reason, CancellationToken cancellationToken)
+    {
+        ticket.Cancel(reason);
+
+        if (!string.IsNullOrWhiteSpace(ticket.BranchName))
+        {
+            var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
+
+            var branchName = ticket.BranchName;
+
+            // Validate before touching Git - UnlinkBranch guards that this is only allowed once
+            // the ticket is Cancelled (already true at this point), matching TicketService's own
+            // DeleteBranchAsync ordering.
+            ticket.UnlinkBranch();
+
+            var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+            await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
+
+            await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for rejected ticket '{ticket.Title}'.", cancellationToken);
+        }
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketCancelled, $"Ticket '{ticket.Title}' rejected in review.", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     private async Task ApproveAsync(Ticket ticket, string reviewerName, CancellationToken cancellationToken)

@@ -47,6 +47,12 @@ export class ReviewForm {
     return this.authService.canApprove() && this.hasLinkedBranch();
   }
 
+  /** Reject shares Approve's "final decision" role gate (Admin/Developer only), but isn't
+   * blocked by a missing branch - there's nothing to merge either way. */
+  get canReject(): boolean {
+    return this.authService.canApprove();
+  }
+
   submit(): void {
     if (this.form.invalid) {
       this.form.markAllAsTouched();
@@ -55,6 +61,14 @@ export class ReviewForm {
     const value = this.form.getRawValue();
     if (value.decision === 'Approve' && !this.canApprove) {
       return;
+    }
+    if (value.decision === 'Reject') {
+      if (!this.canReject) {
+        return;
+      }
+      if (!confirm('Reject this ticket? Its branch and commits will be permanently deleted - this cannot be undone.')) {
+        return;
+      }
     }
     this.submitted.emit({
       reviewerName: value.reviewerName,

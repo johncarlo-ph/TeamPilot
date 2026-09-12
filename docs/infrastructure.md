@@ -174,6 +174,17 @@ on one instance won't decrypt on another.
   would create for a new one, via a raw `migrationBuilder.Sql(...)` script - see
   [docs/application.md](application.md) for why the pipeline moved from hardcoded stages to this
   table.
+- `StageExecutionConfiguration` follows the same "reference by id only" shape, with an
+  `AgentId` foreign key matching `TicketAgentAssignment.AgentId` exactly (`DeleteBehavior.Restrict`
+  - safe because any agent with a `StageExecution` already has a `TicketAgentAssignment`, which
+  `WorkflowService.DeleteCustomAgentAsync` already refuses to delete past). An index on
+  `(TicketId, AgentId, CreatedAtUtc)` backs `StageExecutionRepository.GetLatestByTicketAsync`'s
+  "most recent output per agent" lookup - computed by grouping in memory after one filtered
+  fetch rather than a `GroupBy().Select(g => g.OrderBy...First())` query, since EF Core's SQL
+  Server translation of "latest row per group" isn't reliable across versions and a single
+  ticket's total execution count is small enough that this isn't a real cost. The
+  `AddStageExecutions` migration has no backfill, unlike `AddWorkflowStages` - this is new data
+  collected going forward only, with nothing pre-existing to reconstruct.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

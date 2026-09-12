@@ -270,9 +270,11 @@ stateDiagram-v2
     InProgress --> ForReview: TicketService.MoveToReviewAsync
     ForReview --> Done: ApprovalGateService.SubmitReviewAsync(Approve)
     ForReview --> InProgress: ApprovalGateService.SubmitReviewAsync(RequestChanges)
+    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by RequestChanges)
     ToDo --> Cancelled: TicketService.CancelAsync
     InProgress --> Cancelled: TicketService.CancelAsync
     ForReview --> Cancelled: TicketService.CancelAsync
+    ForReview --> Cancelled: ApprovalGateService.SubmitReviewAsync(Reject)
 ```
 
 `RunPipelineAsync` both starts a ticket (first agent assignment moves it out of To Do) and, in
@@ -281,11 +283,59 @@ admin-configurable per project" above. `TicketService.MoveToReviewAsync` remains
 escape hatch for an
 In Progress ticket a human wants to push to review without invoking the pipeline again.
 
-`TicketService.CancelAsync` is the escape hatch for a ticket whose goal is no longer valid (e.g.
-a requirement changed) — it's reachable from any pre-merge status and is terminal (`Cancelled`
-has no outgoing transition). Unlike `Approve`, cancelling never touches Git: since nothing about
-a cancelled ticket has been merged into the base branch yet, there's nothing to revert — the
-ticket's own feature branch (if any) is simply left orphaned on the remote.
+**`RequestChanges` doesn't just flip the status back — it immediately re-runs the pipeline in the
+same call.** Previously a reviewer had to separately click Run Pipeline afterward; now
+`ApprovalGateService.SubmitReviewAsync` calls `OrchestrationService.RunPipelineAsync` itself right
+after `ticket.RequestChanges()` commits, relying on `RunPipelineAsync` being safe to call again on
+an already-In-Progress ticket (see above). `OrchestrationService` also looks up the ticket's most
+recent `RequestChanges` review with non-blank comments and threads that text into every stage's
+prompt for that run (not just the first stage, and not just Coding) - so the re-run actually
+addresses what the reviewer flagged rather than repeating the exact same work. If that re-run
+throws, the review and the status flip to `InProgress` already committed (a separate
+`SaveChangesAsync` beforehand) - the reviewer sees an error, but the ticket isn't left half-updated.
+
+**Each stage decides for itself whether the reviewer's feedback actually changes anything for its
+part of the work, instead of the re-run blindly redoing every stage from scratch.** This was
+deliberately not solved by having the orchestrator pick a "resume point" (e.g. "skip straight to
+Coding") - that only looks obvious for the default 4-stage pipeline; a custom, admin-configured
+workflow has no single structurally correct resume point (which stage is "the" one to redo when
+there are multiple loop-backs, or no fixed roles at all?). Instead, every stage's own most recent
+output for that ticket is persisted as a `StageExecution` (`Domain/Entities/StageExecution.cs` -
+an immutable per-invocation fact record, referencing `Ticket`/`Agent` by id only like `Commit`;
+see [docs/domain.md](domain.md) for why it isn't eagerly loaded onto `Ticket` the way `Commit`/
+`Review` are). On a review-triggered re-run, `OrchestrationService` hands each stage its own prior
+output back (via `IStageExecutionRepository.GetLatestByTicketAsync`, one snapshot taken before the
+run adds anything new) alongside the reviewer's feedback, and asks it to briefly reaffirm its
+previous conclusion if the feedback doesn't affect it, or revise it if it does - no new structured
+marker needed for that judgment, since a short reaffirmation vs. a full rewrite is already
+distinguishable as prose. This only applies on a stage's *first* invocation in a run that has
+review feedback and a prior execution to react to; a stage revisited via an intra-run loop-back
+(e.g. Testing sending Coding back a second time within the same run) keeps using today's rolling
+`previousOutput` mechanism unchanged, and a stage with no prior execution (new to the ticket, or
+newly added to the workflow) just does normal full-work prompting - there's nothing to reaffirm.
+**Coding is the one stage where this needs an explicit marker**, because unlike every other stage
+it has a side effect: a "no changes needed" response must not still produce an empty commit. Only
+in this same first-invocation/has-prior-output situation, a Coding stage is also asked to end with
+`CHANGES: NONE` or `CHANGES: MADE`; `RunCodingStageAsync` skips `CommitFileAsync`/`PushAsync`
+entirely on a parsed `NONE` (still recording the `StageExecution` and still passing the text
+forward as `previousOutput`), and commits exactly as before in every other case - a missing or
+unparseable marker included, so an ambiguous response can never silently suppress a real change.
+
+**`Reject` is the "opposite" of `Approve`: it discards the ticket instead of keeping its work,
+gated to Admin/Developer for the same reason.** `ApprovalGateService.RejectAsync` calls
+`Ticket.Cancel(comments)` and, if the ticket has a linked branch, deletes that branch from the
+remote in the same call — combining what used to be two separate manual actions
+(`TicketService.CancelAsync` then `DeleteBranchAsync`) into one review decision. This is safe
+specifically because a `ForReview` ticket's branch was never merged anywhere (only `Approve`
+merges), so there's nothing on the base branch to protect - deleting it just discards work that
+was never kept. Unlike `RequestChanges`, there's no path back.
+
+`TicketService.CancelAsync` remains the escape hatch for a ticket whose goal is no longer valid
+for reasons unrelated to a review (e.g. a requirement changed) — reachable from any pre-merge
+status and terminal (`Cancelled` has no outgoing transition), same as `Reject`. Unlike `Reject`,
+a plain cancel never touches Git: the ticket's own feature branch (if any) is simply left
+orphaned on the remote, to be cleaned up later via the separate, explicit `DeleteBranchAsync` if
+desired.
 
 **Cancelling while the pipeline is actively running for that ticket stops it before its next
 stage, not mid-LLM-call.** `OrchestrationService.RunPipelineAsync` calls
@@ -319,10 +369,11 @@ Authentication *use cases* (not token mechanics — those are Infrastructure) li
 
 **Role and project enforcement** happens at the call sites listed under "Architectural
 decisions" above, plus one extra rule in `ApprovalGateService.SubmitReviewAsync`: submitting a
-`ReviewDecision.Approve` requires the caller to be `Admin` or `Developer` — an `Analyst` can
-submit `RequestChanges`/`ResolveConflict` but not approve, matching the product's role
-definitions. This check inspects the *request body* (the decision value), so it can't be
-expressed as a static `[Authorize(Roles=...)]` attribute — it lives in the service.
+`ReviewDecision.Approve` or `Reject` requires the caller to be `Admin` or `Developer` — an
+`Analyst` can submit `RequestChanges`/`ResolveConflict` but not either of the ticket's two final
+decisions, matching the product's role definitions. This check inspects the *request body* (the
+decision value), so it can't be expressed as a static `[Authorize(Roles=...)]` attribute — it
+lives in the service.
 
 ## Example
 

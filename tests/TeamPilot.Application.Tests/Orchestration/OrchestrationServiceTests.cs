@@ -28,6 +28,7 @@ public class OrchestrationServiceTests
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<ILlmConnector> _llmConnector = new();
     private readonly Mock<IInstructionRepository> _instructionRepository = new();
+    private readonly Mock<IStageExecutionRepository> _stageExecutionRepository = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
@@ -64,6 +65,10 @@ public class OrchestrationServiceTests
         SetUpStages(_researchStage, _designStage, _codingStage, _testingStage);
         SetUpAgents(_researchAgent, _designAgent, _codingAgent, _testingAgent);
 
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>());
+
         _gitService
             .Setup(g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommitResult("abc123", "diff content"));
@@ -78,6 +83,7 @@ public class OrchestrationServiceTests
             _credentialProtector.Object,
             _llmConnector.Object,
             _instructionRepository.Object,
+            _stageExecutionRepository.Object,
             _projectAccessGuard.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
@@ -374,5 +380,261 @@ public class OrchestrationServiceTests
         _gitService.Verify(
             g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), customAgent.Name, It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenTicketHasAPriorRequestChangesReview_IncludesItsCommentsInEveryStagePrompt()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "The null check on line 12 is missing"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var researchPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(researchPrompts);
+        Assert.Contains("The null check on line 12 is missing", researchPrompts[0]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenTicketHasOnlyAnOlderApprovedReview_DoesNotIncludeReviewFeedback()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.Approve, "Looks good"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var researchPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(researchPrompts);
+        Assert.DoesNotContain("Looks good", researchPrompts[0]);
+        Assert.DoesNotContain("reviewer", researchPrompts[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAgentHasAPriorStageExecution_GivesItItsOwnPriorOutputAlongsideReviewFeedback()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "Needs work"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>
+            {
+                [_researchAgent.Id] = StageExecution.Create(ticket.Id, _researchAgent.Id, "Original research findings."),
+            });
+
+        var researchPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(researchPrompts);
+        Assert.Contains("Needs work", researchPrompts[0]);
+        Assert.Contains("Original research findings.", researchPrompts[0]);
+        Assert.Contains("reaffirm", researchPrompts[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAgentHasNoPriorStageExecution_DoesNotMentionReaffirmingEvenWithReviewFeedback()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "Needs work"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        // No entries in the dictionary at all - the default constructor setup already covers this,
+        // spelled out here for clarity.
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>());
+
+        var researchPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(researchPrompts);
+        Assert.Contains("Needs work", researchPrompts[0]);
+        Assert.DoesNotContain("reaffirm", researchPrompts[0], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("own previous output", researchPrompts[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingIsRevisitedViaIntraRunLoopBack_DoesNotMixInThePriorRunOutputFraming()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "Needs work"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>
+            {
+                [_codingAgent.Id] = StageExecution.Create(ticket.Id, _codingAgent.Id, "Original implementation notes."),
+            });
+
+        var testingCallCount = 0;
+        var codingPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _codingAgent))
+                {
+                    codingPrompts.Add(req.Prompt);
+                }
+
+                if (IsPromptFor(req, _testingAgent))
+                {
+                    testingCallCount++;
+                    return Task.FromResult(testingCallCount == 1
+                        ? new LlmResponse("Found a bug.\nRESULT: FAIL", "claude-test", 10, 20)
+                        : new LlmResponse("Looks good now.\nRESULT: PASS", "claude-test", 10, 20));
+                }
+
+                return Task.FromResult(new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(2, codingPrompts.Count);
+        Assert.Contains("Original implementation notes.", codingPrompts[0]);
+        Assert.Contains("reaffirm", codingPrompts[0], StringComparison.OrdinalIgnoreCase);
+        // The retry (attempt 2, via the intra-run Testing loop-back) uses the ordinary
+        // previousOutput-carries-forward mechanism, not the prior-run reaffirm/revise framing.
+        Assert.DoesNotContain("Original implementation notes.", codingPrompts[1]);
+        Assert.DoesNotContain("reaffirm", codingPrompts[1], StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Found a bug", codingPrompts[1]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingReportsNoChangesOnAReviewRerun_SkipsTheCommitButStillRecordsAStageExecution()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "Actually, never mind"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>
+            {
+                [_codingAgent.Id] = StageExecution.Create(ticket.Id, _codingAgent.Id, "Original implementation notes."),
+            });
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _codingAgent)
+                    ? new LlmResponse("No change is needed here.\nCHANGES: NONE", "claude-test", 10, 20)
+                    : IsPromptFor(req, _testingAgent)
+                        ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Empty(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _stageExecutionRepository.Verify(
+            r => r.AddAsync(It.Is<StageExecution>(e => e.AgentId == _codingAgent.Id && e.Output.Contains("No change is needed")), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingReportsChangesMadeOnAReviewRerun_CommitsAsUsual()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.RecordReview(Review.Create(ticket.Id, "Bob", ReviewDecision.RequestChanges, "Fix it"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _stageExecutionRepository
+            .Setup(r => r.GetLatestByTicketAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, StageExecution>
+            {
+                [_codingAgent.Id] = StageExecution.Create(ticket.Id, _codingAgent.Id, "Original implementation notes."),
+            });
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _codingAgent)
+                    ? new LlmResponse("Fixed the bug.\nCHANGES: MADE", "claude-test", 10, 20)
+                    : IsPromptFor(req, _testingAgent)
+                        ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_HappyPath_RecordsOneStageExecutionPerStageInvocation()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All checks passed.\nRESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        // Research, Design, Coding, Testing - one invocation each on a clean happy-path run.
+        _stageExecutionRepository.Verify(r => r.AddAsync(It.IsAny<StageExecution>(), It.IsAny<CancellationToken>()), Times.Exactly(4));
     }
 }

@@ -5,6 +5,8 @@ using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
+using TeamPilot.Application.Orchestration;
+using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Pipelines.Dtos;
 using TeamPilot.Application.Projects;
@@ -23,6 +25,7 @@ public class ApprovalGateServiceTests
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
+    private readonly Mock<IOrchestrationService> _orchestrationService = new();
     private readonly Mock<IPipelineService> _pipelineService = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
@@ -54,6 +57,7 @@ public class ApprovalGateServiceTests
             _projectRepository.Object,
             _gitService.Object,
             _credentialProtector.Object,
+            _orchestrationService.Object,
             _pipelineService.Object,
             _projectAccessGuard.Object,
             _currentUser.Object,
@@ -95,10 +99,67 @@ public class ApprovalGateServiceTests
         _pipelineService.Verify(
             p => p.TriggerAsync(_project.Id, ticket.Id, It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task SubmitReviewAsync_WhenDecisionIsRequestChanges_MovesTicketBackToInProgress()
+    public async Task SubmitReviewAsync_WhenDecisionIsReject_CancelsTicketAndDeletesItsBranch()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, "Wrong approach entirely");
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.Cancelled, result.Status);
+        Assert.Null(ticket.BranchName);
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/add-feature", _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
+            Times.Once);
+        _gitService.Verify(
+            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _orchestrationService.Verify(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenDecisionIsRejectWithNoLinkedBranch_CancelsTicketWithoutTouchingGit()
+    {
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+        ticket.MoveToReview();
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, null);
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.Cancelled, result.Status);
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenAnalystSubmitsReject_ThrowsForbiddenException()
+    {
+        _currentUser.Setup(c => c.IsInRole(UserRole.Developer)).Returns(false);
+        _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(false);
+
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, null);
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenDecisionIsRequestChanges_MovesTicketBackToInProgressAndImmediatelyRunsThePipeline()
     {
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
@@ -107,6 +168,9 @@ public class ApprovalGateServiceTests
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
+        // The mocked IOrchestrationService doesn't actually move the ticket to ForReview the way
+        // a real re-run would - this just confirms RequestChanges itself lands on InProgress
+        // before the (separately verified) pipeline re-run is triggered.
         Assert.Equal(TicketStatus.InProgress, result.Status);
         _gitService.Verify(
             g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
@@ -114,6 +178,7 @@ public class ApprovalGateServiceTests
         _pipelineService.Verify(
             p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        _orchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

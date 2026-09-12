@@ -9,12 +9,22 @@
       <select id="review-decision" class="form-select" formControlName="decision">
         <option value="Approve" [disabled]="!canApprove">Approve</option>
         <option value="RequestChanges">Request Changes</option>
+        <option value="Reject" [disabled]="!canReject">Reject</option>
         <option value="ResolveConflict">Resolve Conflict</option>
       </select>
       @if (!authService.canApprove()) {
-        <div class="form-text">Only Admins and Developers may approve a ticket.</div>
-      } @else if (!hasLinkedBranch()) {
+        <div class="form-text">Only Admins and Developers may approve or reject a ticket.</div>
+      } @else if (!hasLinkedBranch() && form.controls.decision.value === 'Approve') {
         <div class="form-text">Link a branch to this ticket before it can be approved.</div>
+      } @else if (form.controls.decision.value === 'Reject') {
+        <div class="form-text text-danger">
+          Rejecting permanently deletes this ticket's branch and commits. This cannot be undone.
+        </div>
+      } @else if (form.controls.decision.value === 'RequestChanges') {
+        <div class="form-text">
+          The pipeline re-runs immediately, and your comments below are passed to the agents as
+          feedback to address.
+        </div>
       }
     </div>
     <div class="mb-3">

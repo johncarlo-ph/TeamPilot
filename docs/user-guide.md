@@ -116,7 +116,7 @@ client-side with an explanation.
 | To Do | In Progress | Starts the ticket immediately, no dialog — see "The agent pipeline" below. |
 | In Progress | For Review | Moves immediately, no dialog. |
 | For Review | Done | Opens **Submit Review** pre-set to *Approve*. |
-| For Review | In Progress | Opens **Submit Review** pre-set to *Request Changes*. |
+| For Review | In Progress | Opens **Submit Review** pre-set to *Request Changes* - submitting it re-runs the pipeline immediately. |
 
 A review can also be opened directly from the ticket's own page — see [Reviews](#reviews).
 
@@ -146,7 +146,9 @@ ticket is To Do or In Progress, a **Start** (or **Run Pipeline**, once it's alre
 button runs the agent pipeline described above — the same action as dragging the card, available
 here for retrying a failed run or re-running after a review's *Request Changes*. The Commits
 panel lists every commit the ticket has picked up (short hash, message, branch, line-by-line
-diff) — a retried Coding attempt shows up as an additional commit.
+diff) — a retried Coding attempt shows up as an additional commit, unless it's a
+*Request Changes* re-run and Coding itself decides no code change is actually needed for your
+feedback, in which case no new commit is added.
 
 **Cancel Ticket** — shown next to the status badge for any To Do, In Progress, or For Review
 ticket (e.g. its goal no longer applies because a requirement changed). Asks for confirmation,
@@ -204,18 +206,31 @@ Finds and resolves merge conflicts between the ticket's branch and its merge tar
 
 ### Reviews
 
-Every decision on a ticket (approve, request changes, resolve a conflict) is recorded here with
-the reviewer's name, decision, and comments. While the ticket is For Review, **Submit Review**
-opens the same form a board drag-and-drop opens, without presetting a decision.
+Every decision on a ticket (approve, request changes, reject, resolve a conflict) is recorded
+here with the reviewer's name, decision, and comments. While the ticket is For Review, **Submit
+Review** opens the same form a board drag-and-drop opens, without presetting a decision.
 
 **Submit Review** — anyone assigned to the project can request changes or resolve a conflict;
-Approve is Admin/Developer only.
+Approve and Reject are both Admin/Developer only, since they're the ticket's two "final" outcomes.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Reviewer name | Text | Yes | Pre-filled with the signed-in user's name. |
-| Decision | Select | Yes | **Approve** (merges the branch into the project's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress), or **Resolve Conflict**. |
-| Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. |
+| Decision | Select | Yes | **Approve** (merges the branch into the project's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress and immediately re-runs the pipeline - see below), **Reject** (Admin/Developer; permanently deletes the ticket's branch and cancels it - see below), or **Resolve Conflict**. |
+| Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. For **Request Changes**, these comments are also passed to the agents on the re-run as feedback to address - write them as instructions to the agents, not just notes to yourself. |
+
+> **Request Changes now runs the pipeline immediately** — you don't need a separate Run Pipeline
+> click afterward. The whole configured sequence runs again from its first stage, and every stage
+> sees your comments - each one decides for itself whether your feedback actually affects its
+> part of the work: an unaffected stage (e.g. Research, when you only flagged a code-level bug)
+> quickly reaffirms its earlier conclusion instead of redoing it from scratch, while the stage(s)
+> your feedback actually concerns revise their work properly. Write comments as instructions to
+> the agents, specific enough that they can tell what's actually affected.
+
+> **Reject is permanent.** Unlike Request Changes, there's no path back: the ticket is cancelled
+> and, if it has a linked branch, that branch (and its commits) is deleted from the remote in the
+> same action. The confirmation dialog says so explicitly - use Request Changes instead if the
+> ticket's work is salvageable and just needs adjusting.
 
 ## Agent Pipeline & Instructions
 
@@ -373,11 +388,13 @@ versioned instructions at the time.
   exception is a custom agent that's never actually run — its "Available agents" **Remove**
   button really does delete it permanently, since there's nothing on record to lose.
 - **A ticket keeps one branch for life — with one exception.** Once linked in the Git panel, it
-  can't be swapped for a different one. Deleting a Cancelled ticket's branch (see
-  [Ticket detail](#ticket-detail)) is the only way that field goes back to empty, and even then
-  a Cancelled ticket can't link a new one — it's terminal either way.
-- **Approving merges code.** It's the one review decision with a real, irreversible side
-  effect. Request Changes, Resolve Conflict, and comments just record a decision.
+  can't be swapped for a different one. Deleting a Cancelled ticket's branch (manually, see
+  [Ticket detail](#ticket-detail), or automatically via **Reject**, see [Reviews](#reviews)) is
+  the only way that field goes back to empty, and even then a Cancelled ticket can't link a new
+  one — it's terminal either way.
+- **Approving and Rejecting both have real, irreversible side effects.** Approve merges code;
+  Reject deletes the ticket's branch. Request Changes, Resolve Conflict, and comments just
+  record a decision (though Request Changes does trigger a new pipeline run).
 - **New sign-ins start with nothing.** A first-time sign-in has zero roles and zero project
   assignments — see [Admin: Users](#admin-users).
 - **A project's remote URL is set once.** It can't be edited after the project is created — get

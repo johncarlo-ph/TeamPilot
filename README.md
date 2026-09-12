@@ -32,16 +32,21 @@ merges — with role-based access so people only see and act on the projects the
 **Scope (current).**
 - Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
   server-managed sandbox on creation, kept in sync via push/fetch), its 4 system-provisioned
-  pipeline agents (Research/Design/Coding/Testing), ticket board, and CI/CD pipeline run history.
+  pipeline agents (Research/Design/Coding/Testing) plus one standing **Live Agent**, ticket
+  board, and CI/CD pipeline run history.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the automatic
   Research → Design → Coding → Testing pipeline, Git commits, merge-conflict
   detection/resolution, and an approval gate.
+- Live Agent: a per-project chat you can ask about the project - questions, code explanations,
+  business rules - with bounded, read-only access to the project's repository and its own
+  tickets. It can draft a new ticket for you to review, but never creates one without your
+  explicit approval in the chat.
 - Identity: sign-in via Google or Microsoft only (no local passwords), JWT-based sessions with
   rotating refresh tokens, and three fixed roles (Admin, Analyst, Developer).
 - CI/CD: status tracking only (`PipelineRun` entities with a Queued → Running →
   Succeeded/Failed lifecycle) — no real build/test/deploy execution yet.
-- Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the ticket board, ticket detail,
-  and admin surfaces — see [docs/frontend.md](docs/frontend.md).
+- Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the ticket board (with the Live Agent
+  chat alongside it), ticket detail, and admin surfaces — see [docs/frontend.md](docs/frontend.md).
 
 **Out of scope (for now).** A real CI/CD runner, multi-provider LLM support beyond Claude,
 asymmetric JWT signing, and real-time updates via SSE/WebSockets — the board/ticket-detail pages

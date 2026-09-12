@@ -103,17 +103,35 @@ Branch" flow does so `ticket-detail` knows to refresh. That output used to be ca
 `branchCreated`; it was renamed to `changed` when this button was added, since it now covers two
 different mutations, not one.
 
+**The board is a two-panel layout: Live Agent chat on the left, the kanban board on the right.**
+`board.html` wraps both in one `.row g-3` (`.col-12 col-lg-4` / `.col-12 col-lg-8`), the same
+Bootstrap grid split `ticket-detail.html` already used for its main-content/side-panel layout -
+no new layout primitive introduced. `features/board/chat-panel` (`ChatPanel`) owns its own state
+entirely: it takes only `projectId` as input, loads the project's chat history itself via
+`LiveAgentChatService.listMessages` on init (an `effect()` reacting to the `projectId` signal
+input, not a poll - the chat only changes in response to a message this component itself sent),
+and appends the user's message optimistically before the `POST` resolves. An assistant message
+carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with a
+"Create ticket" button right in the chat thread - clicking it calls the ordinary
+`TicketsService.create(...)` (the same one `CreateTicketForm` uses), and the newly created ticket
+simply shows up on the board once the existing 8s ticket poll (above) picks it up - no new
+refresh plumbing was added for this. `ChatPanel` never calls a "confirm draft" endpoint because
+there isn't one; approving a draft and creating a ticket are the same API call.
+
 **The board's project name, column colors/icons, and column set are two different concerns kept
 separate on purpose.** The header shows `project().name` (loaded the same way `ticket-detail`
 loads its project — a separate subscription alongside the tickets poll) so a board reached from a
 bookmark or a shared link is unambiguous about which project it belongs to; `BOARD_COLUMNS` in
 `board.ts` carries a per-status `icon` and `accentClass` (⏳/🔧/👀/✅, one accent color each) purely
-for visual scannability of the 4 fixed pipeline stages. That accent palette is deliberately
-independent of `status-badge.ts`'s badge colors used elsewhere (ticket detail, reviews) - the
-column header is "which of the 4 stages am I looking at," the badge is "what status is this one
-ticket," and conflating their palettes wasn't asked for and would just make one of the two
-mappings feel arbitrary. The custom CSS for both (`.board-column--*`, `.board-column-title`,
-`.ticket-card` hover) lives in the single global `src/styles.scss`, not per-component
+for visual scannability of the 4 fixed pipeline stages. `status-badge.ts`'s ticket-status badge
+colors (`ToDo`/`InProgress`/`ForReview`/`Done`, used in ticket detail, reviews, etc.) intentionally
+reuse this same accent palette — `text-bg-primary`/`text-bg-warning`/`text-bg-success` are the
+same colors as `$board-todo-color`/`$board-inprogress-color`/`$board-done-color` because those
+Bootstrap variables are literally aliased to `$primary`/`$warning`/`$success`; `ForReview`'s purple
+has no built-in Bootstrap variant, so it gets its own `.text-bg-forreview` class in
+`styles.scss` set to `$board-forreview-color`. So a ticket's badge always matches the column it
+sits in, wherever that badge is shown. The custom CSS for both (`.board-column--*`, `.board-column-title`,
+`.text-bg-forreview`, `.ticket-card` hover) lives in the single global `src/styles.scss`, not per-component
 `styleUrls` - this project has never used scoped component styles (everything else is Bootstrap
 utility classes in the template), so a new per-component stylesheet would be a second, competing
 styling convention rather than a small addition to the existing one.

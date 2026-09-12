@@ -1,4 +1,6 @@
-<a [routerLink]="['/projects', projectId, 'board']" class="small text-decoration-none">&larr; Back to board</a>
+<a [routerLink]="['/projects', projectId, 'board']" class="small text-decoration-none"
+  >&larr; Back to board</a
+>
 
 <h1 class="h3 mt-2 mb-4">Pipeline Runs</h1>
 
@@ -10,7 +12,7 @@
     [ngModel]="triggerReason()"
     (ngModelChange)="triggerReason.set($event)"
   />
-  <button type="button" class="btn btn-primary" (click)="trigger()">Trigger Run</button>
+  <button type="button" class="btn btn-outline-primary" (click)="trigger()">Trigger Run</button>
 </div>
 
 @if (loading()) {
@@ -45,16 +47,12 @@
               @if (run.status === 'Running') {
                 <button
                   type="button"
-                  class="btn btn-sm btn-outline-success me-1"
+                  class="btn btn-sm btn-success me-1"
                   (click)="complete(run, true)"
                 >
                   Mark Succeeded
                 </button>
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline-danger"
-                  (click)="complete(run, false)"
-                >
+                <button type="button" class="btn btn-sm btn-danger" (click)="complete(run, false)">
                   Mark Failed
                 </button>
               }

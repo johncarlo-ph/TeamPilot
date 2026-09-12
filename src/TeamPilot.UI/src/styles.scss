@@ -1,11 +1,14 @@
 // TeamPilot theme overrides — applied before Bootstrap's own variable defaults.
-$primary: #2c3e50;
+// $primary is intentionally left at Bootstrap's own default blue. The rest of the palette
+// (success/warning/danger/info) is a lighter, friendlier set; $secondary stays a neutral gray
+// so it's safe to use for purely neutral actions (Sign out, Cancel, Close, pagination) without
+// implying "success" or any other meaning.
 $secondary: #6c7a89;
-$success: #2f9e44;
-$warning: #e8a33d;
-$danger: #c0392b;
-$info: #2f6fa8;
-$body-bg: #f4f6f8;
+$success: #00ad4e;
+$warning: #fdba12;
+$danger: #f04923;
+$info: #1ca6d8;
+$body-bg: #f6f8fb;
 $border-radius: 0.5rem;
 $font-family-sans-serif:
   system-ui,
@@ -36,19 +39,26 @@ body {
   cursor: pointer;
 }
 
+// Every button (any size/variant) gets the same floor width, so a short label like "Save" or
+// "Edit" doesn't look scrawny next to "Cancel Ticket" or "Run Pipeline".
+.btn {
+  min-width: 6rem;
+}
+
 // Slimmer, sticky top nav so project links stay reachable while scrolling a long board/list.
 .navbar {
   padding-top: 0.4rem;
   padding-bottom: 0.4rem;
 }
 
-// Ticket board columns — one accent color per workflow stage, distinct from the status-badge
-// palette used elsewhere (this is about telling the 4 columns apart at a glance, not restating
-// the badge's meaning).
-$board-todo-color: #2f6fa8;
-$board-inprogress-color: #e8a33d;
+// Ticket board columns — one accent color per workflow stage. The ticket status badge
+// (app-status-badge) reuses these same colors so a ticket's badge always matches the column
+// it sits in. Reuses the theme palette where it maps cleanly; ForReview keeps a separate purple
+// since the theme has no fourth distinct hue to spare — see .text-bg-forreview below.
+$board-todo-color: $primary;
+$board-inprogress-color: $warning;
 $board-forreview-color: #8e44ad;
-$board-done-color: #2f9e44;
+$board-done-color: $success;
 
 .board-column {
   border-radius: $border-radius;
@@ -73,6 +83,14 @@ $board-done-color: #2f9e44;
 .board-column--done {
   background-color: rgba($board-done-color, 0.08);
   border-top-color: $board-done-color;
+}
+
+// Bootstrap has no built-in theme color for the ForReview purple, so the status badge needs its
+// own text-bg-* class (the other three ticket statuses map to existing Bootstrap variants that
+// already equal their board column color: primary, warning, success).
+.text-bg-forreview {
+  color: #fff;
+  background-color: $board-forreview-color !important;
 }
 
 .board-column-title {

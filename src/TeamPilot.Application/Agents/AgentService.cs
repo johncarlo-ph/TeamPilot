@@ -42,6 +42,19 @@ public sealed class AgentService(
         }
     }
 
+    public async Task EnsureLiveAgentAsync(Guid projectId, CancellationToken cancellationToken = default)
+    {
+        var existing = await agentRepository.GetByProjectAndRoleAsync(projectId, AgentRole.LiveAgent, cancellationToken);
+        if (existing is not null)
+        {
+            return;
+        }
+
+        var agent = Agent.Create(projectId, "Live Agent", AgentRole.LiveAgent);
+        await agentRepository.AddAsync(agent, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<AgentDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var agent = await agentRepository.GetByIdAsync(id, cancellationToken)

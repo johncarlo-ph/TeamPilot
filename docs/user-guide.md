@@ -75,13 +75,27 @@ request can take a few seconds and fails if the URL or token is wrong.
 ## Ticket board
 
 Opening a project shows its name at the top (so it's never ambiguous which project you're
-looking at) above its board: four color-coded columns — ⏳ **To Do**, 🔧 **In Progress**,
+looking at) above a two-panel view: the [Live Agent chat](#live-agent-chat) on the left, and the
+board itself on the right — four color-coded columns — ⏳ **To Do**, 🔧 **In Progress**,
 👀 **For Review**, ✅ **Done** — holding cards for that project's tickets (title, linked branch
 once it has one, last updated). Clicking anywhere on a card, including its branch-name line,
 opens that ticket's detail page — the branch name itself is plain text here; it only becomes a
 clickable link to the remote once you're on the [ticket detail](#ticket-detail) page. The board
-polls for changes roughly every 8 seconds, so a teammate's update appears without a manual
-refresh.
+polls for changes roughly every 8 seconds, so a teammate's update — including a ticket you just
+approved from the chat panel — appears without a manual refresh.
+
+### Live Agent chat
+
+Every project also has a **Live Agent** — a chat you can ask about the project itself: general
+questions, explanations of code in the project's repository, and the project's business rules.
+It only reads the repository (nothing it does can change, move, or delete a file), and it only
+looks at files relevant to what you actually asked.
+
+If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
+card right in the chat, with a **Create ticket** button. Nothing is created until you click that
+button; the Live Agent never adds a ticket to the board on its own. Once you approve it, the new
+ticket appears on the board (in To Do) the next time the board polls, just like one you created
+yourself with **New Ticket**.
 
 **New Ticket** — available to anyone assigned to the project. New tickets always start in To Do.
 
@@ -202,12 +216,11 @@ Approve is Admin/Developer only.
 ## Agents & instructions
 
 Reached from a project's board via the **Agents** button. The left table lists the project's
-four agents (Research, Design, Coding, Testing) with role and Active/Inactive status; selecting
-a row edits that agent's instructions on the right. They're created automatically for every
-project — there's no way to create, rename, or delete an agent here, only to reconfigure or
-edit an existing one. Deactivating one of the four will stop the pipeline from running until
-it's reactivated (the pipeline needs exactly one active agent per role); deactivate rather than
-trying to delete.
+four pipeline agents, always in pipeline order (Research, Design, Coding, Testing) with name and
+role; selecting a row edits that agent's instructions on the right. The standing Live Agent isn't
+listed here — it's managed via the [Live Agent chat](#live-agent-chat) instead. They're created
+automatically for every project — there's no way to create, rename, or delete an agent here,
+only to reconfigure or edit an existing one.
 
 **Editing instructions** — each agent has three instruction fields: **Constitution**,
 **Guideline**, and **Requirement** — the standing text given to an agent before it works. A new

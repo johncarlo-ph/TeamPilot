@@ -77,13 +77,42 @@ asymmetric keys unless a second service needs to validate TeamPilot's tokens ind
 the matching connector; an unsupported value throws `NotSupportedException`. Adding OpenAI or
 Mistral later means adding a new `case` and a new connector class — no changes to any caller.
 
+**`ILlmConnector` has two methods: single-shot and multi-turn/tool-use, kept deliberately
+separate.** `SendPromptAsync(LlmRequest)` is the original single flat prompt/response shape used
+by the fixed pipeline stages (`OrchestrationService`, `ConflictResolutionService`) — untouched by
+the addition below. `SendConversationAsync(LlmConversationRequest)` is a second method added for
+the Live Agent chat: it carries a `Messages` history, an optional `System` prompt, and optional
+`Tools` (JSON-Schema tool definitions), and returns an `LlmConversationResponse` whose `Content`
+is a list of typed blocks (`LlmTextBlock`/`LlmToolUseBlock`/`LlmToolResultBlock`) plus a
+`StopReason` ("tool_use" vs. "end_turn"). `ClaudeLlmConnector.SendConversationAsync` builds the
+real Anthropic Messages API `system`/`messages`/`tools` JSON via `System.Text.Json.Nodes` (block
+shapes vary by type, which doesn't fit a single anonymous-object shape) and parses the response
+blocks back. Folding this into `LlmRequest`/`SendPromptAsync` instead was deliberately avoided —
+it would have meant touching every pipeline call site and every existing test for no benefit to
+those single-shot callers.
+
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
 `Project` owns its own sandbox clone, the service holds no per-project state; every method
 (`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
 `CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeBranchAsync`,
-`DeleteBranchAsync`) opens and disposes its own `LibGit2Sharp.Repository` handle per call
-(`CloneAsync` is the one exception — it creates the repository rather than opening an existing
-one).
+`DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`) opens and disposes its own
+`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
+repository rather than opening an existing one).
+
+**`ListFilesAsync`/`ReadFileAsync` are read-only and exist solely for the Live Agent chat's
+sandboxed file tools.** Every other `IGitService` method either writes or talks to the remote;
+these two only ever read off `repo.Info.WorkingDirectory`. Both resolve the caller's relative
+path against that working directory via `Path.GetFullPath` and reject the call
+(`GitOperationException`) if the resolved path doesn't stay under it — the only defense against a
+path-traversal attempt (e.g. `../../`) reaching outside the sandbox. `ReadFileAsync` additionally
+refuses well-known secret-bearing paths outright (`.git/**`, `.env*`, `id_rsa*`/`id_ed25519*`,
+`*.pfx`/`*.pem`/`*.key`/`*.p12`), runs the remaining content through `SecretRedactor`'s
+best-effort regex redaction (AWS-style keys, private-key blocks, JWTs, common
+`password=`/`api_key=`-shaped assignments), and truncates past 20,000 characters. None of this is
+a guarantee against leaking a secret shaped differently than these patterns — it's defense in
+depth, not a substitute for keeping real secrets out of a project's repository. `ListFilesAsync`
+returns a shallow (non-recursive), capped-at-200-entries listing of one directory, so the model
+only sees what it explicitly asked for rather than an implicit full tree.
 
 **`DeleteBranchAsync` pushes an empty source ref (`:refs/heads/{branchName}`) to delete the
 remote branch** — the standard Git protocol convention, supported directly by LibGit2Sharp's

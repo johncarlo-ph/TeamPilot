@@ -1,4 +1,4 @@
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
+<nav class="navbar navbar-expand-lg navbar-light bg-white border-bottom sticky-top">
   <div class="container-fluid">
     <a class="navbar-brand fw-semibold" routerLink="/projects">TeamPilot</a>
     <div class="d-flex align-items-center gap-3 ms-auto">
@@ -11,7 +11,9 @@
             <a class="nav-link" routerLink="/admin/users" routerLinkActive="active">Users</a>
           </li>
           <li class="nav-item">
-            <a class="nav-link" routerLink="/admin/audit-log" routerLinkActive="active">Audit Log</a>
+            <a class="nav-link" routerLink="/admin/audit-log" routerLinkActive="active"
+              >Audit Log</a
+            >
           </li>
           <li class="nav-item">
             <a class="nav-link" routerLink="/admin/instruction-templates" routerLinkActive="active">
@@ -20,8 +22,10 @@
           </li>
         }
       </ul>
-      <span class="text-white-50 small">{{ authService.currentUser()?.name }}</span>
-      <button type="button" class="btn btn-outline-light btn-sm" (click)="logout()">Sign out</button>
+      <span class="text-body-secondary small">{{ authService.currentUser()?.name }}</span>
+      <button type="button" class="btn btn-outline-secondary btn-sm" (click)="logout()">
+        Sign out
+      </button>
     </div>
   </div>
 </nav>

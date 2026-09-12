@@ -21,14 +21,22 @@
             <app-status-badge [value]="conflict.status"></app-status-badge>
           </div>
 
-          <app-diff-viewer [content]="conflict.conflictingDiffContent" class="d-block mb-2"></app-diff-viewer>
+          <app-diff-viewer
+            [content]="conflict.conflictingDiffContent"
+            class="d-block mb-2"
+          ></app-diff-viewer>
 
           @if (conflict.aiSuggestedResolution) {
             <p class="small fw-semibold mb-1 mt-2">AI-suggested resolution</p>
-            <app-diff-viewer [content]="conflict.aiSuggestedResolution" class="d-block mb-2"></app-diff-viewer>
+            <app-diff-viewer
+              [content]="conflict.aiSuggestedResolution"
+              class="d-block mb-2"
+            ></app-diff-viewer>
           }
 
-          @if (conflict.status === 'ResolvedManually' || conflict.status === 'ResolvedWithAiSuggestion') {
+          @if (
+            conflict.status === 'ResolvedManually' || conflict.status === 'ResolvedWithAiSuggestion'
+          ) {
             <p class="small text-body-secondary mb-0">
               Resolved by {{ conflict.resolvedBy }} on {{ conflict.resolvedAtUtc | date: 'short' }}
               @if (conflict.resolutionNote) {
@@ -38,12 +46,20 @@
           } @else {
             <div class="d-flex flex-wrap gap-2 mt-2">
               @if (conflict.status === 'Detected') {
-                <button type="button" class="btn btn-sm btn-outline-primary" (click)="suggestResolution(conflict)">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  (click)="suggestResolution(conflict)"
+                >
                   Suggest AI Resolution
                 </button>
               }
               @if (conflict.status === 'AiResolutionSuggested') {
-                <button type="button" class="btn btn-sm btn-success" (click)="acceptAiSuggestion(conflict)">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-success"
+                  (click)="acceptAiSuggestion(conflict)"
+                >
                   Accept AI Suggestion
                 </button>
               }
@@ -55,7 +71,11 @@
                   [ngModel]="noteFor(conflict.id)"
                   (ngModelChange)="setNote(conflict.id, $event)"
                 />
-                <button type="button" class="btn btn-outline-secondary" (click)="resolveManually(conflict)">
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  (click)="resolveManually(conflict)"
+                >
                   Resolve Manually
                 </button>
               </div>

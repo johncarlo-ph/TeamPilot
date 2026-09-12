@@ -1,10 +1,11 @@
 import { Component, computed, input } from '@angular/core';
 
 const BADGE_CLASS_BY_VALUE: Record<string, string> = {
-  // Ticket status
-  ToDo: 'text-bg-secondary',
-  InProgress: 'text-bg-primary',
-  ForReview: 'text-bg-warning',
+  // Ticket status — matches the accent color of the corresponding board column
+  // (see .board-column--* and .text-bg-forreview in styles.scss)
+  ToDo: 'text-bg-primary',
+  InProgress: 'text-bg-warning',
+  ForReview: 'text-bg-forreview',
   Done: 'text-bg-success',
   Cancelled: 'text-bg-dark',
   // Agent / user status

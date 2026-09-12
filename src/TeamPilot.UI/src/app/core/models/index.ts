@@ -13,3 +13,4 @@ export * from './audit-log.model';
 export * from './git.model';
 export * from './orchestration.model';
 export * from './auth.model';
+export * from './live-agent-chat.model';

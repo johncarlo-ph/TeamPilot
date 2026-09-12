@@ -27,7 +27,7 @@ describe('StatusBadge', () => {
 
   it('render_KnownStatus_AppliesMappedBadgeClass', () => {
     const badge: HTMLElement = fixture.nativeElement.querySelector('span');
-    expect(badge.classList).toContain('text-bg-warning');
+    expect(badge.classList).toContain('text-bg-forreview');
   });
 
   it('render_UnknownStatus_FallsBackToSecondaryClass', () => {

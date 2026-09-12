@@ -1,13 +1,14 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { AgentsService } from '../../core/services/agents.service';
-import { AgentDto, AgentStatus } from '../../core/models';
-import { StatusBadge } from '../../shared/components/status-badge/status-badge';
+import { AgentDto, AgentRole, AGENT_ROLES } from '../../core/models';
 import { InstructionEditor } from './instruction-editor/instruction-editor';
+
+const PIPELINE_ROLE_ORDER: AgentRole[] = AGENT_ROLES.filter((role) => role !== 'LiveAgent');
 
 @Component({
   selector: 'app-agents',
-  imports: [RouterLink, StatusBadge, InstructionEditor],
+  imports: [RouterLink, InstructionEditor],
   templateUrl: './agents.html',
 })
 export class Agents {
@@ -18,6 +19,12 @@ export class Agents {
   readonly agents = signal<AgentDto[]>([]);
   readonly loading = signal(true);
   readonly selectedAgentId = signal<string | null>(null);
+
+  readonly pipelineAgents = computed(() =>
+    this.agents()
+      .filter((agent) => agent.role !== 'LiveAgent')
+      .sort((a, b) => PIPELINE_ROLE_ORDER.indexOf(a.role) - PIPELINE_ROLE_ORDER.indexOf(b.role)),
+  );
   readonly selectedAgent = computed(() => this.agents().find((a) => a.id === this.selectedAgentId()) ?? null);
 
   constructor() {
@@ -30,20 +37,14 @@ export class Agents {
       next: (agents) => {
         this.agents.set(agents);
         this.loading.set(false);
-        if (!this.selectedAgentId() && agents.length) {
-          this.selectedAgentId.set(agents[0].id);
+        if (!this.selectedAgentId()) {
+          const first = this.pipelineAgents()[0];
+          if (first) {
+            this.selectedAgentId.set(first.id);
+          }
         }
       },
       error: () => this.loading.set(false),
-    });
-  }
-
-  toggleStatus(agent: AgentDto): void {
-    const status: AgentStatus = agent.status === 'Active' ? 'Inactive' : 'Active';
-    this.agentsService.updateStatus(agent.id, { status }).subscribe({
-      next: (updated) => {
-        this.agents.update((agents) => agents.map((a) => (a.id === updated.id ? updated : a)));
-      },
     });
   }
 }

@@ -72,8 +72,10 @@ useful later than a bare status flip.
 |---|---|---|
 | `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
 | `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Cancel` |
-| `Agent` | An AI agent (Research/Design/Coding/Testing) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
+| `Agent` | An AI agent (Research/Design/Coding/Testing, or the standing `LiveAgent`) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
+| `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
+| `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)* |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
 | `Review` | A human approval-gate decision | *(immutable once created)* |
@@ -93,12 +95,29 @@ three `InstructionType`s (Constitution, Guideline, Requirement), via the interna
 ([`Entities/AgentDefaultInstructions.cs`](../src/TeamPilot.Domain/Entities/AgentDefaultInstructions.cs)).
 The seeded text is generic and technology-agnostic — it describes each role's general
 responsibilities (e.g. Research investigates, Coding implements, Testing verifies) without
-naming any framework or language, so it applies to any project. An admin edits it like any other
-instruction: calling `Agent.AddInstructionVersion` for a type that already has a default adds a
-new version that supersedes it, rather than replacing it in place — the default is never mutated,
-only superseded. This is the only way to customize an agent's behavior — `Agent` instances
-themselves are never created or deleted through the API; see "Every project always has exactly
-one agent per pipeline role" in [docs/application.md](application.md).
+naming any framework or language, so it applies to any project. `LiveAgent`'s default
+instructions instead frame it as "someone who knows this project" the user can ask questions
+to, and explicitly constrain it to read-only repository access and to only *drafting* a ticket
+(never creating one outright, and only when the user explicitly asks) — see
+[LiveAgentChat / the Live Agent chat](application.md#liveagentchat--the-live-agent-chat) for how
+those constraints are enforced. An admin edits any agent's instructions the same way: calling
+`Agent.AddInstructionVersion` for a type that already has a default adds a new version that
+supersedes it, rather than replacing it in place — the default is never mutated, only
+superseded. This is the only way to customize an agent's behavior — `Agent` instances themselves
+are never created or deleted through the API; see "Every project always has exactly one agent
+per pipeline role, plus one Live Agent" in [docs/application.md](application.md).
+
+## Conversation and ChatMessage
+
+`Conversation.Create(projectId, agentId)` creates a project's single chat thread with its
+`LiveAgent`, created lazily on the project's first chat message
+(`Conversation` has a unique index on `ProjectId` — see
+[`Entities/Conversation.cs`](../src/TeamPilot.Domain/Entities/Conversation.cs)). Each turn is a
+`ChatMessage` appended via `Conversation.AddMessage(role, content, proposedTicketTitle?,
+proposedTicketDescription?)` — an assistant message that drafted a ticket carries those two
+optional fields so the "create ticket" approval card in the UI re-renders correctly after a
+reload. Nothing about creating a `ChatMessage` creates a real `Ticket`; that only happens if/when
+the user approves the draft (see [docs/application.md](application.md)).
 
 ## Code style notes
 

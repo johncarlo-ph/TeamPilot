@@ -57,4 +57,30 @@ public class AgentServiceTests
         _agentRepository.Verify(r => r.AddAsync(It.IsAny<Agent>(), It.IsAny<CancellationToken>()), Times.Never);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task EnsureLiveAgentAsync_WhenNoneExists_CreatesOne()
+    {
+        _agentRepository
+            .Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.LiveAgent, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Agent?)null);
+
+        await _sut.EnsureLiveAgentAsync(_project.Id);
+
+        _agentRepository.Verify(r => r.AddAsync(It.Is<Agent>(a => a.Role == AgentRole.LiveAgent), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnsureLiveAgentAsync_WhenOneAlreadyExists_CreatesNothing()
+    {
+        _agentRepository
+            .Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.LiveAgent, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Agent.Create(_project.Id, "Live Agent", AgentRole.LiveAgent));
+
+        await _sut.EnsureLiveAgentAsync(_project.Id);
+
+        _agentRepository.Verify(r => r.AddAsync(It.IsAny<Agent>(), It.IsAny<CancellationToken>()), Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

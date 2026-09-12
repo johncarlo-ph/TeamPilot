@@ -58,16 +58,25 @@
 
     <div class="mb-3">
       <label for="project-base-branch" class="form-label">Base branch</label>
-      <input id="project-base-branch" type="text" class="form-control" formControlName="baseBranch" />
-      <div class="form-text">Every ticket's branch is cut from here, and approvals merge back into it.</div>
+      <input
+        id="project-base-branch"
+        type="text"
+        class="form-control"
+        formControlName="baseBranch"
+      />
+      <div class="form-text">
+        Every ticket's branch is cut from here, and approvals merge back into it.
+      </div>
       @if (form.controls.baseBranch.invalid && form.controls.baseBranch.touched) {
         <div class="text-danger small mt-1">Base branch is required.</div>
       }
     </div>
 
     <div class="d-flex justify-content-end gap-2">
-      <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">Cancel</button>
-      <button type="submit" class="btn btn-primary">Save</button>
+      <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">
+        Cancel
+      </button>
+      <button type="submit" class="btn btn-outline-primary">Save</button>
     </div>
   </form>
 </app-modal>

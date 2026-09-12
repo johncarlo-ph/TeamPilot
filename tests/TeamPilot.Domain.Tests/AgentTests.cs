@@ -19,6 +19,7 @@ public class AgentTests
     [InlineData(AgentRole.Design)]
     [InlineData(AgentRole.Coding)]
     [InlineData(AgentRole.Testing)]
+    [InlineData(AgentRole.LiveAgent)]
     public void Create_SeedsCurrentDefaultInstructionForEveryType(AgentRole role)
     {
         var agent = Agent.Create(ProjectId, "Agent", role);

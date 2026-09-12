@@ -7,11 +7,15 @@
     </div>
   </div>
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']">Agents</a>
+    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']"
+      >Agents</a
+    >
     <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'pipeline-runs']">
       Pipeline Runs
     </a>
-    <button type="button" class="btn btn-primary" (click)="createFormOpen.set(true)">New Ticket</button>
+    <button type="button" class="btn btn-outline-primary" (click)="createFormOpen.set(true)">
+      New Ticket
+    </button>
   </div>
 </div>
 
@@ -19,31 +23,40 @@
   <div class="text-body-secondary">Loading board...</div>
 } @else {
   <div class="row g-3">
-    @for (column of columns; track column.status) {
-      <div class="col-12 col-md-6 col-xl-3">
-        <div class="board-column p-2 h-100" [class]="column.accentClass">
-          <h2 class="board-column-title px-1 mb-2">
-            <span aria-hidden="true">{{ column.icon }}</span> {{ column.title }}
-            <span class="badge text-bg-light border ms-1">{{ ticketsByStatus()[column.status].length }}</span>
-          </h2>
-          <div
-            cdkDropList
-            [id]="columnIdFor(column.status)"
-            [cdkDropListConnectedTo]="columnIds"
-            [cdkDropListData]="ticketsByStatus()[column.status]"
-            (cdkDropListDropped)="onDrop($event, column.status)"
-            class="d-flex flex-column"
-            style="min-height: 4rem"
-          >
-            @for (ticket of ticketsByStatus()[column.status]; track ticket.id) {
-              <div cdkDrag [cdkDragData]="ticket">
-                <app-ticket-card [ticket]="ticket"></app-ticket-card>
+    <div class="col-12 col-lg-4">
+      <app-chat-panel [projectId]="projectId"></app-chat-panel>
+    </div>
+    <div class="col-12 col-lg-8">
+      <div class="row g-3">
+        @for (column of columns; track column.status) {
+          <div class="col-12 col-md-6 col-xl-3">
+            <div class="board-column p-2 h-100" [class]="column.accentClass">
+              <h2 class="board-column-title px-1 mb-2">
+                <span aria-hidden="true">{{ column.icon }}</span> {{ column.title }}
+                <span class="badge text-bg-light border ms-1">{{
+                  ticketsByStatus()[column.status].length
+                }}</span>
+              </h2>
+              <div
+                cdkDropList
+                [id]="columnIdFor(column.status)"
+                [cdkDropListConnectedTo]="columnIds"
+                [cdkDropListData]="ticketsByStatus()[column.status]"
+                (cdkDropListDropped)="onDrop($event, column.status)"
+                class="d-flex flex-column"
+                style="min-height: 4rem"
+              >
+                @for (ticket of ticketsByStatus()[column.status]; track ticket.id) {
+                  <div cdkDrag [cdkDragData]="ticket">
+                    <app-ticket-card [ticket]="ticket"></app-ticket-card>
+                  </div>
+                }
               </div>
-            }
+            </div>
           </div>
-        </div>
+        }
       </div>
-    }
+    </div>
   </div>
 }
 

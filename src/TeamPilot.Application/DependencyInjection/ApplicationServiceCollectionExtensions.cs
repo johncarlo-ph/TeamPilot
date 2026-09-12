@@ -8,6 +8,7 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Conflicts;
 using TeamPilot.Application.Instructions;
 using TeamPilot.Application.InstructionTemplates;
+using TeamPilot.Application.LiveAgentChat;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
@@ -32,6 +33,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ITicketService, TicketService>();
         services.AddScoped<IAgentService, AgentService>();
         services.AddScoped<IInstructionService, InstructionService>();
+        services.AddScoped<ILiveAgentChatService, LiveAgentChatService>();
         services.AddScoped<IInstructionTemplateService, InstructionTemplateService>();
         services.AddScoped<IOrchestrationService, OrchestrationService>();
         services.AddScoped<IApprovalGateService, ApprovalGateService>();

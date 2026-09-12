@@ -40,9 +40,6 @@ public sealed class OrchestrationService(
 {
     private const int MaxAttempts = 3;
 
-    private static readonly InstructionType[] InstructionTypesInOrder =
-        [InstructionType.Constitution, InstructionType.Guideline, InstructionType.Requirement];
-
     private static readonly Regex TestingVerdictPattern =
         new(@"RESULT:\s*(PASS|FAIL)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -156,21 +153,8 @@ public sealed class OrchestrationService(
         }
     }
 
-    private async Task<string?> GetInstructionsBlockAsync(Guid agentId, CancellationToken cancellationToken)
-    {
-        var sections = new List<string>();
-
-        foreach (var type in InstructionTypesInOrder)
-        {
-            var instruction = await instructionRepository.GetCurrentAsync(agentId, type, cancellationToken);
-            if (instruction is not null && !string.IsNullOrWhiteSpace(instruction.Content))
-            {
-                sections.Add($"{type}:\n{instruction.Content}");
-            }
-        }
-
-        return sections.Count == 0 ? null : string.Join("\n\n", sections);
-    }
+    private Task<string?> GetInstructionsBlockAsync(Guid agentId, CancellationToken cancellationToken) =>
+        AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, agentId, cancellationToken);
 
     private async Task<string> RunPromptOnlyStageAsync(
         Ticket ticket,
@@ -248,21 +232,18 @@ public sealed class OrchestrationService(
     // numbering exists) - the branch is named after it directly, with no title slug or prefix.
     private static string GenerateBranchName(Ticket ticket) => ticket.Id.ToString("N")[..8];
 
-    private static string FormatInstructions(string? instructions) =>
-        string.IsNullOrWhiteSpace(instructions) ? string.Empty : $"Standing instructions for this agent:\n{instructions}\n\n";
-
     private static string BuildResearchPrompt(Ticket ticket, string? instructions) =>
-        $"{FormatInstructions(instructions)}You are the Research agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
+        $"{AgentInstructionsFormatter.FormatInstructions(instructions)}You are the Research agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
         "Investigate and summarize relevant context, constraints, and open questions before any design or implementation work begins.";
 
     private static string BuildDesignPrompt(Ticket ticket, string researchOutput, string? instructions) =>
-        $"{FormatInstructions(instructions)}You are the Design agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
+        $"{AgentInstructionsFormatter.FormatInstructions(instructions)}You are the Design agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
         $"Research findings:\n{researchOutput}\n\n" +
         "Based on this research, produce a concrete, reviewable design for the Coding agent to implement.";
 
     private static string BuildCodingPrompt(Ticket ticket, string designOutput, string? previousTestingOutput, string? instructions)
     {
-        var prompt = $"{FormatInstructions(instructions)}You are the Coding agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
+        var prompt = $"{AgentInstructionsFormatter.FormatInstructions(instructions)}You are the Coding agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
             $"Design:\n{designOutput}\n\n";
 
         if (previousTestingOutput is not null)
@@ -276,7 +257,7 @@ public sealed class OrchestrationService(
     }
 
     private static string BuildTestingPrompt(Ticket ticket, string codingOutput, string? instructions) =>
-        $"{FormatInstructions(instructions)}You are the Testing agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
+        $"{AgentInstructionsFormatter.FormatInstructions(instructions)}You are the Testing agent working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n" +
         $"Implementation:\n{codingOutput}\n\n" +
         "Verify the implementation against the ticket's requirements. End your response with a " +
         "line reading exactly 'RESULT: PASS' or 'RESULT: FAIL'.";

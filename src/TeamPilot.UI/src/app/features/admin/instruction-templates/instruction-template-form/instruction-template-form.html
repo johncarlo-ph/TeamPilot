@@ -49,8 +49,12 @@
       }
     </div>
     <div class="d-flex justify-content-end gap-2">
-      <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">Cancel</button>
-      <button type="submit" class="btn btn-primary">{{ isEditing ? 'Save' : 'Create' }}</button>
+      <button type="button" class="btn btn-outline-secondary" (click)="closed.emit()">
+        Cancel
+      </button>
+      <button type="submit" class="btn btn-outline-primary">
+        {{ isEditing ? 'Save' : 'Create' }}
+      </button>
     </div>
   </form>
 </app-modal>

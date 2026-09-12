@@ -48,6 +48,24 @@ public interface IGitService
     /// sandbox. <paramref name="baseBranchName"/> is checked out first if the sandbox's HEAD
     /// happens to be sitting on the branch being deleted.</summary>
     Task DeleteBranchAsync(string repositoryPath, string branchName, string baseBranchName, string accessToken, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only, non-recursive listing of the files and folders directly inside
+    /// <paramref name="relativePath"/> (or the repository root when <see langword="null"/>/empty).
+    /// Folder entries are suffixed with <c>/</c>. Used only by the Live Agent chat's sandboxed
+    /// file-browsing tool - never writes, and rejects any path that would resolve outside the
+    /// repository's working directory.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only read of one file's text content from the repository's working directory, for
+    /// the Live Agent chat's file-reading tool. Refuses well-known secret-bearing paths outright
+    /// and best-effort redacts common secret shapes from what it does return (see
+    /// <c>SecretRedactor</c>) - not a guarantee, just a defense in depth. Rejects any path that
+    /// would resolve outside the repository's working directory.
+    /// </summary>
+    Task<GitFileReadResult> ReadFileAsync(string repositoryPath, string relativeFilePath, CancellationToken cancellationToken = default);
 }
 
 public sealed record GitCommitResult(string CommitHash, string DiffContent);
@@ -59,3 +77,7 @@ public sealed record GitDiffResult(string SourceBranch, string TargetBranch, IRe
 public sealed record GitConflictingFile(string FilePath, string ConflictContent);
 
 public sealed record GitMergeConflictResult(bool HasConflicts, IReadOnlyList<GitConflictingFile> ConflictingFiles);
+
+/// <summary><paramref name="Truncated"/> is <see langword="true"/> when <paramref name="Content"/>
+/// was cut short of the file's actual length to bound how much text reaches an LLM prompt.</summary>
+public sealed record GitFileReadResult(bool Found, string? Content, bool Truncated);

@@ -1,0 +1,70 @@
+<div class="card h-100 d-flex flex-column">
+  <div class="card-header"><span aria-hidden="true">💬</span> Live Agent</div>
+
+  <div class="card-body flex-grow-1 overflow-auto" style="min-height: 20rem; max-height: 65vh">
+    @if (loading()) {
+      <div class="text-body-secondary">Loading conversation...</div>
+    } @else if (!messages().length) {
+      <p class="text-body-secondary mb-0">
+        Ask the Live Agent about this project - it can answer questions, explain code and business
+        rules, and draft a ticket for you to approve.
+      </p>
+    } @else {
+      @for (message of messages(); track message.id) {
+        <div class="d-flex mb-3" [class.justify-content-end]="message.role === 'User'">
+          <div
+            class="p-2 rounded"
+            [class.bg-secondary]="message.role === 'User'"
+            [class.text-white]="message.role === 'User'"
+            [class.bg-white]="message.role === 'Assistant'"
+            [class.text-dark]="message.role === 'Assistant'"
+            [class.border]="message.role === 'Assistant'"
+            style="max-width: 85%; white-space: pre-wrap"
+          >
+            {{ message.content }}
+
+            @if (message.proposedTicketTitle) {
+              <div class="card mt-2 text-dark">
+                <div class="card-body p-2">
+                  <div class="fw-semibold small">{{ message.proposedTicketTitle }}</div>
+                  @if (message.proposedTicketDescription) {
+                    <div class="small text-body-secondary">
+                      {{ message.proposedTicketDescription }}
+                    </div>
+                  }
+                  @if (isTicketCreated(message)) {
+                    <span class="badge text-bg-success mt-2">Ticket created</span>
+                  } @else {
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-success mt-2"
+                      (click)="approveTicket(message)"
+                    >
+                      Create ticket
+                    </button>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      }
+      @if (sending()) {
+        <div class="text-body-secondary small">Live Agent is thinking...</div>
+      }
+    }
+  </div>
+
+  <div class="card-footer">
+    <form [formGroup]="form" (ngSubmit)="send()" class="d-flex gap-2">
+      <input
+        type="text"
+        class="form-control"
+        formControlName="content"
+        placeholder="Ask a question or ask it to create a ticket..."
+        [attr.disabled]="sending() ? true : null"
+      />
+      <button type="submit" class="btn btn-outline-primary" [disabled]="sending()">Send</button>
+    </form>
+  </div>
+</div>

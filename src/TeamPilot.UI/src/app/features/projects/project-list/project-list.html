@@ -1,7 +1,9 @@
 <div class="d-flex align-items-center justify-content-between mb-4">
   <h1 class="h3 mb-0">Projects</h1>
   @if (authService.isAdmin()) {
-    <button type="button" class="btn btn-primary" (click)="openCreate()">New Project</button>
+    <button type="button" class="btn btn-outline-primary" (click)="openCreate()">
+      New Project
+    </button>
   }
 </div>
 
@@ -24,7 +26,7 @@
             </p>
             <div class="d-flex gap-2">
               <a
-                class="btn btn-primary btn-sm flex-grow-1"
+                class="btn btn-outline-primary btn-sm flex-grow-1"
                 [routerLink]="['/projects', project.id, 'board']"
               >
                 Open Board

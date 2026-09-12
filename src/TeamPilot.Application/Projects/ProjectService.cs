@@ -44,6 +44,10 @@ public sealed class ProjectService(
         // assignment step.
         await agentService.EnsureDefaultAgentsAsync(project.Id, cancellationToken);
 
+        // Every project also gets one standing Live Agent - unlike the 4 pipeline agents above,
+        // it isn't invoked automatically; a human chats with it directly.
+        await agentService.EnsureLiveAgentAsync(project.Id, cancellationToken);
+
         await auditLogger.LogActionAsync(AuditEventType.ProjectCreated, $"Project '{project.Name}' created.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 

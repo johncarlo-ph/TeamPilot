@@ -11,6 +11,7 @@ import { ProjectDto, ReviewDecision, TicketDto, TicketStatus } from '../../core/
 import { TicketCard } from './ticket-card/ticket-card';
 import { CreateTicketForm } from './create-ticket-form/create-ticket-form';
 import { ReviewForm } from '../ticket-detail/review-form/review-form';
+import { ChatPanel } from './chat-panel/chat-panel';
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -25,7 +26,7 @@ export const BOARD_COLUMNS: { status: BoardStatus; title: string; icon: string; 
 
 @Component({
   selector: 'app-board',
-  imports: [RouterLink, DragDropModule, TicketCard, CreateTicketForm, ReviewForm],
+  imports: [RouterLink, DragDropModule, TicketCard, CreateTicketForm, ReviewForm, ChatPanel],
   templateUrl: './board.html',
 })
 export class Board {

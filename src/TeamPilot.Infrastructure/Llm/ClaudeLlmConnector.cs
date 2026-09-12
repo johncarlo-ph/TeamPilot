@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using TeamPilot.Application.Llm;
@@ -46,6 +47,91 @@ public class ClaudeLlmConnector : ILlmConnector
 
         return new LlmResponse(content, body.Model, body.Usage.InputTokens, body.Usage.OutputTokens);
     }
+
+    public async Task<LlmConversationResponse> SendConversationAsync(LlmConversationRequest request, CancellationToken cancellationToken = default)
+    {
+        var messages = new JsonArray();
+        foreach (var message in request.Messages)
+        {
+            var content = new JsonArray();
+            foreach (var block in message.Content)
+            {
+                content.Add(ToAnthropicBlock(block));
+            }
+
+            messages.Add(new JsonObject { ["role"] = message.Role, ["content"] = content });
+        }
+
+        var body = new JsonObject
+        {
+            ["model"] = _options.Model,
+            ["max_tokens"] = request.MaxTokens,
+            ["messages"] = messages,
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.System))
+        {
+            body["system"] = request.System;
+        }
+
+        if (request.Tools is { Count: > 0 })
+        {
+            var tools = new JsonArray();
+            foreach (var tool in request.Tools)
+            {
+                tools.Add(new JsonObject
+                {
+                    ["name"] = tool.Name,
+                    ["description"] = tool.Description,
+                    ["input_schema"] = JsonNode.Parse(tool.InputSchemaJson),
+                });
+            }
+
+            body["tools"] = tools;
+        }
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "v1/messages");
+        httpRequest.Headers.Add("x-api-key", _options.ApiKey);
+        httpRequest.Headers.Add("anthropic-version", AnthropicVersion);
+        httpRequest.Content = JsonContent.Create(body);
+
+        using var httpResponse = await _httpClient.SendAsync(httpRequest, cancellationToken);
+        httpResponse.EnsureSuccessStatusCode();
+
+        var json = await httpResponse.Content.ReadFromJsonAsync<JsonObject>(cancellationToken)
+            ?? throw new InvalidOperationException("Claude API returned an empty response.");
+
+        var contentBlocks = new List<LlmContentBlock>();
+        foreach (var block in json["content"]!.AsArray())
+        {
+            var type = block!["type"]!.GetValue<string>();
+            contentBlocks.Add(type switch
+            {
+                "text" => new LlmTextBlock(block["text"]!.GetValue<string>()),
+                "tool_use" => new LlmToolUseBlock(
+                    block["id"]!.GetValue<string>(),
+                    block["name"]!.GetValue<string>(),
+                    block["input"]!.ToJsonString()),
+                _ => new LlmTextBlock(string.Empty),
+            });
+        }
+
+        var model = json["model"]!.GetValue<string>();
+        var stopReason = json["stop_reason"]?.GetValue<string>() ?? "end_turn";
+        var usage = json["usage"]!.AsObject();
+        var inputTokens = usage["input_tokens"]!.GetValue<int>();
+        var outputTokens = usage["output_tokens"]!.GetValue<int>();
+
+        return new LlmConversationResponse(contentBlocks, stopReason, model, inputTokens, outputTokens);
+    }
+
+    private static JsonObject ToAnthropicBlock(LlmContentBlock block) => block switch
+    {
+        LlmTextBlock t => new JsonObject { ["type"] = "text", ["text"] = t.Text },
+        LlmToolUseBlock u => new JsonObject { ["type"] = "tool_use", ["id"] = u.Id, ["name"] = u.Name, ["input"] = JsonNode.Parse(u.InputJson) },
+        LlmToolResultBlock r => new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = r.ToolUseId, ["content"] = r.Content, ["is_error"] = r.IsError },
+        _ => throw new NotSupportedException($"Unsupported content block type: {block.GetType().Name}"),
+    };
 
     private sealed record ClaudeMessageResponse(
         [property: JsonPropertyName("content")] IReadOnlyList<ClaudeContentBlock> Content,

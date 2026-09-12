@@ -3,10 +3,9 @@
 } @else {
   <div class="alert alert-warning small" role="alert">
     <strong>Mid-pipeline edits only affect stages that haven't started yet.</strong>
-    If you edit an instruction while this agent's ticket is already running, it applies to any
-    stage that hasn't started yet - including a Coding retry after a Testing failure - but a
-    stage already in progress will finish using whatever instructions were current when it
-    started.
+    If you edit an instruction while this agent's ticket is already running, it applies to any stage
+    that hasn't started yet - including a Coding retry after a Testing failure - but a stage already
+    in progress will finish using whatever instructions were current when it started.
   </div>
   <form [formGroup]="form" (ngSubmit)="save()">
     @for (type of types; track type) {
@@ -50,6 +49,6 @@
         }
       </div>
     }
-    <button type="submit" class="btn btn-primary">Save &amp; Ingest</button>
+    <button type="submit" class="btn btn-outline-primary">Save &amp; Ingest</button>
   </form>
 }

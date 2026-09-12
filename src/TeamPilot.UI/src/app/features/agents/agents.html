@@ -20,12 +20,10 @@
             <tr>
               <th>Name</th>
               <th>Role</th>
-              <th>Status</th>
-              <th></th>
             </tr>
           </thead>
           <tbody>
-            @for (agent of agents(); track agent.id) {
+            @for (agent of pipelineAgents(); track agent.id) {
               <tr
                 class="cursor-pointer"
                 [class.table-active]="agent.id === selectedAgentId()"
@@ -33,20 +31,10 @@
               >
                 <td>{{ agent.name }}</td>
                 <td>{{ agent.role }}</td>
-                <td><app-status-badge [value]="agent.status"></app-status-badge></td>
-                <td class="text-end">
-                  <button
-                    type="button"
-                    class="btn btn-sm btn-outline-secondary"
-                    (click)="toggleStatus(agent); $event.stopPropagation()"
-                  >
-                    {{ agent.status === 'Active' ? 'Deactivate' : 'Activate' }}
-                  </button>
-                </td>
               </tr>
             } @empty {
               <tr>
-                <td colspan="4" class="text-body-secondary">No agents yet for this project.</td>
+                <td colspan="2" class="text-body-secondary">No agents yet for this project.</td>
               </tr>
             }
           </tbody>

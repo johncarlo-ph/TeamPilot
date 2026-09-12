@@ -247,6 +247,111 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
             },
             cancellationToken);
 
+    private const int MaxListEntries = 200;
+    private const int MaxFileReadChars = 20_000;
+
+    private static readonly string[] BlockedExtensions = [".pfx", ".pem", ".key", ".p12"];
+
+    public Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                var targetPath = ResolveSandboxedPath(repo.Info.WorkingDirectory, relativePath ?? string.Empty);
+
+                if (!Directory.Exists(targetPath))
+                {
+                    return (IReadOnlyList<string>)Array.Empty<string>();
+                }
+
+                var entries = new List<string>();
+
+                foreach (var dir in Directory.EnumerateDirectories(targetPath))
+                {
+                    var name = Path.GetFileName(dir);
+                    if (string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    entries.Add(name + "/");
+                }
+
+                foreach (var file in Directory.EnumerateFiles(targetPath))
+                {
+                    entries.Add(Path.GetFileName(file));
+                }
+
+                return (IReadOnlyList<string>)entries
+                    .OrderBy(e => e, StringComparer.OrdinalIgnoreCase)
+                    .Take(MaxListEntries)
+                    .ToList();
+            },
+            cancellationToken);
+
+    public Task<GitFileReadResult> ReadFileAsync(string repositoryPath, string relativeFilePath, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                if (IsBlockedPath(relativeFilePath))
+                {
+                    return new GitFileReadResult(false, null, false);
+                }
+
+                using var repo = OpenRepository(repositoryPath);
+                var fullPath = ResolveSandboxedPath(repo.Info.WorkingDirectory, relativeFilePath);
+
+                if (!File.Exists(fullPath))
+                {
+                    return new GitFileReadResult(false, null, false);
+                }
+
+                var content = SecretRedactor.Redact(File.ReadAllText(fullPath));
+                var truncated = content.Length > MaxFileReadChars;
+
+                return new GitFileReadResult(true, truncated ? content[..MaxFileReadChars] : content, truncated);
+            },
+            cancellationToken);
+
+    /// <summary>Resolves <paramref name="relativePath"/> against the repository's working
+    /// directory and rejects it (via <see cref="GitOperationException"/>) if the resolved path
+    /// would land outside that directory - the read-only file tools' only defense against a
+    /// path-traversal attempt (e.g. <c>../../</c>) reaching outside the sandbox.</summary>
+    private static string ResolveSandboxedPath(string workingDirectory, string relativePath)
+    {
+        var root = Path.GetFullPath(workingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var resolved = Path.GetFullPath(Path.Combine(root, relativePath));
+
+        if (!resolved.Equals(root, StringComparison.OrdinalIgnoreCase) &&
+            !resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new GitOperationException($"Path '{relativePath}' is outside the repository sandbox.");
+        }
+
+        return resolved;
+    }
+
+    private static bool IsBlockedPath(string relativeFilePath)
+    {
+        var segments = relativeFilePath.Replace('\\', '/').TrimStart('/').Split('/');
+
+        if (segments.Any(s => string.Equals(s, ".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        var fileName = segments[^1];
+
+        if (fileName.StartsWith(".env", StringComparison.OrdinalIgnoreCase) ||
+            fileName.StartsWith("id_rsa", StringComparison.OrdinalIgnoreCase) ||
+            fileName.StartsWith("id_ed25519", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return BlockedExtensions.Contains(Path.GetExtension(fileName), StringComparer.OrdinalIgnoreCase);
+    }
+
     private string ResolveSandboxRoot() =>
         Path.IsPathRooted(_options.SandboxRoot)
             ? _options.SandboxRoot

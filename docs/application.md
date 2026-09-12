@@ -22,10 +22,11 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Users/`](../src/TeamPilot.Application/Users) | Admin user management: roles, enable/disable, project assignment |
 | [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD, project-scoped listing for non-admins |
 | [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking |
-| [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 pipeline agents per project; read/configure/activate-deactivate only, no manual creation |
+| [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate only, no manual creation |
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
 | [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running the standardized Research → Design → Coding → Testing pipeline for a ticket, including the bounded Coding/Testing retry loop |
+| [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
 | [`Pipelines/`](../src/TeamPilot.Application/Pipelines) | CI/CD status-tracking use cases |
@@ -130,18 +131,54 @@ called once by `ProjectService.CreateAsync` for new projects, and again defensiv
 `OrchestrationService.RunPipelineAsync` before every run so projects created before this existed
 self-heal instead of failing. Agent creation isn't exposed via the API at all — `AgentService`
 only reads, reconfigures, and activates/deactivates agents; the 4 pipeline agents are the only
-agents a project has, and a second Research/Design/Coding/Testing agent would make "the
-project's agent for this role" ambiguous for the pipeline to pick, so nothing creates one.
-`RunPipelineAsync` runs all four stages in that fixed order synchronously within one call (no
-background-job infra, matching `ProjectService.CreateAsync`'s synchronous clone) and always ends
-by moving the ticket to `ForReview`. When Testing reports failure (parsed from a `RESULT: PASS`/
-`RESULT: FAIL` marker the Testing prompt asks for), Coding is re-run with Testing's failure
-output fed back in as context, bounded at 3 total attempts — if still failing after that, the
-pipeline stops retrying and moves to review anyway, since there's no ticket-level "flagged"
-state; the retried commits and final Testing verdict are the visible trail for a human reviewer.
-An admin can still edit any of the 4 agents' instructions (Constitution/Guideline/Requirement)
-via `InstructionService` — that capability is unaffected by any of this, only creating new agents
-is gone.
+agents *invoked automatically per ticket*, and a second Research/Design/Coding/Testing agent
+would make "the project's agent for this role" ambiguous for the pipeline to pick, so nothing
+creates one. `RunPipelineAsync` runs all four stages in that fixed order synchronously within one
+call (no background-job infra, matching `ProjectService.CreateAsync`'s synchronous clone) and
+always ends by moving the ticket to `ForReview`. When Testing reports failure (parsed from a
+`RESULT: PASS`/`RESULT: FAIL` marker the Testing prompt asks for), Coding is re-run with
+Testing's failure output fed back in as context, bounded at 3 total attempts — if still failing
+after that, the pipeline stops retrying and moves to review anyway, since there's no
+ticket-level "flagged" state; the retried commits and final Testing verdict are the visible
+trail for a human reviewer. An admin can still edit any of the 4 agents' instructions
+(Constitution/Guideline/Requirement) via `InstructionService` — that capability is unaffected by
+any of this, only creating new pipeline agents is gone.
+
+**A project also always has exactly one standing `LiveAgent` — a 5th agent, but not part of the
+pipeline.** `AgentService.EnsureLiveAgentAsync` provisions it the same self-healing way as the 4
+pipeline agents (called once by `ProjectService.CreateAsync`, and again defensively by
+`LiveAgentChatService.SendMessageAsync` before every chat message). Unlike the pipeline agents,
+nothing invokes it automatically — a human converses with it directly through
+`LiveAgentChat/`. See [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat)
+below.
+
+### LiveAgentChat / the Live Agent chat
+
+`LiveAgentChatService.SendMessageAsync` persists the user's message onto the project's single
+`Conversation` (created lazily on first use), then runs a bounded (max 6 round-trip)
+`ILlmConnector.SendConversationAsync` tool-use loop before persisting and returning the
+assistant's final text reply:
+
+- **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
+  [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction),
+  `list_tickets` (wraps `ITicketRepository.ListAsync`), and `propose_ticket(title, description)`.
+- **`propose_ticket` never writes to the database.** It only captures the drafted title/
+  description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
+  `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks
+  "Create ticket" on that message in the UI, which calls the ordinary
+  `POST /api/projects/{projectId}/tickets` endpoint (`TicketService.CreateAsync`) directly — no
+  separate "approve draft" endpoint exists. There is no "Draft" `TicketStatus`; the approval gate
+  lives entirely in the chat UI, not in ticket state.
+- **The model is instructed (both in `AgentDefaultInstructions.For(LiveAgent)` and in the
+  `propose_ticket` tool's own description) to only draft a ticket when the user explicitly asks
+  for one** — enforced through prompting, not code, since nothing stops the model from calling a
+  tool it's told not to call in a given turn.
+- **No write-capable `IGitService` method is ever registered as a tool here** — only
+  `ListFilesAsync`/`ReadFileAsync`. The Live Agent has no code path that can create, modify,
+  move, or delete anything in the sandbox.
+- Conversation history is replayed to the model as plain user/assistant text turns on every
+  message (no persisted tool-call history) — the tool-use loop itself is rebuilt fresh each
+  request from whatever the model asks for that turn.
 
 **Each stage's prompt is built with that agent's *current* instructions, re-read immediately
 before the stage runs.** `OrchestrationService.GetInstructionsBlockAsync` calls

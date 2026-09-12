@@ -12,6 +12,13 @@ public interface IAgentService
     /// </summary>
     Task EnsureDefaultAgentsAsync(Guid projectId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Ensures the project has its one standing <see cref="Domain.Enums.AgentRole.LiveAgent"/>,
+    /// creating it if missing. Called on project creation, and again defensively before a chat
+    /// message is sent so projects created before this existed self-heal.
+    /// </summary>
+    Task EnsureLiveAgentAsync(Guid projectId, CancellationToken cancellationToken = default);
+
     Task<AgentDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<AgentDto>> ListAsync(Guid projectId, CancellationToken cancellationToken = default);

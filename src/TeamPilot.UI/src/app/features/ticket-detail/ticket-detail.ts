@@ -4,17 +4,10 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { distinctUntilChanged, interval, map, startWith, switchMap } from 'rxjs';
 import { TicketsService } from '../../core/services/tickets.service';
-import { AgentsService } from '../../core/services/agents.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { ProjectsService } from '../../core/services/projects.service';
 import { NotificationService } from '../../core/notification/notification.service';
-import {
-  AgentDto,
-  ProjectDto,
-  ReviewDecision,
-  SubmitReviewRequest,
-  TicketDetailDto,
-} from '../../core/models';
+import { ProjectDto, ReviewDecision, SubmitReviewRequest, TicketDetailDto } from '../../core/models';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
 import { DiffViewer } from '../../shared/components/diff-viewer/diff-viewer';
 import { BranchPanel } from './branch-panel/branch-panel';
@@ -32,7 +25,6 @@ const POLL_INTERVAL_MS = 10000;
 export class TicketDetail {
   private readonly route = inject(ActivatedRoute);
   private readonly ticketsService = inject(TicketsService);
-  private readonly agentsService = inject(AgentsService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly projectsService = inject(ProjectsService);
   private readonly notifications = inject(NotificationService);
@@ -40,10 +32,6 @@ export class TicketDetail {
   readonly ticket = signal<TicketDetailDto | null>(null);
   readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
-  readonly agents = signal<AgentDto[]>([]);
-  readonly agentsById = computed(() =>
-    Object.fromEntries(this.agents().map((a) => [a.id, a])) as Record<string, AgentDto>
-  );
   readonly reviewFormOpen = signal(false);
   readonly starting = signal(false);
 
@@ -68,16 +56,11 @@ export class TicketDetail {
           this.ticket.set(ticket);
           this.loading.set(false);
           if (isFirstLoad) {
-            this.loadAgents(ticket.projectId);
             this.loadProject(ticket.projectId);
           }
         },
         error: () => this.loading.set(false),
       });
-  }
-
-  agentName(agentId: string): string {
-    return this.agentsById()[agentId]?.name ?? agentId;
   }
 
   branchUrl(branchName: string): string | null {
@@ -87,6 +70,10 @@ export class TicketDetail {
   startPipeline(): void {
     const ticket = this.ticket();
     if (!ticket) {
+      return;
+    }
+    const action = ticket.status === 'ToDo' ? 'Start' : 'Run';
+    if (!confirm(`${action} the pipeline for "${ticket.title}"?`)) {
       return;
     }
     this.starting.set(true);
@@ -142,10 +129,6 @@ export class TicketDetail {
 
   private refresh(): void {
     this.ticketsService.getById(this.ticketId()).subscribe((ticket) => this.ticket.set(ticket));
-  }
-
-  private loadAgents(projectId: string): void {
-    this.agentsService.listForProject(projectId).subscribe((agents) => this.agents.set(agents));
   }
 
   private loadProject(projectId: string): void {

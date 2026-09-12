@@ -98,6 +98,43 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.ToTable("AuditLogEntries", (string)null);
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.ChatMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ProposedTicketDescription")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ProposedTicketTitle")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConversationId", "CreatedAtUtc");
+
+                    b.ToTable("ChatMessages", (string)null);
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.Commit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -193,6 +230,33 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.HasIndex("TicketId");
 
                     b.ToTable("Conflicts", (string)null);
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.Conversation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId");
+
+                    b.HasIndex("ProjectId")
+                        .IsUnique();
+
+                    b.ToTable("Conversations", (string)null);
                 });
 
             modelBuilder.Entity("TeamPilot.Domain.Entities.Instruction", b =>
@@ -602,6 +666,15 @@ namespace TeamPilot.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.ChatMessage", b =>
+                {
+                    b.HasOne("TeamPilot.Domain.Entities.Conversation", null)
+                        .WithMany("Messages")
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.Commit", b =>
                 {
                     b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
@@ -621,6 +694,21 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
                         .WithMany("Conflicts")
                         .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.Conversation", b =>
+                {
+                    b.HasOne("TeamPilot.Domain.Entities.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TeamPilot.Domain.Entities.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
@@ -708,6 +796,11 @@ namespace TeamPilot.Infrastructure.Migrations
             modelBuilder.Entity("TeamPilot.Domain.Entities.Agent", b =>
                 {
                     b.Navigation("Instructions");
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.Conversation", b =>
+                {
+                    b.Navigation("Messages");
                 });
 
             modelBuilder.Entity("TeamPilot.Domain.Entities.Ticket", b =>

@@ -23,6 +23,7 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
             WorkflowLockedException => (StatusCodes.Status409Conflict, "Pipeline is locked"),
             AgentInstructionsIncompleteException => (StatusCodes.Status409Conflict, "Agent instructions incomplete"),
             InvalidWorkflowOperationException => (StatusCodes.Status409Conflict, "Invalid pipeline operation"),
+            UnresolvedConflictsException => (StatusCodes.Status409Conflict, "Unresolved conflicts"),
             GitOperationException => (StatusCodes.Status422UnprocessableEntity, "Git operation failed"),
             DomainException => (StatusCodes.Status409Conflict, "Invalid operation for the current state"),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred"),

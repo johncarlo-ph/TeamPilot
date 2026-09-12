@@ -7,6 +7,7 @@ export interface ConflictDto {
   filePath: string;
   conflictingDiffContent: string;
   aiSuggestedResolution: string | null;
+  resolvedContent: string | null;
   resolutionNote: string | null;
   status: ConflictStatus;
   resolvedAtUtc: string | null;
@@ -15,7 +16,8 @@ export interface ConflictDto {
 }
 
 export interface ResolveConflictManuallyRequest {
-  note: string;
+  resolvedContent: string;
+  note: string | null;
   resolvedBy: string;
 }
 

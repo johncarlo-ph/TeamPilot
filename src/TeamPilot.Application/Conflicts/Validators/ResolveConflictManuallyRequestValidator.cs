@@ -7,7 +7,8 @@ public sealed class ResolveConflictManuallyRequestValidator : AbstractValidator<
 {
     public ResolveConflictManuallyRequestValidator()
     {
-        RuleFor(x => x.Note).NotEmpty().MaximumLength(4000);
+        RuleFor(x => x.ResolvedContent).NotEmpty();
+        RuleFor(x => x.Note).MaximumLength(4000);
         RuleFor(x => x.ResolvedBy).NotEmpty().MaximumLength(200);
     }
 }

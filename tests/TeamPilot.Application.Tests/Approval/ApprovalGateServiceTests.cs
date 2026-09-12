@@ -52,6 +52,14 @@ public class ApprovalGateServiceTests
             .ReturnsAsync((Guid projectId, Guid? ticketId, string reason, CancellationToken _) =>
                 new PipelineRunDto(Guid.NewGuid(), projectId, ticketId, PipelineRunStatus.Queued, reason, null, null, null, DateTime.UtcNow));
 
+        // Default happy path: the live merge attempt succeeds with nothing left unresolved.
+        // Tests exercising a failed merge (e.g. a conflict the live check still finds) override
+        // this per-test.
+        _gitService
+            .Setup(g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitMergeResolutionResult(true, Array.Empty<string>()));
+
         _sut = new ApprovalGateService(
             _ticketRepository.Object,
             _projectRepository.Object,
@@ -91,7 +99,13 @@ public class ApprovalGateServiceTests
             g => g.FetchAsync(_project.RepositoryPath, "plaintext-token", It.IsAny<CancellationToken>()),
             Times.Once);
         _gitService.Verify(
-            g => g.MergeBranchAsync(_project.RepositoryPath, "feature/add-feature", _project.BaseBranch, "Alice", It.IsAny<CancellationToken>()),
+            g => g.MergeWithResolutionsAsync(
+                _project.RepositoryPath,
+                "feature/add-feature",
+                _project.BaseBranch,
+                It.Is<IReadOnlyDictionary<string, string>>(d => d.Count == 0),
+                "Alice",
+                It.IsAny<CancellationToken>()),
             Times.Once);
         _gitService.Verify(
             g => g.PushAsync(_project.RepositoryPath, _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
@@ -118,7 +132,8 @@ public class ApprovalGateServiceTests
             g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/add-feature", _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
             Times.Once);
         _gitService.Verify(
-            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _orchestrationService.Verify(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -173,12 +188,81 @@ public class ApprovalGateServiceTests
         // before the (separately verified) pipeline re-run is triggered.
         Assert.Equal(TicketStatus.InProgress, result.Status);
         _gitService.Verify(
-            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _pipelineService.Verify(
             p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _orchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenApprovingWithUnresolvedConflict_ThrowsUnresolvedConflictsException()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        ticket.RaiseConflict(Conflict.Create(ticket.Id, "src/File.cs", "<<<<<<< diff"));
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+
+        await Assert.ThrowsAsync<UnresolvedConflictsException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+        _gitService.Verify(
+            g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenApprovingWithOnlyResolvedConflicts_MergesWithTheirResolvedContentAndCompletesTicket()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        var conflict = Conflict.Create(ticket.Id, "src/File.cs", "<<<<<<< diff");
+        conflict.ResolveManually("final merged content", "Kept both changes", "Alice");
+        ticket.RaiseConflict(conflict);
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+
+        var result = await _sut.SubmitReviewAsync(ticket.Id, request);
+
+        Assert.Equal(TicketStatus.Done, result.Status);
+        _gitService.Verify(
+            g => g.MergeWithResolutionsAsync(
+                _project.RepositoryPath,
+                "feature/add-feature",
+                _project.BaseBranch,
+                It.Is<IReadOnlyDictionary<string, string>>(d => d.Count == 1 && d["src/File.cs"] == "final merged content"),
+                "Alice",
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SubmitReviewAsync_WhenLiveMergeStillFindsAnUnresolvedConflict_ThrowsUnresolvedConflictsExceptionAndDoesNotApprove()
+    {
+        // Every Conflict record on the ticket says resolved, but the live merge attempt (e.g.
+        // because the base branch moved further since it was last checked) still reports a file
+        // with no matching resolution - the real, authoritative check, not the ticket's own
+        // possibly-stale records.
+        var ticket = CreateTicketInReview("feature/add-feature");
+        var conflict = Conflict.Create(ticket.Id, "src/File.cs", "<<<<<<< diff");
+        conflict.ResolveManually("final merged content", "Kept both changes", "Alice");
+        ticket.RaiseConflict(conflict);
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        _gitService
+            .Setup(g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitMergeResolutionResult(false, ["src/OtherFile.cs"]));
+
+        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+
+        var exception = await Assert.ThrowsAsync<UnresolvedConflictsException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+        Assert.Equal(["src/OtherFile.cs"], exception.FilePaths);
+        _pipelineService.Verify(
+            p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -208,7 +292,8 @@ public class ApprovalGateServiceTests
 
         await Assert.ThrowsAsync<ForbiddenException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         _gitService.Verify(
-            g => g.MergeBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.MergeWithResolutionsAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

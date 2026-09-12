@@ -94,7 +94,7 @@ those single-shot callers.
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
 `Project` owns its own sandbox clone, the service holds no per-project state; every method
 (`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
-`CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeBranchAsync`,
+`CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeWithResolutionsAsync`,
 `DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`) opens and disposes its own
 `LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
 repository rather than opening an existing one).
@@ -113,6 +113,25 @@ a guarantee against leaking a secret shaped differently than these patterns — 
 depth, not a substitute for keeping real secrets out of a project's repository. `ListFilesAsync`
 returns a shallow (non-recursive), capped-at-200-entries listing of one directory, so the model
 only sees what it explicitly asked for rather than an implicit full tree.
+
+**`MergeWithResolutionsAsync` finishes a conflicted merge as a real two-parent commit by resuming
+LibGit2Sharp's own merge-in-progress state, not by re-merging after the fact.** It runs the same
+trial merge `DetectMergeConflictsAsync` does (`repo.Merge(..., CommitOnSuccess: false,
+FailOnConflict: false)`), which updates the working tree/index and leaves `MERGE_HEAD` set but
+doesn't reset anything. For each `repo.Index.Conflicts` entry it finds, it looks up that file's
+path in the caller-supplied `resolutions` map; a hit gets written to disk and `Commands.Stage`d
+(clearing that index conflict), a miss gets collected as an unresolved path. Once every
+conflicting file is covered, `repo.Commit(...)` is called directly - LibGit2Sharp sees the
+still-set `MERGE_HEAD` and records it as a second parent automatically, exactly like completing a
+conflicted `git merge` by hand (edit the file, `git add`, `git commit`). If anything is left
+unresolved, the attempt is aborted (`repo.Reset(ResetMode.Hard, target.Tip)`, same as
+`DetectMergeConflictsAsync`'s cleanup) rather than left mid-merge, since every ticket in a project
+shares that project's one sandbox clone and a real other ticket's pipeline stage could touch it
+next. `MergeStatus.UpToDate`/`FastForward` short-circuit with nothing to commit (there's no merge
+state to finish), and a clean `NonFastForward` merge just needs the one explicit commit call since
+`CommitOnSuccess: false` only skips the auto-commit, not the merge itself. See
+[docs/application.md](application.md) for how `ApprovalGateService.ApproveAsync` builds the
+`resolutions` map from the ticket's `Conflict` records.
 
 **`DeleteBranchAsync` pushes an empty source ref (`:refs/heads/{branchName}`) to delete the
 remote branch** — the standard Git protocol convention, supported directly by LibGit2Sharp's
@@ -250,6 +269,10 @@ operations (`CloneAsync`/`PushAsync`/`FetchAsync`/`DeleteBranchAsync`'s remote d
 `LibGit2SharpException` as `GitOperationException` (→ 422) — local-only Git operations
 (commit/diff/detect-conflicts/merge) still let `LibGit2SharpException`/`InvalidOperationException`
 bubble to 500/409, since those failures point at a server-side bug rather than bad user input.
+`MergeWithResolutionsAsync` finding conflicting files it can't resolve is not one of these cases -
+that's an expected, common outcome it reports back via its return value (`GitMergeResolutionResult`),
+not an exception; `ApprovalGateService` is the one that turns that into a client-facing
+`UnresolvedConflictsException` (→ 409).
 An unhandled Claude API failure (e.g. `HttpRequestException`, or an `HttpRequestException`/
 `TimeoutRejectedException` surfaced after the resilience pipeline below exhausts its retries)
 still bubbles to `GlobalExceptionHandler` and maps to 500.

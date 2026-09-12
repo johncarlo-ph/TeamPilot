@@ -1,3 +1,3 @@
 namespace TeamPilot.Application.Conflicts.Dtos;
 
-public sealed record ResolveConflictManuallyRequest(string Note, string ResolvedBy);
+public sealed record ResolveConflictManuallyRequest(string ResolvedContent, string? Note, string ResolvedBy);

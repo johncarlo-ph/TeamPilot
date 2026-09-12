@@ -18,12 +18,26 @@ public class Conflict : Entity
 
     public string ConflictingDiffContent { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// The complete, resolved file content the LLM proposed - not a prose description - shown to
+    /// a human to review before accepting. Only copied into <see cref="ResolvedContent"/> (the
+    /// content actually used) once accepted via <see cref="AcceptAiSuggestion"/>.
+    /// </summary>
     public string? AiSuggestedResolution { get; private set; }
 
     /// <summary>
-    /// The resolution actually applied - either the human's manual note, or a copy of the
-    /// AI suggestion once accepted. Distinct from <see cref="AiSuggestedResolution"/>, which
-    /// always reflects what the AI proposed even if a human resolved it differently.
+    /// The complete file content to write at <see cref="FilePath"/> once this conflict's
+    /// resolution is applied - either what a human typed in directly (<see cref="ResolveManually"/>)
+    /// or a copy of <see cref="AiSuggestedResolution"/> once accepted. This is what
+    /// <c>TeamPilot.Application.Approval.ApprovalGateService.ApproveAsync</c> reads to complete
+    /// the real merge - see docs/application.md.
+    /// </summary>
+    public string? ResolvedContent { get; private set; }
+
+    /// <summary>
+    /// An optional short human-readable note about a manual resolution (e.g. "kept both changes")
+    /// - informational only, never what gets written to the file. Not set for an AI-accepted
+    /// resolution, since the status itself already says what happened.
     /// </summary>
     public string? ResolutionNote { get; private set; }
 
@@ -73,8 +87,13 @@ public class Conflict : Entity
         MarkUpdated();
     }
 
-    public void ResolveManually(string note, string resolvedBy)
+    public void ResolveManually(string resolvedContent, string? note, string resolvedBy)
     {
+        if (string.IsNullOrWhiteSpace(resolvedContent))
+        {
+            throw new ArgumentException("Resolved content is required.", nameof(resolvedContent));
+        }
+
         if (string.IsNullOrWhiteSpace(resolvedBy))
         {
             throw new ArgumentException("Resolved by is required.", nameof(resolvedBy));
@@ -82,7 +101,8 @@ public class Conflict : Entity
 
         EnsureNotAlreadyResolved("resolve manually");
 
-        ResolutionNote = note;
+        ResolvedContent = resolvedContent;
+        ResolutionNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
         Status = ConflictStatus.ResolvedManually;
         ResolvedBy = resolvedBy.Trim();
         ResolvedAtUtc = DateTime.UtcNow;
@@ -103,7 +123,7 @@ public class Conflict : Entity
 
         EnsureNotAlreadyResolved("accept the AI suggestion");
 
-        ResolutionNote = AiSuggestedResolution;
+        ResolvedContent = AiSuggestedResolution;
         Status = ConflictStatus.ResolvedWithAiSuggestion;
         ResolvedBy = resolvedBy.Trim();
         ResolvedAtUtc = DateTime.UtcNow;

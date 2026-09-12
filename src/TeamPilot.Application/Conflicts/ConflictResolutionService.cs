@@ -25,8 +25,6 @@ public sealed class ConflictResolutionService(
     IValidator<ResolveConflictManuallyRequest> resolveManuallyValidator,
     IValidator<AcceptAiSuggestionRequest> acceptAiSuggestionValidator) : IConflictResolutionService
 {
-    private const string DefaultTargetBranch = "main";
-
     public async Task<IReadOnlyList<ConflictDto>> DetectConflictsAsync(Guid ticketId, CancellationToken cancellationToken = default)
     {
         var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
@@ -42,7 +40,7 @@ public sealed class ConflictResolutionService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        var mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, DefaultTargetBranch, cancellationToken);
+        var mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, project.BaseBranch, cancellationToken);
 
         var conflicts = mergeCheck.ConflictingFiles
             .Select(file => Conflict.Create(ticket.Id, file.FilePath, file.ConflictContent))
@@ -66,7 +64,17 @@ public sealed class ConflictResolutionService(
     {
         var conflict = await GetConflictWithAccessAsync(conflictId, cancellationToken);
 
-        var prompt = $"Suggest a resolution for the following merge conflict in file '{conflict.FilePath}':\n{conflict.ConflictingDiffContent}";
+        // ConflictingDiffContent is the whole file as it sits on disk mid-trial-merge, inline
+        // conflict markers included - so the model has everything it needs (both sides' content)
+        // to produce a complete replacement file, not just a prose description. This is required
+        // for AcceptAiSuggestionAsync to be able to commit the result as-is.
+        var prompt =
+            $"The file '{conflict.FilePath}' has an unresolved Git merge conflict, shown below with " +
+            "its inline conflict markers (<<<<<<<, =======, >>>>>>>). Resolve it and respond with " +
+            "ONLY the complete, final content the file should have once resolved - no conflict " +
+            "markers, no explanation, no markdown code fences, just the raw file content exactly as " +
+            $"it should be written to disk:\n\n{conflict.ConflictingDiffContent}";
+
         var llmResponse = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
 
         conflict.RecordAiSuggestion(llmResponse.Content);
@@ -83,7 +91,7 @@ public sealed class ConflictResolutionService(
 
         var conflict = await GetConflictWithAccessAsync(conflictId, cancellationToken);
 
-        conflict.ResolveManually(request.Note, request.ResolvedBy);
+        conflict.ResolveManually(request.ResolvedContent, request.Note, request.ResolvedBy);
 
         await auditLogger.LogActionAsync(AuditEventType.ConflictResolvedManually, $"Conflict in '{conflict.FilePath}' resolved manually by {request.ResolvedBy}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -97,6 +105,11 @@ public sealed class ConflictResolutionService(
 
         var conflict = await GetConflictWithAccessAsync(conflictId, cancellationToken);
 
+        // Only records that this resolution is accepted (Conflict.ResolvedContent) - nothing is
+        // written to Git here. ApprovalGateService.ApproveAsync is the one place that actually
+        // applies every accepted resolution, as part of completing the real merge - see
+        // docs/application.md for why deferring the write to that single, atomic step is what
+        // makes this a real merge commit instead of a best-effort guess.
         conflict.AcceptAiSuggestion(request.ResolvedBy);
 
         await auditLogger.LogActionAsync(AuditEventType.ConflictAiSuggestionAccepted, $"AI suggestion accepted for conflict in '{conflict.FilePath}' by {request.ResolvedBy}.", cancellationToken);
@@ -136,6 +149,7 @@ public sealed class ConflictResolutionService(
         conflict.FilePath,
         conflict.ConflictingDiffContent,
         conflict.AiSuggestedResolution,
+        conflict.ResolvedContent,
         conflict.ResolutionNote,
         conflict.Status,
         conflict.ResolvedAtUtc,

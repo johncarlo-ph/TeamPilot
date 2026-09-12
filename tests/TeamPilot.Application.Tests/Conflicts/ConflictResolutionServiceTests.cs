@@ -25,7 +25,7 @@ public class ConflictResolutionServiceTests
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ConflictResolutionService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
     public ConflictResolutionServiceTests()
     {
@@ -57,8 +57,11 @@ public class ConflictResolutionServiceTests
         var ticket = CreateTicket();
         ticket.LinkBranch("feature/build-feature");
 
+        // Checks against the project's own configured base branch ("develop" here), not a
+        // hardcoded "main" - a project whose base branch isn't literally "main" would otherwise
+        // have every conflict check run against the wrong (or a nonexistent) branch.
         _gitService
-            .Setup(g => g.DetectMergeConflictsAsync(_project.RepositoryPath, "feature/build-feature", "main", It.IsAny<CancellationToken>()))
+            .Setup(g => g.DetectMergeConflictsAsync(_project.RepositoryPath, "feature/build-feature", _project.BaseBranch, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitMergeConflictResult(true, [new GitConflictingFile("src/App.cs", "<<<<<<<")]));
 
         var result = await _sut.DetectConflictsAsync(ticket.Id);
@@ -95,15 +98,41 @@ public class ConflictResolutionServiceTests
     }
 
     [Fact]
-    public async Task ResolveManuallyAsync_WhenConflictIsDetected_SetsStatusToResolvedManually()
+    public async Task AcceptAiSuggestionAsync_WhenSuggestionExists_RecordsResolvedContentWithoutTouchingGit()
+    {
+        var ticket = CreateTicket();
+        var conflict = Conflict.Create(ticket.Id, "src/App.cs", "<<<<<<< conflict >>>>>>>");
+        conflict.RecordAiSuggestion("resolved file content");
+        _conflictRepository.Setup(r => r.GetByIdAsync(conflict.Id, It.IsAny<CancellationToken>())).ReturnsAsync(conflict);
+
+        var result = await _sut.AcceptAiSuggestionAsync(conflict.Id, new AcceptAiSuggestionRequest("Alice"));
+
+        Assert.Equal(ConflictStatus.ResolvedWithAiSuggestion, result.Status);
+        Assert.Equal("resolved file content", result.ResolvedContent);
+        _gitService.Verify(
+            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _gitService.Verify(
+            g => g.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ResolveManuallyAsync_WhenConflictIsDetected_SetsResolvedContentAndNoteWithoutTouchingGit()
     {
         var ticket = CreateTicket();
         var conflict = Conflict.Create(ticket.Id, "src/App.cs", "<<<<<<< conflict >>>>>>>");
         _conflictRepository.Setup(r => r.GetByIdAsync(conflict.Id, It.IsAny<CancellationToken>())).ReturnsAsync(conflict);
 
-        var result = await _sut.ResolveManuallyAsync(conflict.Id, new ResolveConflictManuallyRequest("Kept ours", "Alice"));
+        var result = await _sut.ResolveManuallyAsync(
+            conflict.Id,
+            new ResolveConflictManuallyRequest("final merged content", "Kept both changes", "Alice"));
 
         Assert.Equal(ConflictStatus.ResolvedManually, result.Status);
-        Assert.Equal("Kept ours", result.ResolutionNote);
+        Assert.Equal("final merged content", result.ResolvedContent);
+        Assert.Equal("Kept both changes", result.ResolutionNote);
+        _gitService.Verify(
+            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

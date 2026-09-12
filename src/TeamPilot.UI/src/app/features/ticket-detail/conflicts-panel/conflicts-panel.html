@@ -26,25 +26,31 @@
             class="d-block mb-2"
           ></app-diff-viewer>
 
-          @if (conflict.aiSuggestedResolution) {
-            <p class="small fw-semibold mb-1 mt-2">AI-suggested resolution</p>
-            <app-diff-viewer
-              [content]="conflict.aiSuggestedResolution"
-              class="d-block mb-2"
-            ></app-diff-viewer>
-          }
-
           @if (
             conflict.status === 'ResolvedManually' || conflict.status === 'ResolvedWithAiSuggestion'
           ) {
+            <p class="small fw-semibold mb-1 mt-2">Resolved file content</p>
+            <app-diff-viewer
+              [content]="conflict.resolvedContent"
+              class="d-block mb-2"
+            ></app-diff-viewer>
             <p class="small text-body-secondary mb-0">
               Resolved by {{ conflict.resolvedBy }} on {{ conflict.resolvedAtUtc | date: 'short' }}
               @if (conflict.resolutionNote) {
                 &mdash; {{ conflict.resolutionNote }}
               }
+              &mdash; will be applied when this ticket is approved and merged.
             </p>
           } @else {
-            <div class="d-flex flex-wrap gap-2 mt-2">
+            @if (conflict.aiSuggestedResolution) {
+              <p class="small fw-semibold mb-1 mt-2">AI-suggested resolved file content</p>
+              <app-diff-viewer
+                [content]="conflict.aiSuggestedResolution"
+                class="d-block mb-2"
+              ></app-diff-viewer>
+            }
+
+            <div class="d-flex flex-wrap gap-2 mb-2">
               @if (conflict.status === 'Detected') {
                 <button
                   type="button"
@@ -63,23 +69,38 @@
                   Accept AI Suggestion
                 </button>
               }
-              <div class="input-group input-group-sm" style="max-width: 22rem">
-                <input
-                  type="text"
-                  class="form-control"
-                  placeholder="Resolution note"
-                  [ngModel]="noteFor(conflict.id)"
-                  (ngModelChange)="setNote(conflict.id, $event)"
-                />
-                <button
-                  type="button"
-                  class="btn btn-outline-secondary"
-                  (click)="resolveManually(conflict)"
-                >
-                  Resolve Manually
-                </button>
-              </div>
             </div>
+
+            <label class="form-label small fw-semibold mb-1">
+              Or resolve manually - edit down to the final file content
+            </label>
+            <textarea
+              class="form-control form-control-sm font-monospace mb-2"
+              rows="8"
+              [ngModel]="contentFor(conflict)"
+              (ngModelChange)="setContent(conflict.id, $event)"
+            ></textarea>
+            <div class="d-flex flex-wrap gap-2">
+              <input
+                type="text"
+                class="form-control form-control-sm"
+                style="max-width: 16rem"
+                placeholder="Note (optional)"
+                [ngModel]="noteFor(conflict.id)"
+                (ngModelChange)="setNote(conflict.id, $event)"
+              />
+              <button
+                type="button"
+                class="btn btn-sm btn-outline-secondary"
+                (click)="resolveManually(conflict)"
+              >
+                Resolve Manually
+              </button>
+            </div>
+            <p class="small text-body-secondary mt-2 mb-0">
+              Neither option touches Git yet - the accepted or resolved content is applied when
+              this ticket is approved and merged.
+            </p>
           }
         </div>
       }

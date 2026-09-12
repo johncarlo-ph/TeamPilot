@@ -14,6 +14,7 @@ public class ConflictConfiguration : IEntityTypeConfiguration<Conflict>
         builder.Property(c => c.FilePath).IsRequired().HasMaxLength(1000);
         builder.Property(c => c.ConflictingDiffContent).HasColumnType("nvarchar(max)");
         builder.Property(c => c.AiSuggestedResolution).HasColumnType("nvarchar(max)");
+        builder.Property(c => c.ResolvedContent).HasColumnType("nvarchar(max)");
         builder.Property(c => c.ResolutionNote).HasColumnType("nvarchar(max)");
         builder.Property(c => c.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
         builder.Property(c => c.ResolvedBy).HasMaxLength(200);

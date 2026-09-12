@@ -9,6 +9,7 @@ public sealed record ConflictDto(
     string FilePath,
     string ConflictingDiffContent,
     string? AiSuggestedResolution,
+    string? ResolvedContent,
     string? ResolutionNote,
     ConflictStatus Status,
     DateTime? ResolvedAtUtc,

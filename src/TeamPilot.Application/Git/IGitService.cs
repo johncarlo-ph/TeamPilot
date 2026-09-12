@@ -42,7 +42,23 @@ public interface IGitService
 
     Task<GitMergeConflictResult> DetectMergeConflictsAsync(string repositoryPath, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
 
-    Task MergeBranchAsync(string repositoryPath, string sourceBranch, string targetBranch, string mergerName, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Merges <paramref name="sourceBranch"/> into <paramref name="targetBranch"/> and commits the
+    /// result - a real two-parent merge commit when the merge isn't a fast-forward. If Git reports
+    /// conflicts, <paramref name="resolutions"/> (file path -&gt; the complete content that file
+    /// should have) is applied to whichever conflicting files it covers; any conflicting file
+    /// <paramref name="resolutions"/> doesn't cover means the merge can't complete - the attempt is
+    /// aborted (nothing is committed or left in a mid-merge state) and the returned result lists
+    /// exactly which files are still unresolved. This is a live check against the real merge, not
+    /// a trust of whatever the caller already believes is resolved - see docs/application.md.
+    /// </summary>
+    Task<GitMergeResolutionResult> MergeWithResolutionsAsync(
+        string repositoryPath,
+        string sourceBranch,
+        string targetBranch,
+        IReadOnlyDictionary<string, string> resolutions,
+        string mergerName,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Deletes <paramref name="branchName"/> from both the remote and the local
     /// sandbox. <paramref name="baseBranchName"/> is checked out first if the sandbox's HEAD
@@ -77,6 +93,11 @@ public sealed record GitDiffResult(string SourceBranch, string TargetBranch, IRe
 public sealed record GitConflictingFile(string FilePath, string ConflictContent);
 
 public sealed record GitMergeConflictResult(bool HasConflicts, IReadOnlyList<GitConflictingFile> ConflictingFiles);
+
+/// <summary><paramref name="UnresolvedFilePaths"/> is empty whenever <paramref name="Success"/>
+/// is <see langword="true"/> - it's only populated to name which conflicting files had no
+/// resolution available when <paramref name="Success"/> is <see langword="false"/>.</summary>
+public sealed record GitMergeResolutionResult(bool Success, IReadOnlyList<string> UnresolvedFilePaths);
 
 /// <summary><paramref name="Truncated"/> is <see langword="true"/> when <paramref name="Content"/>
 /// was cut short of the file's actual length to bound how much text reaches an LLM prompt.</summary>

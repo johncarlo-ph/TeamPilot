@@ -35,15 +35,28 @@ public class ConflictTests
         conflict.AcceptAiSuggestion("Alice");
 
         Assert.Equal(ConflictStatus.ResolvedWithAiSuggestion, conflict.Status);
-        Assert.Equal("Use theirs", conflict.ResolutionNote);
+        Assert.Equal("Use theirs", conflict.ResolvedContent);
+        Assert.Null(conflict.ResolutionNote);
+    }
+
+    [Fact]
+    public void ResolveManually_WithContentAndNote_SetsResolvedContentAndNote()
+    {
+        var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<");
+
+        conflict.ResolveManually("final merged content", "Kept both changes", "Alice");
+
+        Assert.Equal(ConflictStatus.ResolvedManually, conflict.Status);
+        Assert.Equal("final merged content", conflict.ResolvedContent);
+        Assert.Equal("Kept both changes", conflict.ResolutionNote);
     }
 
     [Fact]
     public void ResolveManually_WhenAlreadyResolved_ThrowsInvalidConflictStateTransitionException()
     {
         var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<");
-        conflict.ResolveManually("Kept ours", "Alice");
+        conflict.ResolveManually("Kept ours", null, "Alice");
 
-        Assert.Throws<InvalidConflictStateTransitionException>(() => conflict.ResolveManually("Kept theirs", "Bob"));
+        Assert.Throws<InvalidConflictStateTransitionException>(() => conflict.ResolveManually("Kept theirs", null, "Bob"));
     }
 }

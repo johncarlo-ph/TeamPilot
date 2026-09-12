@@ -23,6 +23,7 @@ export class ConflictsPanel {
   readonly changed = output<void>();
 
   readonly resolvingNoteByConflictId = signal<Record<string, string>>({});
+  readonly resolvingContentByConflictId = signal<Record<string, string>>({});
   readonly detecting = signal(false);
 
   get resolvedByName(): string {
@@ -35,6 +36,16 @@ export class ConflictsPanel {
 
   setNote(conflictId: string, value: string): void {
     this.resolvingNoteByConflictId.update((notes) => ({ ...notes, [conflictId]: value }));
+  }
+
+  // Defaults to the raw conflicting content so the user edits down to a final version (removing
+  // the <<<<<<< markers) rather than typing a whole file from scratch.
+  contentFor(conflict: ConflictDto): string {
+    return this.resolvingContentByConflictId()[conflict.id] ?? conflict.conflictingDiffContent;
+  }
+
+  setContent(conflictId: string, value: string): void {
+    this.resolvingContentByConflictId.update((values) => ({ ...values, [conflictId]: value }));
   }
 
   detectConflicts(): void {
@@ -66,13 +77,14 @@ export class ConflictsPanel {
   }
 
   resolveManually(conflict: ConflictDto): void {
-    const note = this.noteFor(conflict.id).trim();
-    if (!note) {
-      this.notifications.error('Add a resolution note first.');
+    const resolvedContent = this.contentFor(conflict).trim();
+    if (!resolvedContent) {
+      this.notifications.error('Enter the resolved file content first.');
       return;
     }
+    const note = this.noteFor(conflict.id).trim() || null;
     this.conflictsService
-      .resolveManually(conflict.id, { note, resolvedBy: this.resolvedByName })
+      .resolveManually(conflict.id, { resolvedContent, note, resolvedBy: this.resolvedByName })
       .subscribe({
         next: () => {
           this.notifications.success('Conflict resolved.');

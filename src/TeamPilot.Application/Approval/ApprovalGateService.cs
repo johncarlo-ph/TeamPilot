@@ -125,6 +125,23 @@ public sealed class ApprovalGateService(
             throw new InvalidOperationException("Ticket has no linked branch to merge.");
         }
 
+        // Fast, cheap pre-check against what we already know: an early, clear error instead of
+        // fetching/attempting a merge that the live check below would reject anyway.
+        var unresolvedFilePaths = ticket.Conflicts
+            .Where(c => c.Status is ConflictStatus.Detected or ConflictStatus.AiResolutionSuggested)
+            .Select(c => c.FilePath)
+            .ToList();
+        if (unresolvedFilePaths.Count > 0)
+        {
+            throw new UnresolvedConflictsException(unresolvedFilePaths);
+        }
+
+        // Every resolved conflict's content, ready to hand to the real merge attempt below - see
+        // IGitService.MergeWithResolutionsAsync.
+        var resolutions = ticket.Conflicts
+            .Where(c => c.Status is ConflictStatus.ResolvedManually or ConflictStatus.ResolvedWithAiSuggestion)
+            .ToDictionary(c => c.FilePath, c => c.ResolvedContent!);
+
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
@@ -139,7 +156,16 @@ public sealed class ApprovalGateService(
         await unitOfWork.ExecuteInTransactionAsync(
             async () =>
             {
-                await gitService.MergeBranchAsync(project.RepositoryPath, branchName, targetBranch, reviewerName, cancellationToken);
+                // The live, authoritative check: even if every known Conflict record says
+                // resolved, the base branch may have moved further since it was last checked, so
+                // this can still find (and reject on) a file with no resolution available - see
+                // IGitService.MergeWithResolutionsAsync.
+                var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
+                if (!mergeResult.Success)
+                {
+                    throw new UnresolvedConflictsException(mergeResult.UnresolvedFilePaths);
+                }
+
                 ticket.Approve();
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             },

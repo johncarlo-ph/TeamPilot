@@ -218,7 +218,23 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
             },
             cancellationToken);
 
-    public Task MergeBranchAsync(string repositoryPath, string sourceBranch, string targetBranch, string mergerName, CancellationToken cancellationToken = default) =>
+    /// <summary>
+    /// Merges <paramref name="sourceBranch"/> into <paramref name="targetBranch"/> as a real
+    /// two-parent merge commit, applying <paramref name="resolutions"/> to any conflicting file it
+    /// covers. Mirrors <see cref="DetectMergeConflictsAsync"/>'s trial-merge mechanics (same
+    /// <c>CommitOnSuccess: false</c> merge, same conflict enumeration) but, instead of always
+    /// resetting, resolves what it can and finishes the merge with an explicit
+    /// <c>repo.Commit(...)</c> - LibGit2Sharp picks up the merge-in-progress state
+    /// (<c>repo.Merge</c> leaves it in place until something commits or resets it) and records the
+    /// second parent automatically, exactly like completing a conflicted <c>git merge</c> by hand.
+    /// </summary>
+    public Task<GitMergeResolutionResult> MergeWithResolutionsAsync(
+        string repositoryPath,
+        string sourceBranch,
+        string targetBranch,
+        IReadOnlyDictionary<string, string> resolutions,
+        string mergerName,
+        CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
             {
@@ -229,14 +245,51 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 Commands.Checkout(repo, target);
 
                 var merger = new Signature(mergerName, _options.DefaultAuthorEmail, DateTimeOffset.UtcNow);
-                var mergeResult = repo.Merge(source.Tip, merger, new MergeOptions { CommitOnSuccess = true });
+                var mergeOptions = new MergeOptions { CommitOnSuccess = false, FailOnConflict = false };
+                var mergeResult = repo.Merge(source.Tip, merger, mergeOptions);
+                var message = $"Merge branch '{sourceBranch}' into '{targetBranch}'";
 
-                if (mergeResult.Status == MergeStatus.Conflicts)
+                if (mergeResult.Status is MergeStatus.UpToDate or MergeStatus.FastForward)
                 {
-                    repo.Reset(ResetMode.Hard, target.Tip);
-                    throw new InvalidOperationException(
-                        $"Merging '{sourceBranch}' into '{targetBranch}' resulted in conflicts. Resolve conflicts before approving.");
+                    // Nothing left to commit - UpToDate means there was nothing to merge, and a
+                    // fast-forward already moved the branch ref without needing a merge commit.
+                    return new GitMergeResolutionResult(true, Array.Empty<string>());
                 }
+
+                if (mergeResult.Status != MergeStatus.Conflicts)
+                {
+                    // NonFastForward, no conflicts: the index already reflects a clean merge
+                    // (CommitOnSuccess: false just means it's waiting to be committed).
+                    repo.Commit(message, merger, merger);
+                    return new GitMergeResolutionResult(true, Array.Empty<string>());
+                }
+
+                var unresolvedFilePaths = new List<string>();
+                foreach (var conflict in repo.Index.Conflicts.ToList())
+                {
+                    var path = conflict.Ours?.Path ?? conflict.Theirs?.Path ?? conflict.Ancestor?.Path ?? "unknown";
+                    if (resolutions.TryGetValue(path, out var resolvedContent))
+                    {
+                        var fullPath = Path.Combine(repo.Info.WorkingDirectory, path);
+                        File.WriteAllText(fullPath, resolvedContent);
+                        Commands.Stage(repo, path);
+                    }
+                    else
+                    {
+                        unresolvedFilePaths.Add(path);
+                    }
+                }
+
+                if (unresolvedFilePaths.Count > 0)
+                {
+                    // Don't leave the shared sandbox mid-merge for another ticket's pipeline stage
+                    // to trip over - abort exactly like DetectMergeConflictsAsync does.
+                    repo.Reset(ResetMode.Hard, target.Tip);
+                    return new GitMergeResolutionResult(false, unresolvedFilePaths);
+                }
+
+                repo.Commit(message, merger, merger);
+                return new GitMergeResolutionResult(true, Array.Empty<string>());
             },
             cancellationToken);
 

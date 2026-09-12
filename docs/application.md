@@ -125,6 +125,49 @@ explicitly not implemented or (like this one) requires its own explicit confirma
 ticket isn't `Cancelled`, `UnlinkBranch()` throws before `IGitService.DeleteBranchAsync` is ever
 invoked, so a rejected request never touches the remote.
 
+**Merge-conflict detection always checks against `Project.BaseBranch`, never a hardcoded branch
+name.** `ConflictResolutionService.DetectConflictsAsync` passes `project.BaseBranch` as the
+target branch to `IGitService.DetectMergeConflictsAsync` - the same branch every ticket branch is
+actually cut from and merged back into (see above), so a project configured with `master`,
+`develop`, or anything other than `main` still gets a correct conflict check.
+
+**Resolving a conflict (either path) only ever records the content to use - nothing is written to
+Git until Approve.** `SuggestResolutionAsync` sends the model the whole conflicted file with its
+inline `<<<<<<<`/`=======`/`>>>>>>>` markers still in place (that's what
+`IGitService.DetectMergeConflictsAsync` captured) and asks for the complete replacement file
+content back, not a prose description, so it's directly usable. `AcceptAiSuggestionAsync` copies
+that into `Conflict.ResolvedContent`; `ResolveManuallyAsync` takes the same shape of content
+directly from the caller (`ResolveConflictManuallyRequest.ResolvedContent`, with an optional short
+`Note` kept separately for context) - the UI seeds its editable text area with the conflicting
+file's raw content so the user edits down to a final version rather than typing a whole file from
+scratch. Neither path touches `IGitService` at all.
+
+**`ApprovalGateService.ApproveAsync` applies every accepted resolution as part of completing a
+real, two-parent merge commit - not a best-effort guess.** Two checks guard this, in order:
+1. A fast, cheap pre-check against the ticket's own `Conflict` records: any conflict still
+   `Detected`/`AiResolutionSuggested` fails immediately with `UnresolvedConflictsException` (409),
+   before touching Git at all.
+2. The real, authoritative check: `ApproveAsync` builds a `{FilePath: ResolvedContent}` map from
+   every conflict that *is* resolved and hands it to
+   `IGitService.MergeWithResolutionsAsync(repositoryPath, sourceBranch, targetBranch, resolutions,
+   mergerName, ct)`. That method performs the same trial merge `DetectMergeConflictsAsync` does
+   (`CommitOnSuccess: false`, so the merge-in-progress state isn't cleared), and for each file it
+   still finds conflicting, writes that file's entry in `resolutions` into the working tree and
+   stages it. If it finds a
+   conflicting file `resolutions` doesn't cover - e.g. a genuinely new conflict because the base
+   branch moved further since the ticket's `Conflict` records were last checked - it aborts (hard
+   reset, matching `DetectMergeConflictsAsync`) and returns the unresolved paths instead of
+   guessing; `ApproveAsync` turns that into a second `UnresolvedConflictsException` naming exactly
+   those files. Once every conflicting file is covered, it calls `repo.Commit(...)` directly:
+   LibGit2Sharp sees the merge-in-progress state left by the earlier `repo.Merge()` call and
+   records a real second parent automatically - the same mechanism as finishing a conflicted
+   `git merge` by hand (edit, `git add`, `git commit`). This is why the whole thing has to happen
+   in one atomic call rather than across the separate Suggest/Accept/ResolveManually requests: a
+   real in-progress merge can't be left open between requests without colliding with another
+   ticket's pipeline stage touching the same project's one shared sandbox clone, but a single
+   `ApproveAsync` call opens, resolves, and finishes (or aborts) it before returning - the same
+   pattern every other `IGitService` operation here already follows.
+
 **The agent workflow is admin-configurable per project, with Research → Design → Coding → Testing
 as the default a new project starts with.** `WorkflowService` owns a project's ordered
 `WorkflowStage` sequence (each a thin, id-only reference to an `Agent` and a position, following
@@ -409,6 +452,7 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.WorkflowLockedException` | A structural pipeline change was attempted while the project has an `InProgress` ticket | `WorkflowService` |
 | `Common.Exceptions.AgentInstructionsIncompleteException` | An agent without a current Constitution/Guideline/Requirement instruction was placed into a workflow | `WorkflowService.AddExistingAgentAsync` |
 | `Common.Exceptions.InvalidWorkflowOperationException` | A workflow change is invalid given the rest of the project's stage sequence (removing a loop-back target, reordering past one, a malformed reorder request) | `WorkflowService` |
+| `Common.Exceptions.UnresolvedConflictsException` | Approving a ticket while a conflict is still unresolved by its own status, or the live merge attempt finds a conflicting file with no resolution available | `ApprovalGateService.ApproveAsync` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |
 
 None of these are caught within Application — they propagate to the API's
@@ -437,3 +481,11 @@ None of these are caught within Application — they propagate to the API's
   field rather than derived from `ICurrentUserContext` — the Approve role gate itself doesn't
   depend on it, but tightening this would improve audit-trail integrity (a user could type any
   name into the field today).
+- **Staleness of a prepared resolution:** neither `ResolveManuallyAsync` nor
+  `AcceptAiSuggestionAsync` records what the base branch looked like at the time, so a resolution
+  prepared against one version of the conflicting hunk is applied as-is even if the base branch
+  has since moved again in that same region - `MergeWithResolutionsAsync`'s live check only
+  catches an entirely *new* conflicting file, not a stale resolution for a file it already
+  believes is covered. Recording (and checking) the base branch's tip at resolution time would
+  close this, at the cost of occasionally asking a reviewer to re-resolve something they already
+  handled.

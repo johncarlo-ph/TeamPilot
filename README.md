@@ -1,10 +1,12 @@
 # TeamPilot
 
 TeamPilot is an AI-powered ticketing and development-orchestration system. It combines a
-Kanban-style ticket board, AI agent orchestration (every project runs the same fixed
-Research → Design → Coding → Testing pipeline, with a bounded Coding/Testing retry loop),
-Git integration, and a human approval gate, so that a project's day-to-day development work can
-be tracked, delegated to AI agents, reviewed, and merged through one system.
+Kanban-style ticket board, AI agent orchestration (every project runs its own admin-configurable
+agent workflow - Research → Design → Coding → Testing by default, with Testing looping back to
+Coding on failure, bounded at 3 attempts - and an admin can add custom agents, remove any agent,
+reorder the sequence, or add further loop-backs), Git integration, and a human approval gate, so
+that a project's day-to-day development work can be tracked, delegated to AI agents, reviewed,
+and merged through one system.
 
 This repository contains both the **backend API** (`TeamPilot.API`), built with
 .NET 10 / ASP.NET Core, and the **frontend** (`TeamPilot.UI`), an Angular 21 single-page
@@ -31,12 +33,11 @@ merges — with role-based access so people only see and act on the projects the
 
 **Scope (current).**
 - Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
-  server-managed sandbox on creation, kept in sync via push/fetch), its 4 system-provisioned
-  pipeline agents (Research/Design/Coding/Testing) plus one standing **Live Agent**, ticket
-  board, and CI/CD pipeline run history.
-- Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the automatic
-  Research → Design → Coding → Testing pipeline, Git commits, merge-conflict
-  detection/resolution, and an approval gate.
+  server-managed sandbox on creation, kept in sync via push/fetch), its own admin-configurable
+  agent workflow (4 system-provisioned pipeline agents by default - Research/Design/Coding/Testing
+  - plus one standing **Live Agent**), ticket board, and CI/CD pipeline run history.
+- Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the project's configured
+  agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate.
 - Live Agent: a per-project chat you can ask about the project - questions, code explanations,
   business rules - with bounded, read-only access to the project's repository and its own
   tickets. It can draft a new ticket for you to review, but never creates one without your

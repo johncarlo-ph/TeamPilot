@@ -5,13 +5,13 @@ namespace TeamPilot.Application.Orchestration;
 public interface IOrchestrationService
 {
     /// <summary>
-    /// Runs the standardized Research -&gt; Design -&gt; Coding -&gt; Testing pipeline for a ticket:
-    /// assigns the project's four pipeline agents (provisioning them first if missing), links a
-    /// branch if the ticket doesn't have one, runs each stage in order, and retries Coding with
-    /// Testing's feedback (bounded) when Testing reports a failure. Always ends by moving the
-    /// ticket to ForReview. Safe to call again on a ticket already In Progress (e.g. after a
-    /// RequestChanges review, or to retry a failed run) - assignment and branch-linking are
-    /// idempotent.
+    /// Runs a ticket through its project's configured agent workflow (provisioning the default
+    /// Research -&gt; Design -&gt; Coding -&gt; Testing sequence first if the project has none): assigns
+    /// every stage's agent, links a branch if the ticket doesn't have one, then runs each stage
+    /// in its configured order, jumping back to an earlier stage when one configured with a
+    /// loop-back reports failure (bounded per stage). Always ends by moving the ticket to
+    /// ForReview. Safe to call again on a ticket already In Progress (e.g. after a RequestChanges
+    /// review, or to retry a failed run) - assignment and branch-linking are idempotent.
     /// </summary>
     Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default);
 }

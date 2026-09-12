@@ -42,4 +42,9 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
         await dbContext.Tickets
             .AsNoTracking()
             .FirstOrDefaultAsync(t => t.ProjectId == projectId && t.BranchName == branchName, cancellationToken);
+
+    public async Task<int> CountByStatusAsync(Guid projectId, TicketStatus status, CancellationToken cancellationToken = default) =>
+        await dbContext.Tickets
+            .AsNoTracking()
+            .CountAsync(t => t.ProjectId == projectId && t.Status == status, cancellationToken);
 }

@@ -22,10 +22,11 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Users/`](../src/TeamPilot.Application/Users) | Admin user management: roles, enable/disable, project assignment |
 | [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD, project-scoped listing for non-admins |
 | [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking |
-| [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate only, no manual creation |
+| [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 default pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate. Custom-agent creation and pipeline placement live in `Workflow/`, not here |
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
-| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running the standardized Research → Design → Coding → Testing pipeline for a ticket, including the bounded Coding/Testing retry loop |
+| [`Workflow/`](../src/TeamPilot.Application/Workflow) | Admin-configurable per-project agent workflow: add a blank custom agent, place/remove/reorder stages, and set/clear a stage's loop-back - see "The agent workflow is admin-configurable per project" below |
+| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure |
 | [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
@@ -124,25 +125,59 @@ explicitly not implemented or (like this one) requires its own explicit confirma
 ticket isn't `Cancelled`, `UnlinkBranch()` throws before `IGitService.DeleteBranchAsync` is ever
 invoked, so a rejected request never touches the remote.
 
-**The agent pipeline is fixed, automatic, and self-provisioning — there is no manual "assign
-agents" or "create agent" step.** Every project always has exactly one active agent per pipeline
-role (Research/Design/Coding/Testing), created by `AgentService.EnsureDefaultAgentsAsync` —
-called once by `ProjectService.CreateAsync` for new projects, and again defensively by
-`OrchestrationService.RunPipelineAsync` before every run so projects created before this existed
-self-heal instead of failing. Agent creation isn't exposed via the API at all — `AgentService`
-only reads, reconfigures, and activates/deactivates agents; the 4 pipeline agents are the only
-agents *invoked automatically per ticket*, and a second Research/Design/Coding/Testing agent
-would make "the project's agent for this role" ambiguous for the pipeline to pick, so nothing
-creates one. `RunPipelineAsync` runs all four stages in that fixed order synchronously within one
-call (no background-job infra, matching `ProjectService.CreateAsync`'s synchronous clone) and
-always ends by moving the ticket to `ForReview`. When Testing reports failure (parsed from a
-`RESULT: PASS`/`RESULT: FAIL` marker the Testing prompt asks for), Coding is re-run with
-Testing's failure output fed back in as context, bounded at 3 total attempts — if still failing
-after that, the pipeline stops retrying and moves to review anyway, since there's no
-ticket-level "flagged" state; the retried commits and final Testing verdict are the visible
-trail for a human reviewer. An admin can still edit any of the 4 agents' instructions
-(Constitution/Guideline/Requirement) via `InstructionService` — that capability is unaffected by
-any of this, only creating new pipeline agents is gone.
+**The agent workflow is admin-configurable per project, with Research → Design → Coding → Testing
+as the default a new project starts with.** `WorkflowService` owns a project's ordered
+`WorkflowStage` sequence (each a thin, id-only reference to an `Agent` and a position, following
+the same loose-aggregate style as `Commit`/`Review`/`Conflict` on `Ticket` - see
+[docs/domain.md](domain.md)). `WorkflowService.EnsureDefaultWorkflowAsync` creates the 4 default
+stages (calling the unchanged `AgentService.EnsureDefaultAgentsAsync` first) the same way
+`AgentService.EnsureDefaultAgentsAsync` always has - called once by `ProjectService.CreateAsync`
+for new projects, and again defensively by `OrchestrationService.RunPipelineAsync` before every
+run so projects created before a workflow was ever configured self-heal instead of failing. An
+admin can, per project: add a new blank custom agent (`WorkflowService.CreateCustomAgentAsync` -
+no seeded Constitution/Guideline/Requirement, unlike the 4 default roles), place any unscheduled
+agent into the sequence once its instructions are complete (`AddExistingAgentAsync` - see
+"instructions must be complete before an agent runs" below), remove a stage (soft-remove: only
+its place in the sequence - the `Agent` row and its instruction history are untouched, matching
+the existing "deactivate, never delete" rule), reorder the whole sequence, and set or clear a
+stage's loop-back (jump back to an earlier stage on failure, bounded by that stage's own
+`MaxLoopIterations`). All five of those structural changes are blocked
+(`WorkflowLockedException`, 409) while the project has any `InProgress` ticket - editing an
+already-scheduled agent's *instructions* stays unrestricted, since that live-edit behavior
+(below) is intentional and unrelated to the pipeline's shape.
+
+**`WorkflowService.DeleteCustomAgentAsync` is the one place an `Agent` really is deleted, not just
+deactivated.** It's deliberately narrow: the target must be `AgentRole.Custom` (never one of the 4
+default roles or `LiveAgent`), must not currently be scheduled into any stage, and must have never
+been assigned to a ticket (`IAgentRepository.HasAssignmentHistoryAsync`, backed by a real FK from
+`TicketAgentAssignment.AgentId` to `Agent` with `DeleteBehavior.Restrict` - this check exists to
+fail with a clear 409 before that constraint would ever do it for us). All three together mean the
+agent has no history anywhere worth preserving, which is exactly the condition the usual
+"deactivate, never delete" rule exists to protect - a custom agent that was created and then never
+actually used is just clutter, not history. Like `CreateCustomAgentAsync`, this is exempt from the
+`InProgress` lock, since an unscheduled agent can't affect any running ticket. `OrchestrationService.RunPipelineAsync`
+reads the stage sequence fresh at the start of every run and iterates it directly - stage `Order`
+is what decides execution order, not a hardcoded role list - assigning every stage's agent to the
+ticket, running each stage in turn, and jumping back to a loop-back's target stage when that
+stage's output parses as a failure (a `RESULT: PASS`/`RESULT: FAIL` marker its prompt asks for
+only when it has a loop-back configured), up to that stage's own `MaxLoopIterations` total runs.
+The default workflow's Testing stage loops back to Coding bounded at 3 total attempts -
+numerically identical to the old hardcoded retry, just expressed as data instead of C#. Only a
+stage whose agent has the `Coding` role commits to Git; every other role (including every custom
+agent) is prompt-only. Runs synchronously within one call, same as before (no background-job
+infra, matching `ProjectService.CreateAsync`'s synchronous clone), and always ends by moving the
+ticket to `ForReview` once the sequence runs out, whether or not its last loop-bounded stage ever
+passed - the retried commits and final verdict are the visible trail for a human reviewer.
+
+**An agent needs a current Constitution, Guideline, and Requirement instruction before it can be
+placed into a project's workflow.** `Agent.HasCompleteInstructions` (Domain) checks this; a
+default-role agent is always complete from creation (seeded by `AgentDefaultInstructions`), so
+only a `Custom` agent can start incomplete. `WorkflowService.AddExistingAgentAsync` is the one
+place this is enforced (`AgentInstructionsIncompleteException`, 409) - at configuration time,
+before the agent ever reaches a ticket's pipeline, rather than as a runtime check inside
+`OrchestrationService`. Because `Agent.AddInstructionVersion` only ever appends or supersedes an
+instruction type (never removes one), an agent that becomes complete can never become incomplete
+again, so gating once at placement time is sufficient.
 
 **A project also always has exactly one standing `LiveAgent` — a 5th agent, but not part of the
 pipeline.** `AgentService.EnsureLiveAgentAsync` provisions it the same self-healing way as the 4
@@ -183,10 +218,10 @@ assistant's final text reply:
 **Each stage's prompt is built with that agent's *current* instructions, re-read immediately
 before the stage runs.** `OrchestrationService.GetInstructionsBlockAsync` calls
 `IInstructionRepository.GetCurrentAsync` for all three `InstructionType`s right before building
-that stage's prompt (not once, up front, for all four agents) — so if an admin edits an agent's
-instructions while a ticket is already mid-pipeline, any stage that hasn't started yet picks up
-the new content, including a Coding retry after a Testing failure. A stage already in flight when
-the edit happens still uses whatever was current when its prompt was built, since the whole
+that stage's prompt (not once, up front, for every agent in the sequence) — so if an admin edits
+an agent's instructions while a ticket is already mid-pipeline, any stage that hasn't started yet
+picks up the new content, including a Coding retry after a loop-back. A stage already in flight
+when the edit happens still uses whatever was current when its prompt was built, since the whole
 pipeline runs synchronously within one `RunPipelineAsync` call.
 
 **`InstructionTemplate` is a flat, mutable catalog — deliberately not versioned like
@@ -241,8 +276,9 @@ stateDiagram-v2
 ```
 
 `RunPipelineAsync` both starts a ticket (first agent assignment moves it out of To Do) and, in
-the same call, runs it all the way through to For Review — see "The agent pipeline is fixed and
-automatic" below. `TicketService.MoveToReviewAsync` remains as a manual escape hatch for an
+the same call, runs it all the way through to For Review — see "The agent workflow is
+admin-configurable per project" above. `TicketService.MoveToReviewAsync` remains as a manual
+escape hatch for an
 In Progress ticket a human wants to push to review without invoking the pipeline again.
 
 `TicketService.CancelAsync` is the escape hatch for a ticket whose goal is no longer valid (e.g.
@@ -319,6 +355,9 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.ForbiddenException` | Wrong role or no project access | `IProjectAccessGuard`, role checks |
 | `Common.Exceptions.AuthenticationFailedException` | Bad/expired/reused token, disabled account | `AuthService` |
 | `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host) | `IGitService` implementation (Infrastructure), propagated through `ProjectService`/`TicketService`/`OrchestrationService`/`ApprovalGateService` |
+| `Common.Exceptions.WorkflowLockedException` | A structural pipeline change was attempted while the project has an `InProgress` ticket | `WorkflowService` |
+| `Common.Exceptions.AgentInstructionsIncompleteException` | An agent without a current Constitution/Guideline/Requirement instruction was placed into a workflow | `WorkflowService.AddExistingAgentAsync` |
+| `Common.Exceptions.InvalidWorkflowOperationException` | A workflow change is invalid given the rest of the project's stage sequence (removing a loop-back target, reordering past one, a malformed reorder request) | `WorkflowService` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |
 
 None of these are caught within Application — they propagate to the API's

@@ -33,4 +33,11 @@ public interface ITicketRepository
     /// at most one ticket. Lean, read-only (no children loaded).
     /// </summary>
     Task<Ticket?> GetByBranchNameAsync(Guid projectId, string branchName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lean existence check for whether the project has any ticket in the given status -
+    /// used by <c>WorkflowService</c> to lock pipeline-structure edits while a ticket is
+    /// <see cref="TicketStatus.InProgress"/>, without loading full ticket rows.
+    /// </summary>
+    Task<int> CountByStatusAsync(Guid projectId, TicketStatus status, CancellationToken cancellationToken = default);
 }

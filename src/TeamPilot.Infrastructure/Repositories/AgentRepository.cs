@@ -27,4 +27,16 @@ public class AgentRepository(TeamPilotDbContext dbContext) : IAgentRepository
 
     public async Task AddAsync(Agent agent, CancellationToken cancellationToken = default) =>
         await dbContext.Agents.AddAsync(agent, cancellationToken);
+
+    public void Remove(Agent agent)
+    {
+        // Instruction.AgentId -> Agent is DeleteBehavior.Restrict (instruction history must
+        // normally survive an agent) - explicitly removing them here first is what lets this one,
+        // deliberately narrow, real-delete path succeed instead of violating that constraint.
+        dbContext.Instructions.RemoveRange(agent.Instructions);
+        dbContext.Agents.Remove(agent);
+    }
+
+    public async Task<bool> HasAssignmentHistoryAsync(Guid agentId, CancellationToken cancellationToken = default) =>
+        await dbContext.TicketAgentAssignments.AsNoTracking().AnyAsync(a => a.AgentId == agentId, cancellationToken);
 }

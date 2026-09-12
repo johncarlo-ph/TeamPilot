@@ -1,53 +1,173 @@
 <a [routerLink]="['/projects', projectId, 'board']" class="small text-decoration-none">&larr; Back to board</a>
 
-<div class="d-flex align-items-center justify-content-between mt-2 mb-4">
-  <h1 class="h3 mb-0">Agents</h1>
+<div class="d-flex align-items-center justify-content-between mt-2 mb-2">
+  <h1 class="h3 mb-0">Agent Pipeline</h1>
+  @if (authService.isAdmin()) {
+    <button type="button" class="btn btn-outline-primary btn-sm" (click)="openNewAgentModal()">+ Add custom agent</button>
+  }
 </div>
 
 <p class="text-body-secondary">
-  Research, Design, Coding, and Testing agents are provisioned automatically for every project.
-  Select one below to edit its instructions.
+  Tickets run through this project's agents in the order shown below. Research, Design, Coding,
+  and Testing are provisioned automatically for every new project; an admin can reorder them, add
+  custom agents, remove agents, or configure a loop-back.
 </p>
 
+@if (locked()) {
+  <div class="alert alert-warning" role="alert">
+    Pipeline is locked while {{ inProgressCount() }} ticket(s) are In Progress. Reordering,
+    removing, adding, and loop-back changes are disabled until they move past In Progress -
+    editing an already-scheduled agent's instructions is still allowed.
+  </div>
+}
+
 @if (loading()) {
-  <div class="text-body-secondary">Loading agents...</div>
+  <div class="text-body-secondary">Loading pipeline...</div>
 } @else {
   <div class="row g-3">
     <div class="col-12 col-lg-5">
-      <div class="table-responsive">
-        <table class="table table-hover align-middle">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Role</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (agent of pipelineAgents(); track agent.id) {
-              <tr
-                class="cursor-pointer"
-                [class.table-active]="agent.id === selectedAgentId()"
-                (click)="selectedAgentId.set(agent.id)"
-              >
-                <td>{{ agent.name }}</td>
-                <td>{{ agent.role }}</td>
-              </tr>
-            } @empty {
-              <tr>
-                <td colspan="2" class="text-body-secondary">No agents yet for this project.</td>
-              </tr>
-            }
-          </tbody>
-        </table>
+      @if (authService.isAdmin() && stages().length > 1) {
+        <p class="small text-body-secondary">
+          Drag a card by its <span aria-hidden="true">&#9776;</span> handle to reorder the
+          pipeline. The new order takes effect the next time a ticket's pipeline runs - it can't
+          be changed while any ticket is In Progress (see the banner above).
+        </p>
+      }
+      <div
+        cdkDropList
+        [cdkDropListData]="stages()"
+        [cdkDropListDisabled]="locked() || !authService.isAdmin()"
+        (cdkDropListDropped)="onReorder($event)"
+      >
+        @for (stage of stages(); track stage.id) {
+          <div
+            cdkDrag
+            [cdkDragDisabled]="locked() || !authService.isAdmin()"
+            class="card mb-2"
+            [class.border-primary]="stage.agent.id === selectedAgentId()"
+          >
+            <div class="card-body py-2">
+              <div class="d-flex align-items-center gap-2">
+                @if (authService.isAdmin()) {
+                  <span cdkDragHandle class="text-body-secondary" style="cursor: grab" title="Drag to reorder">&#9776;</span>
+                }
+                <span class="badge text-bg-light border">{{ stage.order + 1 }}</span>
+                <div class="flex-grow-1 cursor-pointer" (click)="selectAgent(stage.agent)">
+                  <div class="fw-semibold">{{ stage.agent.name }}</div>
+                  <div class="small text-body-secondary">{{ stage.agent.role }}</div>
+                </div>
+                @if (authService.isAdmin()) {
+                  <button
+                    type="button"
+                    class="btn btn-outline-danger btn-sm"
+                    [disabled]="locked()"
+                    (click)="removeStage(stage)"
+                  >
+                    Remove
+                  </button>
+                }
+              </div>
+
+              @if (stage.loopBackToStageId) {
+                <div class="small mt-2">
+                  Loops back to position {{ (stageForLoopBackTarget(stage.loopBackToStageId)?.order ?? 0) + 1 }}
+                  on failure, up to {{ stage.maxLoopIterations }} attempt(s).
+                  @if (authService.isAdmin()) {
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-1" [disabled]="locked()" (click)="clearLoopBack(stage)">
+                      Clear
+                    </button>
+                  }
+                </div>
+              } @else if (authService.isAdmin() && loopBackTargetsFor(stage).length) {
+                <div class="small mt-2">
+                  <button
+                    type="button"
+                    class="btn btn-link btn-sm p-0"
+                    [disabled]="locked()"
+                    (click)="openLoopBackEditor(stage)"
+                  >
+                    + Add loop-back
+                  </button>
+                </div>
+              }
+
+              @if (loopBackEditorStageId() === stage.id) {
+                <div class="border rounded p-2 mt-2 small">
+                  <div class="alert alert-info small py-2 mb-2" role="alert">
+                    <strong>{{ stage.agent.name }} decides pass/fail itself</strong> - the pipeline
+                    only tells it to end its response with "RESULT: PASS" or "RESULT: FAIL"; it
+                    doesn't know what counts as a failure for its job. Add that to its
+                    <strong>Requirement</strong> instruction (e.g. "if any test fails, or an
+                    acceptance criterion isn't met, mark RESULT: FAIL"). Two gotchas: if it never
+                    outputs a RESULT line, this is silently treated as PASS and the loop-back never
+                    fires; and only the <em>last</em> RESULT line in its output counts, so tell it
+                    to state its final verdict once, at the very end.
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label mb-1">On failure, loop back to</label>
+                    <select
+                      class="form-select form-select-sm"
+                      [value]="loopBackTargetId()"
+                      (change)="loopBackTargetId.set($any($event.target).value)"
+                    >
+                      <option value="" disabled>Select a stage...</option>
+                      @for (target of loopBackTargetsFor(stage); track target.id) {
+                        <option [value]="target.id">Position {{ target.order + 1 }} - {{ target.agent.name }}</option>
+                      }
+                    </select>
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label mb-1">Max attempts</label>
+                    <input
+                      type="number"
+                      min="1"
+                      class="form-control form-control-sm"
+                      [value]="loopBackMaxIterations()"
+                      (input)="loopBackMaxIterations.set(+$any($event.target).value)"
+                    />
+                  </div>
+                  <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-primary btn-sm" (click)="saveLoopBack(stage)">Save</button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" (click)="cancelLoopBackEditor()">Cancel</button>
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        } @empty {
+          <p class="text-body-secondary">No agents in this project's pipeline yet.</p>
+        }
       </div>
+
+      @if (authService.isAdmin() && unscheduledAgents().length) {
+        <h2 class="h6 mt-4">Available agents (not in pipeline)</h2>
+        @for (agent of unscheduledAgents(); track agent.id) {
+          <div class="card mb-2" [class.border-primary]="agent.id === selectedAgentId()">
+            <div class="card-body py-2 d-flex align-items-center gap-2">
+              <div class="flex-grow-1 cursor-pointer" (click)="selectAgent(agent)">
+                <div class="fw-semibold">{{ agent.name }}</div>
+                <div class="small text-body-secondary">{{ agent.role }}</div>
+              </div>
+              <button type="button" class="btn btn-outline-primary btn-sm" [disabled]="locked()" (click)="addToPipeline(agent)">
+                Add to pipeline
+              </button>
+              @if (agent.role === 'Custom') {
+                <button type="button" class="btn btn-outline-danger btn-sm" (click)="deleteCustomAgent(agent)">
+                  Remove
+                </button>
+              }
+            </div>
+          </div>
+        }
+      }
     </div>
 
     <div class="col-12 col-lg-7">
-      @if (selectedAgent(); as agent) {
+      @if (selectedAgentId(); as agentId) {
         <div class="card">
           <div class="card-header">Edit Agent Instructions</div>
           <div class="card-body">
-            <app-instruction-editor [agentId]="agent.id" [agentRole]="agent.role"></app-instruction-editor>
+            <app-instruction-editor [agentId]="agentId" [agentRole]="selectedAgentRole()!"></app-instruction-editor>
           </div>
         </div>
       } @else {
@@ -56,3 +176,20 @@
     </div>
   </div>
 }
+
+<app-modal [open]="newAgentModalOpen()" title="Add Custom Agent" (closed)="newAgentModalOpen.set(false)">
+  <div class="mb-3">
+    <label class="form-label">Name</label>
+    <input
+      type="text"
+      class="form-control"
+      [value]="newAgentName()"
+      (input)="newAgentName.set($any($event.target).value)"
+    />
+  </div>
+  <p class="small text-body-secondary">
+    The agent starts with no instructions. Add its Constitution, Guideline, and Requirement below,
+    then use "Add to pipeline" once it's ready.
+  </p>
+  <button type="button" class="btn btn-primary" (click)="createCustomAgent()">Create</button>
+</app-modal>

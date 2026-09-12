@@ -14,6 +14,7 @@ using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Users;
+using TeamPilot.Application.Workflow;
 
 namespace TeamPilot.Application.DependencyInjection;
 
@@ -39,6 +40,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IApprovalGateService, ApprovalGateService>();
         services.AddScoped<IConflictResolutionService, ConflictResolutionService>();
         services.AddScoped<IPipelineService, PipelineService>();
+        services.AddScoped<IWorkflowService, WorkflowService>();
 
         return services;
     }

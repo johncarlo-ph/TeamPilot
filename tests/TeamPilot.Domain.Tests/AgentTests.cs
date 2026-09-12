@@ -35,6 +35,55 @@ public class AgentTests
     }
 
     [Fact]
+    public void Create_WithCustomRole_SeedsNoInstructions()
+    {
+        var agent = Agent.Create(ProjectId, "Custom Agent", AgentRole.Custom);
+
+        Assert.Empty(agent.Instructions);
+        Assert.False(agent.HasCompleteInstructions);
+    }
+
+    [Theory]
+    [InlineData(AgentRole.Research)]
+    [InlineData(AgentRole.Design)]
+    [InlineData(AgentRole.Coding)]
+    [InlineData(AgentRole.Testing)]
+    [InlineData(AgentRole.LiveAgent)]
+    public void Create_WithDefaultSeededRole_HasCompleteInstructions(AgentRole role)
+    {
+        var agent = Agent.Create(ProjectId, "Agent", role);
+
+        Assert.True(agent.HasCompleteInstructions);
+    }
+
+    [Fact]
+    public void HasCompleteInstructions_WithSomeButNotAllTypesPresent_IsFalse()
+    {
+        var agent = Agent.Create(ProjectId, "Custom Agent", AgentRole.Custom);
+
+        agent.AddInstructionVersion(InstructionType.Constitution, "Be helpful.", "admin");
+        Assert.False(agent.HasCompleteInstructions);
+
+        agent.AddInstructionVersion(InstructionType.Guideline, "Stay in scope.", "admin");
+        Assert.False(agent.HasCompleteInstructions);
+    }
+
+    [Fact]
+    public void HasCompleteInstructions_OnceAllThreeTypesArePresent_IsTrueAndStaysTrueAfterASupersede()
+    {
+        var agent = Agent.Create(ProjectId, "Custom Agent", AgentRole.Custom);
+        agent.AddInstructionVersion(InstructionType.Constitution, "Be helpful.", "admin");
+        agent.AddInstructionVersion(InstructionType.Guideline, "Stay in scope.", "admin");
+        agent.AddInstructionVersion(InstructionType.Requirement, "Report findings.", "admin");
+
+        Assert.True(agent.HasCompleteInstructions);
+
+        agent.AddInstructionVersion(InstructionType.Guideline, "Stay in scope, revised.", "admin");
+
+        Assert.True(agent.HasCompleteInstructions);
+    }
+
+    [Fact]
     public void AddInstructionVersion_AfterDefaultSeed_SupersedesDefaultAndBecomesVersionTwo()
     {
         var agent = Agent.Create(ProjectId, "Coder", AgentRole.Coding);

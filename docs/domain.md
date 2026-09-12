@@ -72,8 +72,9 @@ useful later than a bare status flip.
 |---|---|---|
 | `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
 | `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Cancel` |
-| `Agent` | An AI agent (Research/Design/Coding/Testing, or the standing `LiveAgent`) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
+| `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
+| `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
 | `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)* |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
@@ -103,9 +104,19 @@ to, and explicitly constrain it to read-only repository access and to only *draf
 those constraints are enforced. An admin edits any agent's instructions the same way: calling
 `Agent.AddInstructionVersion` for a type that already has a default adds a new version that
 supersedes it, rather than replacing it in place — the default is never mutated, only
-superseded. This is the only way to customize an agent's behavior — `Agent` instances themselves
-are never created or deleted through the API; see "Every project always has exactly one agent
-per pipeline role, plus one Live Agent" in [docs/application.md](application.md).
+superseded. The 5 default/standing agents (Research/Design/Coding/Testing/LiveAgent) are still
+never created or deleted through the API; the one exception is an admin-created `AgentRole.Custom`
+agent (`WorkflowService.CreateCustomAgentAsync`, see [docs/application.md](application.md)),
+which starts with **no** seeded instructions at all (`AgentDefaultInstructions.For(AgentRole.Custom)`
+returns an empty list) — an admin must add all three types before
+`Agent.HasCompleteInstructions` is true, which is required before it can be placed into a
+project's workflow. `Agent` instances are still almost never *deleted* through the API — removing
+a custom agent from a workflow only removes its `WorkflowStage`, never the `Agent` row or its
+instruction history. The one real exception is `WorkflowService.DeleteCustomAgentAsync`, and it's
+deliberately narrow: only an `AgentRole.Custom` agent, that isn't currently scheduled into any
+workflow, and has never been assigned to a ticket (so there's no history anywhere to lose), can
+actually be deleted. Every other agent - the 4 default roles, `LiveAgent`, or a custom agent
+that's ever actually run - stays permanent.
 
 ## Conversation and ChatMessage
 

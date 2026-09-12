@@ -14,6 +14,8 @@ public class TeamPilotDbContext(DbContextOptions<TeamPilotDbContext> options) : 
 
     public DbSet<Agent> Agents => Set<Agent>();
 
+    public DbSet<WorkflowStage> WorkflowStages => Set<WorkflowStage>();
+
     public DbSet<Instruction> Instructions => Set<Instruction>();
 
     public DbSet<Conversation> Conversations => Set<Conversation>();

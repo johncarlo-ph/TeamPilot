@@ -5,9 +5,9 @@ export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done' | 'Cance
 
 export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done', 'Cancelled'];
 
-export type AgentRole = 'Research' | 'Design' | 'Coding' | 'Testing' | 'LiveAgent';
+export type AgentRole = 'Research' | 'Design' | 'Coding' | 'Testing' | 'LiveAgent' | 'Custom';
 
-export const AGENT_ROLES: AgentRole[] = ['Research', 'Design', 'Coding', 'Testing', 'LiveAgent'];
+export const AGENT_ROLES: AgentRole[] = ['Research', 'Design', 'Coding', 'Testing', 'LiveAgent', 'Custom'];
 
 export type ChatMessageRole = 'User' | 'Assistant';
 
@@ -23,6 +23,12 @@ export type AuditEventType =
   | 'AgentConfigurationUpdated'
   | 'AgentStatusUpdated'
   | 'AgentInstructionUpdated'
+  | 'AgentCreated'
+  | 'WorkflowStageAdded'
+  | 'WorkflowStageRemoved'
+  | 'WorkflowReordered'
+  | 'WorkflowLoopBackSet'
+  | 'WorkflowLoopBackCleared'
   | 'InstructionTemplateCreated'
   | 'InstructionTemplateUpdated'
   | 'InstructionTemplateDeleted'

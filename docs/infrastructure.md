@@ -163,6 +163,17 @@ on one instance won't decrypt on another.
   predicate (`HasFilter("[BranchName] IS NOT NULL")`) - the first filtered index in the schema,
   needed because `BranchName` is nullable for every ticket that hasn't linked one yet and a
   plain unique index would only tolerate a single `NULL` row per project.
+- `WorkflowStageConfiguration` maps a project's agent workflow the same "reference by id only"
+  way as `Commit`/`Review`/`Conflict` on `Ticket` - no `Project`/`Agent` navigation properties.
+  Its self-referencing `LoopBackToStageId` foreign key uses `DeleteBehavior.NoAction` because SQL
+  Server rejects a cascading self-reference outright; `WorkflowService` already refuses to remove
+  a stage another stage's loop-back targets, so that path is never expected to fire. A unique
+  index on `(ProjectId, Order)` backs the one-stage-per-position invariant at the database level.
+  The `AddWorkflowStages` migration also backfills every pre-existing project with the same
+  Research → Design → Coding → Testing sequence `WorkflowService.EnsureDefaultWorkflowAsync`
+  would create for a new one, via a raw `migrationBuilder.Sql(...)` script - see
+  [docs/application.md](application.md) for why the pipeline moved from hardcoded stages to this
+  table.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

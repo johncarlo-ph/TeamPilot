@@ -18,8 +18,9 @@ logging: `IAuditLogger.LogAsync(eventType, userId, detail, ipAddress)` writes an
 `AuditLogEntry` row for a fixed set of `AuditEventType`s. The auth flow (login success/failure,
 logout, detected refresh-token reuse) calls this directly with an explicit `userId`/`ipAddress`
 since those requests are anonymous. Every other state-changing use case (creating/updating a
-project, ticket, or agent, submitting a review, triggering a pipeline run, changing a user's
-roles, etc.) instead calls the convenience overload `IAuditLogger.LogActionAsync(eventType,
+project, ticket, or agent; adding/removing/reordering a workflow stage or configuring its
+loop-back; submitting a review, triggering a pipeline run, changing a user's roles, etc.)
+instead calls the convenience overload `IAuditLogger.LogActionAsync(eventType,
 detail)`, which reads the caller's id and IP off `ICurrentUserContext` so services don't have to
 thread those values through every call site. A silent background token refresh is deliberately
 **not** logged - it isn't a user-initiated action. Either way, the entry participates in the same

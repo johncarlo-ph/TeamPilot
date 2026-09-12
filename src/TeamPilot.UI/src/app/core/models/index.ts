@@ -2,6 +2,7 @@ export * from './enums';
 export * from './project.model';
 export * from './ticket.model';
 export * from './agent.model';
+export * from './workflow-stage.model';
 export * from './instruction.model';
 export * from './instruction-template.model';
 export * from './commit.model';

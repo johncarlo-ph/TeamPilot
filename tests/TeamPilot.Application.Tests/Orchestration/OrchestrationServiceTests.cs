@@ -9,6 +9,7 @@ using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Tickets;
+using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
 using TeamPilot.Domain.Exceptions;
@@ -19,8 +20,9 @@ namespace TeamPilot.Application.Tests.Orchestration;
 public class OrchestrationServiceTests
 {
     private readonly Mock<ITicketRepository> _ticketRepository = new();
+    private readonly Mock<IWorkflowStageRepository> _workflowStageRepository = new();
     private readonly Mock<IAgentRepository> _agentRepository = new();
-    private readonly Mock<IAgentService> _agentService = new();
+    private readonly Mock<IWorkflowService> _workflowService = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
@@ -37,6 +39,11 @@ public class OrchestrationServiceTests
     private readonly Agent _codingAgent;
     private readonly Agent _testingAgent;
 
+    private readonly WorkflowStage _researchStage;
+    private readonly WorkflowStage _designStage;
+    private readonly WorkflowStage _codingStage;
+    private readonly WorkflowStage _testingStage;
+
     public OrchestrationServiceTests()
     {
         _researchAgent = Agent.Create(_project.Id, "Research Agent", AgentRole.Research);
@@ -44,21 +51,28 @@ public class OrchestrationServiceTests
         _codingAgent = Agent.Create(_project.Id, "Coding Agent", AgentRole.Coding);
         _testingAgent = Agent.Create(_project.Id, "Testing Agent", AgentRole.Testing);
 
+        _researchStage = WorkflowStage.Create(_project.Id, _researchAgent.Id, 0);
+        _designStage = WorkflowStage.Create(_project.Id, _designAgent.Id, 1);
+        _codingStage = WorkflowStage.Create(_project.Id, _codingAgent.Id, 2);
+        _testingStage = WorkflowStage.Create(_project.Id, _testingAgent.Id, 3);
+        _testingStage.SetLoopBack(_codingStage.Id, 3);
+
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
         _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
-        _agentService.Setup(s => s.EnsureDefaultAgentsAsync(_project.Id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
-        _agentRepository.Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.Research, It.IsAny<CancellationToken>())).ReturnsAsync(_researchAgent);
-        _agentRepository.Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.Design, It.IsAny<CancellationToken>())).ReturnsAsync(_designAgent);
-        _agentRepository.Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.Coding, It.IsAny<CancellationToken>())).ReturnsAsync(_codingAgent);
-        _agentRepository.Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.Testing, It.IsAny<CancellationToken>())).ReturnsAsync(_testingAgent);
+        _workflowService.Setup(s => s.EnsureDefaultWorkflowAsync(_project.Id, It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+
+        SetUpStages(_researchStage, _designStage, _codingStage, _testingStage);
+        SetUpAgents(_researchAgent, _designAgent, _codingAgent, _testingAgent);
+
         _gitService
             .Setup(g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommitResult("abc123", "diff content"));
 
         _sut = new OrchestrationService(
             _ticketRepository.Object,
+            _workflowStageRepository.Object,
             _agentRepository.Object,
-            _agentService.Object,
+            _workflowService.Object,
             _projectRepository.Object,
             _gitService.Object,
             _credentialProtector.Object,
@@ -70,7 +84,13 @@ public class OrchestrationServiceTests
             NullLogger<OrchestrationService>.Instance);
     }
 
-    private static bool IsTestingPrompt(LlmRequest request) => request.Prompt.Contains("You are the Testing agent");
+    private void SetUpStages(params WorkflowStage[] stages) =>
+        _workflowStageRepository.Setup(r => r.ListOrderedAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(stages);
+
+    private void SetUpAgents(params Agent[] agents) =>
+        _agentRepository.Setup(r => r.ListAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(agents);
+
+    private static bool IsPromptFor(LlmRequest request, Agent agent) => request.Prompt.Contains($"You are {agent.Name} (");
 
     [Fact]
     public async Task RunPipelineAsync_HappyPath_AssignsAllFourAgentsLinksBranchAndMovesToReview()
@@ -80,7 +100,7 @@ public class OrchestrationServiceTests
         _llmConnector
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
-                IsTestingPrompt(req)
+                IsPromptFor(req, _testingAgent)
                     ? new LlmResponse("All checks passed.\nRESULT: PASS", "claude-test", 10, 20)
                     : new LlmResponse("Some output", "claude-test", 10, 20)));
 
@@ -108,7 +128,7 @@ public class OrchestrationServiceTests
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) =>
             {
-                if (IsTestingPrompt(req))
+                if (IsPromptFor(req, _testingAgent))
                 {
                     testingCallCount++;
                     return Task.FromResult(testingCallCount == 1
@@ -116,7 +136,7 @@ public class OrchestrationServiceTests
                         : new LlmResponse("Looks good now.\nRESULT: PASS", "claude-test", 10, 20));
                 }
 
-                if (req.Prompt.Contains("You are the Coding agent"))
+                if (IsPromptFor(req, _codingAgent))
                 {
                     codingPrompts.Add(req.Prompt);
                 }
@@ -137,14 +157,14 @@ public class OrchestrationServiceTests
     }
 
     [Fact]
-    public async Task RunPipelineAsync_WhenTestingFailsEveryAttempt_StopsAfterMaxAttemptsAndStillMovesToReview()
+    public async Task RunPipelineAsync_WhenTestingFailsEveryAttempt_StopsAfterMaxIterationsAndStillMovesToReview()
     {
         var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _llmConnector
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
-                IsTestingPrompt(req)
+                IsPromptFor(req, _testingAgent)
                     ? new LlmResponse("Still broken.\nRESULT: FAIL", "claude-test", 10, 20)
                     : new LlmResponse("Some output", "claude-test", 10, 20)));
 
@@ -157,13 +177,13 @@ public class OrchestrationServiceTests
     }
 
     [Fact]
-    public async Task RunPipelineAsync_WhenPipelineAgentIsMissing_ThrowsInvalidOperationException()
+    public async Task RunPipelineAsync_WhenProjectHasNoWorkflowStages_ThrowsInvalidOperationException()
     {
         var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
-        _agentRepository
-            .Setup(r => r.GetByProjectAndRoleAsync(_project.Id, AgentRole.Research, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Agent?)null);
+        _workflowStageRepository
+            .Setup(r => r.ListOrderedAsync(_project.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.RunPipelineAsync(ticket.Id));
     }
@@ -184,12 +204,12 @@ public class OrchestrationServiceTests
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) =>
             {
-                if (IsTestingPrompt(req))
+                if (IsPromptFor(req, _testingAgent))
                 {
                     return Task.FromResult(new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20));
                 }
 
-                if (req.Prompt.Contains("You are the Coding agent"))
+                if (IsPromptFor(req, _codingAgent))
                 {
                     codingPrompts.Add(req.Prompt);
                 }
@@ -222,7 +242,7 @@ public class OrchestrationServiceTests
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) =>
             {
-                if (IsTestingPrompt(req))
+                if (IsPromptFor(req, _testingAgent))
                 {
                     testingCallCount++;
                     if (testingCallCount == 1)
@@ -237,7 +257,7 @@ public class OrchestrationServiceTests
                     return Task.FromResult(new LlmResponse("Looks good now.\nRESULT: PASS", "claude-test", 10, 20));
                 }
 
-                if (req.Prompt.Contains("You are the Coding agent"))
+                if (IsPromptFor(req, _codingAgent))
                 {
                     codingPrompts.Add(req.Prompt);
                 }
@@ -269,7 +289,7 @@ public class OrchestrationServiceTests
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) =>
             {
-                if (req.Prompt.Contains("You are the Design agent"))
+                if (IsPromptFor(req, _designAgent))
                 {
                     // Simulate someone cancelling the ticket while the Design stage's LLM call
                     // is still in flight - the pipeline can't interrupt that call, but the next
@@ -277,7 +297,7 @@ public class OrchestrationServiceTests
                     cancelled = true;
                 }
 
-                if (req.Prompt.Contains("You are the Coding agent"))
+                if (IsPromptFor(req, _codingAgent))
                 {
                     codingCalls++;
                 }
@@ -289,5 +309,70 @@ public class OrchestrationServiceTests
 
         Assert.Equal(0, codingCalls);
         Assert.Empty(ticket.Commits);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WithReorderedStages_ExecutesInConfiguredOrderNotDefaultRoleOrder()
+    {
+        // Swap Research and Design's positions - the workflow should run Design before Research,
+        // proving that WorkflowStage.Order (not a hardcoded role order) drives execution.
+        var swappedDesignStage = WorkflowStage.Create(_project.Id, _designAgent.Id, 0);
+        var swappedResearchStage = WorkflowStage.Create(_project.Id, _researchAgent.Id, 1);
+        SetUpStages(swappedDesignStage, swappedResearchStage, _codingStage, _testingStage);
+
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var executionOrder = new List<AgentRole>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    executionOrder.Add(AgentRole.Research);
+                }
+                else if (IsPromptFor(req, _designAgent))
+                {
+                    executionOrder.Add(AgentRole.Design);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal([AgentRole.Design, AgentRole.Research], executionOrder);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WithCustomPromptOnlyAgent_NeverCommitsToGit()
+    {
+        var customAgent = Agent.Create(_project.Id, "Reviewer Agent", AgentRole.Custom);
+        customAgent.AddInstructionVersion(InstructionType.Constitution, "c", "admin");
+        customAgent.AddInstructionVersion(InstructionType.Guideline, "g", "admin");
+        customAgent.AddInstructionVersion(InstructionType.Requirement, "r", "admin");
+        var customStage = WorkflowStage.Create(_project.Id, customAgent.Id, 4);
+
+        SetUpStages(_researchStage, _designStage, _codingStage, _testingStage, customStage);
+        SetUpAgents(_researchAgent, _designAgent, _codingAgent, _testingAgent, customAgent);
+
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), customAgent.Name, It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

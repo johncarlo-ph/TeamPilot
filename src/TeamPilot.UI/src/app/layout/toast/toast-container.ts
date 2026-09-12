@@ -4,7 +4,10 @@ import { NotificationService } from '../../core/notification/notification.servic
 @Component({
   selector: 'app-toast-container',
   template: `
-    <div class="toast-stack position-fixed top-0 end-0 p-3" style="z-index: 1080">
+    <div
+      class="toast-stack position-fixed top-0 start-50 translate-middle-x p-3"
+      style="z-index: 1080; width: 100%; max-width: 420px"
+    >
       @for (toast of notifications.toasts(); track toast.id) {
         <div class="alert alert-{{ toast.level }} shadow-sm d-flex align-items-center justify-content-between">
           <span>{{ toast.message }}</span>

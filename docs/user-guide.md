@@ -49,6 +49,7 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 | Edit an agent's instructions | ✓ | ✓ | ✓ |
 | Request changes or resolve a conflict on a review | ✓ | ✓ | ✓ |
 | **Approve** a ticket (merges its branch) | ✓ | ✓ | — |
+| Add/remove/reorder pipeline agents, add a custom agent, configure a loop-back | ✓ | — | — |
 | Create or edit projects | ✓ | — | — |
 | Manage users, roles, and project assignment | ✓ | — | — |
 | View the audit log | ✓ | — | — |
@@ -121,16 +122,19 @@ A review can also be opened directly from the ticket's own page — see [Reviews
 
 ### The agent pipeline
 
-Every project always has one Research, one Design, one Coding, and one Testing agent — they're
-created automatically when the project is created, so there's nothing to set up before starting
-a ticket. Dragging a card from To Do to In Progress (or clicking **Start** on the ticket's own
-page) runs all four, in that fixed order, in a single step: Research investigates, Design plans,
-Coding implements and commits, then Testing verifies. If the ticket doesn't already have a
-linked branch (i.e. **Link Branch** on the Git panel was never used), one is created and linked
-automatically at this point, named after the ticket itself. If Testing finds a problem, it's sent
-straight back to Coding to fix — automatically, up to 3 attempts total — before the ticket lands
-in For Review either way, so it's always ready for a human to look at. There's no per-agent
-"Execute" step to click through anymore, and no agent picker: the same four roles run every time.
+Every new project starts with one Research, one Design, one Coding, and one Testing agent, in
+that order — created automatically when the project is created, so there's nothing to set up
+before starting a ticket. An Admin can customize this per project (add agents, remove them,
+reorder them, add further loop-backs) on the [Agent Pipeline](#agent-pipeline--instructions)
+page; what's described here is that default sequence. Dragging a card from To Do to In Progress
+(or clicking **Start** on the ticket's own page) runs the project's configured agents in order,
+in a single step: by default, Research investigates, Design plans, Coding implements and commits,
+then Testing verifies. If the ticket doesn't already have a linked branch (i.e. **Link Branch** on
+the Git panel was never used), one is created and linked automatically at this point, named after
+the ticket itself. If Testing finds a problem, it's sent straight back to Coding to fix —
+automatically, up to 3 attempts total — before the ticket lands in For Review either way, so it's
+always ready for a human to look at. There's no per-agent "Execute" step to click through, and no
+agent picker: whatever the project's pipeline is configured to run, runs every time.
 
 ## Ticket detail
 
@@ -213,14 +217,53 @@ Approve is Admin/Developer only.
 | Decision | Select | Yes | **Approve** (merges the branch into the project's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress), or **Resolve Conflict**. |
 | Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. |
 
-## Agents & instructions
+## Agent Pipeline & Instructions
 
-Reached from a project's board via the **Agents** button. The left table lists the project's
-four pipeline agents, always in pipeline order (Research, Design, Coding, Testing) with name and
-role; selecting a row edits that agent's instructions on the right. The standing Live Agent isn't
-listed here — it's managed via the [Live Agent chat](#live-agent-chat) instead. They're created
-automatically for every project — there's no way to create, rename, or delete an agent here,
-only to reconfigure or edit an existing one.
+Reached from a project's board via the **Agents** button. The left side lists the project's
+agents in the order tickets run through them; selecting one edits its instructions on the right.
+The standing Live Agent isn't listed here — it's managed via the
+[Live Agent chat](#live-agent-chat) instead.
+
+**Everyone assigned to the project can view the pipeline and edit any agent's instructions.**
+Reordering the pipeline, adding or removing an agent, and configuring a loop-back are
+**Admin-only** — a Developer or Analyst sees the same ordered list, but without the drag handle,
+Remove button, or loop-back controls.
+
+**Reordering** — an Admin drags a row to a new position; the new order takes effect for every
+ticket started after the change (a ticket's pipeline is read fresh each time it runs).
+
+**Adding a custom agent** is two steps: **+ Add custom agent** creates a new agent with a name
+but no instructions yet, and immediately opens its instruction editor — fill in all three fields
+(Constitution, Guideline, Requirement) and save. The new agent then shows up under
+**Available agents (not in pipeline)** with an **Add to pipeline** button, which places it at the
+end of the sequence. Trying to add it before its instructions are complete is rejected with an
+explanation.
+
+**Removing an agent** takes it out of the sequence via its **Remove** button — it stops running
+on future tickets, but its instructions (and its history of past commits, if it's a Coding agent)
+are kept, and it reappears under "Available agents" in case you want to re-add it later. This
+applies to any agent, including the original Research/Design/Coding/Testing ones. Only a Coding
+agent commits to the project's Git repository; every other agent (including any custom one) only
+produces text that's passed along to the next stage.
+
+**Deleting a custom agent** — a custom agent under "Available agents" also has its own
+**Remove** button, and this one is permanent: it only appears for agents you created but that
+have never actually run on a ticket (so there's nothing to lose), and clicking it asks you to
+confirm before deleting the agent outright. It's unrelated to the pipeline's Remove button above
+and works even while the pipeline is locked, since an agent that was never scheduled can't be
+mid-run on anything. A default Research/Design/Coding/Testing agent, or any agent that has ever
+run, never gets this button — those can only ever be removed from the pipeline, never deleted.
+
+**Loop-backs** — a stage can be configured to jump back to an earlier stage when its output looks
+like a failure, up to a set number of attempts before the ticket moves on to review anyway. The
+default pipeline's Testing stage already does this (loops back to Coding, up to 3 attempts) — an
+Admin can add the same behavior to any other stage, or change the target/attempt count, via
+**+ Add loop-back** on a stage that doesn't have one yet, or **Clear** on one that does.
+
+**The pipeline locks while any ticket is In Progress** — a banner explains this, and reordering,
+adding, removing, and loop-back changes are all disabled (with a clear error if attempted
+directly) until every ticket in the project has moved past In Progress. Editing an
+already-scheduled agent's instructions is unaffected by this lock.
 
 **Editing instructions** — each agent has three instruction fields: **Constitution**,
 **Guideline**, and **Requirement** — the standing text given to an agent before it works. A new
@@ -298,8 +341,9 @@ agent; submitting a review; triggering a pipeline run; changing a user's roles; 
 `/admin/instruction-templates` — Admin only. A catalog of reusable instructions, independent of
 any one project, meant for conventions you reuse across repeating projects (e.g. a standard TDD
 guideline for Coding agents, or a security checklist for Testing agents). This is where you
-build up that catalog; picking one for a real agent happens on the [Agents & instructions](#agents--instructions)
-page, from the **Template** dropdown next to the matching field.
+build up that catalog; picking one for a real agent happens on the
+[Agent Pipeline & Instructions](#agent-pipeline--instructions) page, from the **Template**
+dropdown next to the matching field.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -322,7 +366,12 @@ versioned instructions at the time.
   instead (see [Ticket detail](#ticket-detail)) — that's a permanent status, not a deletion; the
   ticket and its history stay on record. Instruction templates and, once a ticket is Cancelled,
   its Git branch are the two real exceptions — both genuinely, irreversibly deleted when you
-  click their **Delete** button.
+  click their **Delete** button. An agent's **Remove** button on the
+  [Agent Pipeline](#agent-pipeline--instructions) page looks like a third exception but usually
+  isn't: it only takes the agent out of the pipeline sequence — the agent itself, and its
+  instructions and commit history, are untouched and it can be added back later. The one genuine
+  exception is a custom agent that's never actually run — its "Available agents" **Remove**
+  button really does delete it permanently, since there's nothing on record to lose.
 - **A ticket keeps one branch for life — with one exception.** Once linked in the Git panel, it
   can't be swapped for a different one. Deleting a Cancelled ticket's branch (see
   [Ticket detail](#ticket-detail)) is the only way that field goes back to empty, and even then

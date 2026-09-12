@@ -6,7 +6,7 @@
 
 `TeamPilot.UI` (`src/TeamPilot.UI`) is the Angular 21 single-page application that consumes
 `TeamPilot.API` over HTTP: the Kanban ticket board, ticket detail (diffs, reviews, conflict
-resolution), and the admin surfaces (agents/instructions, users, audit log). It is a separate
+resolution), and the admin surfaces (agent pipeline/instructions, users, audit log). It is a separate
 deployable artifact and origin from the API — see
 [Cross-origin requests (CORS)](api.md#cross-origin-requests-cors) for how the two are wired
 together.
@@ -181,6 +181,40 @@ option, tracked in a `selectedTemplateIds` signal keyed by instruction type — 
 content fill, not a persisted association (the selection resets on save/reload); the existing
 "Save & Ingest" flow is what actually commits anything, same as typing the content by hand.
 
+**`features/agents/agents.ts` shows the project's ordered workflow, not a static 4-item list.**
+It reads `WorkflowService.list()` (ordered `WorkflowStageDto[]`, each carrying its `AgentDto`) and
+`listUnscheduledAgents()` instead of `AgentsService.listForProject()` directly - the latter is
+still used elsewhere for `GET /agents/{id}` reads, but stage placement/order now lives in
+`Workflow/`, mirroring the API split between `AgentsController` and `WorkflowController` (see
+[docs/api.md](api.md)). Every mutation (reorder, add-to-pipeline, remove, loop-back) is
+admin-only, gated the same `authService.isAdmin()` way as elsewhere in this doc - a non-admin
+still sees the full ordered list and can still select a stage to view/edit its instructions
+(matching the API, which leaves instruction editing open to any project member), just without the
+drag handle, Remove button, or loop-back editor rendered at all. Reordering reuses this codebase's
+one existing drag-and-drop precedent - `@angular/cdk/drag-drop`'s `cdkDropList`/`cdkDrag`
+(`DragDropModule`), already used by the Kanban board (`features/board/board.html`) - rather than
+introducing a second reordering mechanism; a drop calls `moveItemInArray` to compute the requested
+order client-side, then `WorkflowService.reorder()` persists it and the response (not the
+optimistic local array) is what actually gets rendered, so a rejected reorder (e.g. it would
+invalidate a loop-back) settles back to the server's real order once `errorInterceptor` surfaces
+the 409's message as a toast. A stage row's "Remove" and the "Pipeline is locked..." banner text
+use the browser's native `confirm(...)`/a plain `@if` respectively, following the same
+lightweight pattern as `branch-panel.ts`'s delete-branch confirmation rather than introducing a
+dedicated confirmation dialog component. **Adding a custom agent is two steps in the UI**,
+matching `WorkflowService.CreateCustomAgentAsync`/`AddExistingAgentAsync` being two separate calls
+on the backend: the "Add Custom Agent" modal only creates the (blank, unscheduled) agent and
+immediately selects it so its instruction editor opens; a separate "Add to pipeline" button (shown
+under "Available agents") is what actually schedules it, and is left enabled even though it can
+fail server-side if the three instruction types aren't filled in yet - the resulting 409's message
+is descriptive enough on its own (surfaced by `errorInterceptor`) that a client-side "is this agent
+ready" check wasn't worth adding to `AgentDto` just for this one button's disabled state. Each
+row under "Available agents" also gets its own Remove button when `agent.role === 'Custom'`
+(`Agents.deleteCustomAgent`, calling `WorkflowService.deleteCustomAgent`) - a plain client-side
+role check is enough here, since the backend independently re-validates role, schedule state, and
+assignment history before actually deleting anything (see [docs/application.md](application.md)).
+It isn't disabled by the `locked()` pipeline banner, matching the backend: an unscheduled agent
+can't affect a running ticket either way.
+
 ## Authorization (client-side mirror, not enforcement)
 
 `authGuard` and `adminGuard` (functional `CanActivateFn`s) gate routes, and `AuthService.canApprove()`
@@ -213,8 +247,9 @@ follow-up work, not fixed as part of this frontend change.
   `[(ngModel)]`) where a full `FormGroup` would be overkill (e.g. the git-diff branch pickers).
 - Reusable dialogs (`create-ticket-form`, `review-form`, `project-form`, `user-edit-modal`) all
   wrap the shared `Modal` component and follow the same `open` input / `closed` output /
-  `<action>` output contract. There is no agent-creation dialog — agents are never created
-  through the UI (see [docs/application.md](application.md)).
+  `<action>` output contract, including the "Add Custom Agent" dialog on `features/agents/agents.ts`
+  (name only - the agent starts with no instructions, per `WorkflowController`, see
+  [docs/api.md](api.md)).
 - `project-form`'s Access Token field (`type="password"`) is the first masked input in this
   codebase - no prior precedent existed to follow. It's required when creating a project and
   optional when editing (blank = keep the currently stored token); the validator is
@@ -281,9 +316,14 @@ than a toast).
   real-time transport.
 - **Server-side fix for the branchless-approve 500** described above under "Authorization" —
   the client-side guard is a stopgap, not a substitute for the API returning a proper error.
-- **No delete endpoints** exist for `Project`/`Ticket`/`Agent` on the API, so the UI has no
-  delete affordance for any of them either — test/demo data created through the UI can't be
-  removed without going directly to the database.
+- **No delete endpoints** exist for `Project` or `Ticket` on the API, so the UI has no delete
+  affordance for either. `Agent` has two narrow exceptions, both on the agents page: the
+  pipeline's "Remove" button calls `DELETE /api/projects/{projectId}/workflow/stages/{stageId}`,
+  which only removes a stage from the sequence (the agent and its instruction history stay
+  reachable under "Available agents"); and the "Available agents" section's own "Remove" button
+  on a `Custom`-role agent calls `DELETE /api/projects/{projectId}/workflow/agents/{agentId}`,
+  which really does permanently delete it - only shown for `Custom` agents, since that's the only
+  role the API will actually let you delete (see [docs/domain.md](domain.md)).
 - **No inline server-error handling on any form**, `project-form` included: `project-list.ts`'s
   `save()` has no `error` callback on its `subscribe`, so a failed create (e.g. an unreachable
   remote or bad access token, surfaced by the API as 422) only shows the generic

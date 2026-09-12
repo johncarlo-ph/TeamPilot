@@ -8,6 +8,7 @@ using TeamPilot.Application.Projects;
 using TeamPilot.Application.Projects.Dtos;
 using TeamPilot.Application.Projects.Validators;
 using TeamPilot.Application.Users;
+using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
 using Xunit;
@@ -19,6 +20,7 @@ public class ProjectServiceTests
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<IAgentService> _agentService = new();
+    private readonly Mock<IWorkflowService> _workflowService = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IGitService> _gitService = new();
@@ -38,6 +40,7 @@ public class ProjectServiceTests
             _projectRepository.Object,
             _userRepository.Object,
             _agentService.Object,
+            _workflowService.Object,
             _currentUser.Object,
             _projectAccessGuard.Object,
             _gitService.Object,
@@ -64,13 +67,23 @@ public class ProjectServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WithValidRequest_ProvisionsTheFourDefaultPipelineAgents()
+    public async Task CreateAsync_WithValidRequest_ProvisionsTheDefaultWorkflow()
     {
         var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "pat-123", "main");
 
         var result = await _sut.CreateAsync(request);
 
-        _agentService.Verify(s => s.EnsureDefaultAgentsAsync(result.Id, It.IsAny<CancellationToken>()), Times.Once);
+        _workflowService.Verify(s => s.EnsureDefaultWorkflowAsync(result.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithValidRequest_ProvisionsTheStandingLiveAgent()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "pat-123", "main");
+
+        var result = await _sut.CreateAsync(request);
+
+        _agentService.Verify(s => s.EnsureLiveAgentAsync(result.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

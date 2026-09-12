@@ -93,6 +93,10 @@ internal static class AgentDefaultInstructions
                 "question. A drafted ticket is never created automatically; it only becomes a " +
                 "real ticket once the user approves it themselves."),
         ],
+        // Custom agents start with genuinely blank instructions - an admin fills them in
+        // before the agent can be added to a project's workflow (see
+        // Agent.HasCompleteInstructions and WorkflowService.AddExistingAgentAsync).
+        AgentRole.Custom => [],
         _ => throw new ArgumentOutOfRangeException(nameof(role), role, "Unknown agent role."),
     };
 }

@@ -15,6 +15,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Git:SandboxRoot (appsettings.json) resolves to this project's own directory at runtime,
+         so every project a user creates gets cloned in here. Without this exclusion, the SDK's
+         default **/*.cs glob sweeps a cloned repository's own source files into this project's
+         compilation the moment anyone runs the app locally and creates a project. -->
+    <Compile Remove="git-sandboxes\**" />
+    <Content Remove="git-sandboxes\**" />
+    <EmbeddedResource Remove="git-sandboxes\**" />
+    <None Remove="git-sandboxes\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

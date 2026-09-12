@@ -7,6 +7,7 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects.Dtos;
 using TeamPilot.Application.Users;
+using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
 
@@ -16,6 +17,7 @@ public sealed class ProjectService(
     IProjectRepository projectRepository,
     IUserRepository userRepository,
     IAgentService agentService,
+    IWorkflowService workflowService,
     ICurrentUserContext currentUser,
     IProjectAccessGuard projectAccessGuard,
     IGitService gitService,
@@ -39,10 +41,10 @@ public sealed class ProjectService(
 
         await projectRepository.AddAsync(project, cancellationToken);
 
-        // Every project always has exactly one Research/Design/Coding/Testing agent, so a
-        // ticket's pipeline can unambiguously find each stage's agent without a manual
-        // assignment step.
-        await agentService.EnsureDefaultAgentsAsync(project.Id, cancellationToken);
+        // Every new project starts with the default Research -> Design -> Coding -> Testing
+        // workflow (Testing looping back to Coding, bounded at 3 attempts) - an admin can later
+        // add/remove/reorder stages and loop-backs via WorkflowService.
+        await workflowService.EnsureDefaultWorkflowAsync(project.Id, cancellationToken);
 
         // Every project also gets one standing Live Agent - unlike the 4 pipeline agents above,
         // it isn't invoked automatically; a human chats with it directly.

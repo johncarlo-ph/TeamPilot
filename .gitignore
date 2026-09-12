@@ -362,3 +362,7 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /src/TeamPilot.API/appsettings.Development.json
+
+# Git:SandboxRoot (appsettings.json) - server-managed local clones of projects' remote
+# repositories, created under the API project's own directory at runtime.
+/src/TeamPilot.API/git-sandboxes/

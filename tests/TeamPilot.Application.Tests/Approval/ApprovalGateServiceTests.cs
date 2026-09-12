@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Approval;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -25,6 +26,7 @@ public class ApprovalGateServiceTests
     private readonly Mock<IPipelineService> _pipelineService = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ApprovalGateService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
@@ -55,6 +57,7 @@ public class ApprovalGateServiceTests
             _pipelineService.Object,
             _projectAccessGuard.Object,
             _currentUser.Object,
+            _auditLogger.Object,
             _unitOfWork.Object,
             new SubmitReviewRequestValidator(),
             NullLogger<ApprovalGateService>.Instance);

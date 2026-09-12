@@ -11,12 +11,6 @@ export interface AgentDto {
   updatedAtUtc: string | null;
 }
 
-export interface CreateAgentRequest {
-  name: string;
-  role: AgentRole;
-  configurationJson: string | null;
-}
-
 export interface UpdateAgentConfigurationRequest {
   configurationJson: string;
 }

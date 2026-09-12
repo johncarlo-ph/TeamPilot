@@ -14,12 +14,13 @@ public class UserServiceTests
 {
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<IRefreshTokenRepository> _refreshTokenRepository = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly UserService _sut;
 
     public UserServiceTests()
     {
-        _sut = new UserService(_userRepository.Object, _refreshTokenRepository.Object, _unitOfWork.Object);
+        _sut = new UserService(_userRepository.Object, _refreshTokenRepository.Object, _auditLogger.Object, _unitOfWork.Object);
     }
 
     [Fact]

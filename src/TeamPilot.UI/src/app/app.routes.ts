@@ -48,6 +48,14 @@ export const routes: Routes = [
         loadComponent: () =>
           import('./features/admin/audit-log/audit-log').then((m) => m.AuditLog),
       },
+      {
+        path: 'admin/instruction-templates',
+        canActivate: [adminGuard],
+        loadComponent: () =>
+          import('./features/admin/instruction-templates/instruction-templates').then(
+            (m) => m.InstructionTemplates
+          ),
+      },
     ],
   },
   { path: '**', redirectTo: 'projects' },

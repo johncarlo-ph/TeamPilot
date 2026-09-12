@@ -1,20 +1,17 @@
 using TeamPilot.Application.Orchestration.Dtos;
-using TeamPilot.Application.Tickets.Dtos;
 
 namespace TeamPilot.Application.Orchestration;
 
 public interface IOrchestrationService
 {
     /// <summary>
-    /// Assigns one or more sub-agents (Research, Design, Coding, ...) to a ticket, moving it
-    /// out of To Do on the first assignment.
+    /// Runs the standardized Research -&gt; Design -&gt; Coding -&gt; Testing pipeline for a ticket:
+    /// assigns the project's four pipeline agents (provisioning them first if missing), links a
+    /// branch if the ticket doesn't have one, runs each stage in order, and retries Coding with
+    /// Testing's feedback (bounded) when Testing reports a failure. Always ends by moving the
+    /// ticket to ForReview. Safe to call again on a ticket already In Progress (e.g. after a
+    /// RequestChanges review, or to retry a failed run) - assignment and branch-linking are
+    /// idempotent.
     /// </summary>
-    Task<TicketDto> AssignSubAgentsAsync(Guid ticketId, AssignSubAgentsRequest request, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Has an assigned agent do its work for the ticket via the configured LLM connector.
-    /// A Coding agent's output is committed to the ticket's branch and recorded as a
-    /// <c>Commit</c>; other roles' output is returned and logged.
-    /// </summary>
-    Task<AgentWorkResultDto> ExecuteAgentWorkAsync(Guid ticketId, Guid agentId, CancellationToken cancellationToken = default);
+    Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default);
 }

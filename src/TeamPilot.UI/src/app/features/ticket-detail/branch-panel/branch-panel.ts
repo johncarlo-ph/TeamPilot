@@ -1,13 +1,15 @@
-import { Component, inject, input, output, signal } from '@angular/core';
+import { Component, computed, inject, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { GitService } from '../../../core/services/git.service';
 import { NotificationService } from '../../../core/notification/notification.service';
 import { GitDiffResult, TicketDto } from '../../../core/models';
 import { DiffViewer } from '../../../shared/components/diff-viewer/diff-viewer';
+import { Modal } from '../../../shared/components/modal/modal';
+import { buildBranchUrl } from '../../../core/utils/git-url.util';
 
 @Component({
   selector: 'app-branch-panel',
-  imports: [FormsModule, DiffViewer],
+  imports: [FormsModule, DiffViewer, Modal],
   templateUrl: './branch-panel.html',
 })
 export class BranchPanel {
@@ -15,7 +17,10 @@ export class BranchPanel {
   private readonly notifications = inject(NotificationService);
 
   readonly ticket = input.required<TicketDto>();
-  readonly branchCreated = output<TicketDto>();
+  readonly remoteUrl = input<string | null>(null);
+  readonly changed = output<TicketDto>();
+
+  readonly linkedBranchUrl = computed(() => buildBranchUrl(this.remoteUrl(), this.ticket().branchName));
 
   readonly newBranchName = signal('');
   readonly sourceBranch = signal('main');
@@ -23,16 +28,56 @@ export class BranchPanel {
   readonly diffResult = signal<GitDiffResult | null>(null);
   readonly diffLoading = signal(false);
 
+  readonly checkingBranch = signal(false);
+  readonly confirmModalOpen = signal(false);
+  readonly pendingBranchName = signal('');
+  readonly branchAlreadyExists = signal(false);
+
   createBranch(): void {
     const branchName = this.newBranchName().trim();
     if (!branchName) {
       return;
     }
+    this.checkingBranch.set(true);
+    this.gitService.branchExists(this.ticket().id, branchName).subscribe({
+      next: (exists) => {
+        this.checkingBranch.set(false);
+        this.pendingBranchName.set(branchName);
+        this.branchAlreadyExists.set(exists);
+        this.confirmModalOpen.set(true);
+      },
+      error: () => this.checkingBranch.set(false),
+    });
+  }
+
+  confirmLinkBranch(): void {
+    const branchName = this.pendingBranchName();
     this.gitService.createBranch({ ticketId: this.ticket().id, branchName }).subscribe({
       next: (updated) => {
-        this.notifications.success('Branch linked to ticket.');
+        this.notifications.success(
+          this.branchAlreadyExists() ? 'Existing branch linked to ticket.' : 'New branch created and linked to ticket.'
+        );
         this.newBranchName.set('');
-        this.branchCreated.emit(updated);
+        this.confirmModalOpen.set(false);
+        this.changed.emit(updated);
+      },
+    });
+  }
+
+  cancelLinkBranch(): void {
+    this.confirmModalOpen.set(false);
+  }
+
+  deleteBranch(): void {
+    const ticket = this.ticket();
+    const branchName = ticket.branchName;
+    if (!branchName || !confirm(`Delete branch "${branchName}"? This cannot be undone.`)) {
+      return;
+    }
+    this.gitService.deleteBranch(ticket.id).subscribe({
+      next: (updated) => {
+        this.notifications.success('Branch deleted.');
+        this.changed.emit(updated);
       },
     });
   }

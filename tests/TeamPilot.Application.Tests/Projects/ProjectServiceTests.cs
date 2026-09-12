@@ -1,4 +1,6 @@
 using Moq;
+using TeamPilot.Application.Agents;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -16,10 +18,12 @@ public class ProjectServiceTests
 {
     private readonly Mock<IProjectRepository> _projectRepository = new();
     private readonly Mock<IUserRepository> _userRepository = new();
+    private readonly Mock<IAgentService> _agentService = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ProjectService _sut;
 
@@ -33,10 +37,12 @@ public class ProjectServiceTests
         _sut = new ProjectService(
             _projectRepository.Object,
             _userRepository.Object,
+            _agentService.Object,
             _currentUser.Object,
             _projectAccessGuard.Object,
             _gitService.Object,
             _credentialProtector.Object,
+            _auditLogger.Object,
             _unitOfWork.Object,
             new CreateProjectRequestValidator(),
             new UpdateProjectRequestValidator());
@@ -55,6 +61,16 @@ public class ProjectServiceTests
         _gitService.Verify(g => g.CloneAsync(It.IsAny<Guid>(), request.RemoteUrl, request.AccessToken, It.IsAny<CancellationToken>()), Times.Once);
         _projectRepository.Verify(r => r.AddAsync(It.IsAny<Project>(), It.IsAny<CancellationToken>()), Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithValidRequest_ProvisionsTheFourDefaultPipelineAgents()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "pat-123", "main");
+
+        var result = await _sut.CreateAsync(request);
+
+        _agentService.Verify(s => s.EnsureDefaultAgentsAsync(result.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

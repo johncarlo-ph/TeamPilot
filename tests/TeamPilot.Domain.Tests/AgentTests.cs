@@ -15,7 +15,6 @@ public class AgentTests
     }
 
     [Theory]
-    [InlineData(AgentRole.Orchestrator)]
     [InlineData(AgentRole.Research)]
     [InlineData(AgentRole.Design)]
     [InlineData(AgentRole.Coding)]

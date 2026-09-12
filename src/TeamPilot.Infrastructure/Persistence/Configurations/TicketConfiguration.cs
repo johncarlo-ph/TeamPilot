@@ -14,7 +14,19 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.Property(t => t.Title).IsRequired().HasMaxLength(200);
         builder.Property(t => t.Description).HasMaxLength(4000);
         builder.Property(t => t.BranchName).HasMaxLength(200);
+        builder.Property(t => t.CancellationReason).HasMaxLength(1000);
         builder.Property(t => t.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+
+        // A branch belongs to at most one ticket per project - permanently, even once that
+        // ticket is Done or Cancelled (a cancelled ticket's branch still carries its old,
+        // possibly-abandoned commits, so letting a different ticket reclaim it would silently
+        // mix that stale work into the new ticket's history). Filtered because most tickets
+        // have no branch yet and SQL Server would otherwise only allow one NULL. The app-level
+        // check in TicketService.LinkBranchAsync exists to fail with a clear message before
+        // this ever fires - this index is the hard backstop, not the primary guard.
+        builder.HasIndex(t => new { t.ProjectId, t.BranchName })
+            .IsUnique()
+            .HasFilter("[BranchName] IS NOT NULL");
 
         builder.Navigation(t => t.Assignments).UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.Navigation(t => t.Commits).UsePropertyAccessMode(PropertyAccessMode.Field);

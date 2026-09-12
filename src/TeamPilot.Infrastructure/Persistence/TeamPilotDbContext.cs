@@ -16,6 +16,8 @@ public class TeamPilotDbContext(DbContextOptions<TeamPilotDbContext> options) : 
 
     public DbSet<Instruction> Instructions => Set<Instruction>();
 
+    public DbSet<InstructionTemplate> InstructionTemplates => Set<InstructionTemplate>();
+
     public DbSet<Commit> Commits => Set<Commit>();
 
     public DbSet<Review> Reviews => Set<Review>();

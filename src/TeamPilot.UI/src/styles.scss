@@ -35,3 +35,59 @@ body {
 .cursor-pointer {
   cursor: pointer;
 }
+
+// Slimmer, sticky top nav so project links stay reachable while scrolling a long board/list.
+.navbar {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}
+
+// Ticket board columns — one accent color per workflow stage, distinct from the status-badge
+// palette used elsewhere (this is about telling the 4 columns apart at a glance, not restating
+// the badge's meaning).
+$board-todo-color: #2f6fa8;
+$board-inprogress-color: #e8a33d;
+$board-forreview-color: #8e44ad;
+$board-done-color: #2f9e44;
+
+.board-column {
+  border-radius: $border-radius;
+  border-top: 4px solid transparent;
+}
+
+.board-column--todo {
+  background-color: rgba($board-todo-color, 0.08);
+  border-top-color: $board-todo-color;
+}
+
+.board-column--inprogress {
+  background-color: rgba($board-inprogress-color, 0.1);
+  border-top-color: $board-inprogress-color;
+}
+
+.board-column--forreview {
+  background-color: rgba($board-forreview-color, 0.08);
+  border-top-color: $board-forreview-color;
+}
+
+.board-column--done {
+  background-color: rgba($board-done-color, 0.08);
+  border-top-color: $board-done-color;
+}
+
+.board-column-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ticket-card {
+  transition:
+    transform 0.15s ease-in-out,
+    box-shadow 0.15s ease-in-out;
+}
+
+.ticket-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+}

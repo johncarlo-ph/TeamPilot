@@ -3,11 +3,11 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
-  AgentWorkResultDto,
-  AssignSubAgentsRequest,
+  CancelTicketRequest,
   CreateTicketRequest,
   TicketDetailDto,
   TicketDto,
+  TicketPipelineResultDto,
   TicketStatus,
 } from '../models';
 
@@ -32,18 +32,15 @@ export class TicketsService {
     return this.http.get<TicketDetailDto>(`${this.apiBaseUrl}/tickets/${id}`);
   }
 
-  assignAgents(id: string, request: AssignSubAgentsRequest): Observable<TicketDto> {
-    return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${id}/assign-agents`, request);
-  }
-
-  executeAgent(ticketId: string, agentId: string): Observable<AgentWorkResultDto> {
-    return this.http.post<AgentWorkResultDto>(
-      `${this.apiBaseUrl}/tickets/${ticketId}/agents/${agentId}/execute`,
-      null
-    );
+  startPipeline(id: string): Observable<TicketPipelineResultDto> {
+    return this.http.post<TicketPipelineResultDto>(`${this.apiBaseUrl}/tickets/${id}/start`, null);
   }
 
   moveToReview(id: string): Observable<TicketDto> {
     return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${id}/move-to-review`, null);
+  }
+
+  cancel(id: string, request: CancelTicketRequest): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${id}/cancel`, request);
   }
 }

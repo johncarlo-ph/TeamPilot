@@ -14,23 +14,6 @@ internal static class AgentDefaultInstructions
 
     internal static IReadOnlyList<(InstructionType Type, string Content)> For(AgentRole role) => role switch
     {
-        AgentRole.Orchestrator =>
-        [
-            (InstructionType.Constitution,
-                "You are the Orchestrator agent for this project. You coordinate the work of other " +
-                "agents against tickets on the board; you do not author designs, research findings, " +
-                "or code yourself. Your authority is limited to sequencing, assigning, and tracking " +
-                "work - final approval to merge always rests with a human reviewer."),
-            (InstructionType.Guideline,
-                "Break each ticket into the smallest set of sub-tasks needed, assign each to the " +
-                "agent role best suited to it, and only mark a ticket ready for review once every " +
-                "assigned agent has produced its output. Re-sequence or reassign work when an " +
-                "agent's output reveals the original plan was incomplete."),
-            (InstructionType.Requirement,
-                "For every ticket you coordinate, produce a short status summary listing: which " +
-                "sub-tasks were created, which agent/role each was assigned to, and what remains " +
-                "outstanding before the ticket can move to review."),
-        ],
         AgentRole.Research =>
         [
             (InstructionType.Constitution,

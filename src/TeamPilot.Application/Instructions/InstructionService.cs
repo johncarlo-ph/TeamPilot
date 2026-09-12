@@ -1,5 +1,6 @@
 using FluentValidation;
 using TeamPilot.Application.Agents;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -13,6 +14,7 @@ public sealed class InstructionService(
     IAgentRepository agentRepository,
     IInstructionRepository instructionRepository,
     IProjectAccessGuard projectAccessGuard,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<AddInstructionVersionRequest> addVersionValidator) : IInstructionService
 {
@@ -42,6 +44,8 @@ public sealed class InstructionService(
         await projectAccessGuard.EnsureAccessAsync(agent.ProjectId, cancellationToken);
 
         var instruction = agent.AddInstructionVersion(request.Type, request.Content, request.UpdatedBy);
+
+        await auditLogger.LogActionAsync(AuditEventType.AgentInstructionUpdated, $"{request.Type} instructions updated for agent '{agent.Name}' (v{instruction.Version}).", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(instruction);

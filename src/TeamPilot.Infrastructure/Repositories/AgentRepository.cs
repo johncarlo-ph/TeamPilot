@@ -20,8 +20,10 @@ public class AgentRepository(TeamPilotDbContext dbContext) : IAgentRepository
             .OrderBy(a => a.Name)
             .ToListAsync(cancellationToken);
 
-    public Task<bool> HasOrchestratorAsync(Guid projectId, CancellationToken cancellationToken = default) =>
-        dbContext.Agents.AnyAsync(a => a.ProjectId == projectId && a.Role == AgentRole.Orchestrator, cancellationToken);
+    public Task<Agent?> GetByProjectAndRoleAsync(Guid projectId, AgentRole role, CancellationToken cancellationToken = default) =>
+        dbContext.Agents
+            .Include(a => a.Instructions)
+            .FirstOrDefaultAsync(a => a.ProjectId == projectId && a.Role == role && a.Status == AgentStatus.Active, cancellationToken);
 
     public async Task AddAsync(Agent agent, CancellationToken cancellationToken = default) =>
         await dbContext.Agents.AddAsync(agent, cancellationToken);

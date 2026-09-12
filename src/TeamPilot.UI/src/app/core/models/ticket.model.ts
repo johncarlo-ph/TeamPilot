@@ -10,6 +10,7 @@ export interface TicketDto {
   description: string;
   status: TicketStatus;
   branchName: string | null;
+  cancellationReason: string | null;
   createdAtUtc: string;
   updatedAtUtc: string | null;
 }
@@ -27,6 +28,7 @@ export interface TicketDetailDto {
   description: string;
   status: TicketStatus;
   branchName: string | null;
+  cancellationReason: string | null;
   assignments: TicketAgentAssignmentDto[];
   commits: CommitDto[];
   reviews: ReviewDto[];
@@ -45,6 +47,6 @@ export interface CreateBranchRequest {
   branchName: string;
 }
 
-export interface AssignSubAgentsRequest {
-  agentIds: string[];
+export interface CancelTicketRequest {
+  reason: string | null;
 }

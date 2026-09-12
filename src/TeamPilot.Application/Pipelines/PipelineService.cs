@@ -1,15 +1,18 @@
 using FluentValidation;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Pipelines.Dtos;
 using TeamPilot.Domain.Entities;
+using TeamPilot.Domain.Enums;
 
 namespace TeamPilot.Application.Pipelines;
 
 public sealed class PipelineService(
     IPipelineRunRepository pipelineRunRepository,
     IProjectAccessGuard projectAccessGuard,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<CompletePipelineRunRequest> completeValidator) : IPipelineService
 {
@@ -19,6 +22,8 @@ public sealed class PipelineService(
 
         var pipelineRun = PipelineRun.Create(projectId, ticketId, triggerReason);
         await pipelineRunRepository.AddAsync(pipelineRun, cancellationToken);
+
+        await auditLogger.LogActionAsync(AuditEventType.PipelineRunTriggered, $"Pipeline run triggered: {triggerReason}", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(pipelineRun);
@@ -32,6 +37,8 @@ public sealed class PipelineService(
         await projectAccessGuard.EnsureAccessAsync(pipelineRun.ProjectId, cancellationToken);
 
         pipelineRun.Start();
+
+        await auditLogger.LogActionAsync(AuditEventType.PipelineRunStarted, $"Pipeline run {pipelineRun.Id} started.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(pipelineRun);
@@ -47,6 +54,8 @@ public sealed class PipelineService(
         await projectAccessGuard.EnsureAccessAsync(pipelineRun.ProjectId, cancellationToken);
 
         pipelineRun.Complete(request.Succeeded, request.LogOutput);
+
+        await auditLogger.LogActionAsync(AuditEventType.PipelineRunCompleted, $"Pipeline run {pipelineRun.Id} completed ({(request.Succeeded ? "Succeeded" : "Failed")}).", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(pipelineRun);

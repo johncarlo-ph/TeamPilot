@@ -31,17 +31,10 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
         return Ok(ticket);
     }
 
-    [HttpPost("api/tickets/{id:guid}/assign-agents")]
-    public async Task<ActionResult<TicketDto>> AssignAgents(Guid id, [FromBody] AssignSubAgentsRequest request, CancellationToken cancellationToken)
+    [HttpPost("api/tickets/{id:guid}/start")]
+    public async Task<ActionResult<TicketPipelineResultDto>> Start(Guid id, CancellationToken cancellationToken)
     {
-        var ticket = await orchestrationService.AssignSubAgentsAsync(id, request, cancellationToken);
-        return Ok(ticket);
-    }
-
-    [HttpPost("api/tickets/{id:guid}/agents/{agentId:guid}/execute")]
-    public async Task<ActionResult<AgentWorkResultDto>> ExecuteAgentWork(Guid id, Guid agentId, CancellationToken cancellationToken)
-    {
-        var result = await orchestrationService.ExecuteAgentWorkAsync(id, agentId, cancellationToken);
+        var result = await orchestrationService.RunPipelineAsync(id, cancellationToken);
         return Ok(result);
     }
 
@@ -49,6 +42,13 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
     public async Task<ActionResult<TicketDto>> MoveToReview(Guid id, CancellationToken cancellationToken)
     {
         var ticket = await ticketService.MoveToReviewAsync(id, cancellationToken);
+        return Ok(ticket);
+    }
+
+    [HttpPost("api/tickets/{id:guid}/cancel")]
+    public async Task<ActionResult<TicketDto>> Cancel(Guid id, [FromBody] CancelTicketRequest request, CancellationToken cancellationToken)
+    {
+        var ticket = await ticketService.CancelAsync(id, request, cancellationToken);
         return Ok(ticket);
     }
 }

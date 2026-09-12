@@ -23,6 +23,20 @@ public class GitController(
         return Ok(ticket);
     }
 
+    [HttpDelete("api/git/branches/{ticketId:guid}")]
+    public async Task<ActionResult<TicketDto>> DeleteBranch(Guid ticketId, CancellationToken cancellationToken)
+    {
+        var ticket = await ticketService.DeleteBranchAsync(ticketId, cancellationToken);
+        return Ok(ticket);
+    }
+
+    [HttpGet("api/git/branches/exists")]
+    public async Task<ActionResult<bool>> BranchExists([FromQuery] Guid ticketId, [FromQuery] string branchName, CancellationToken cancellationToken)
+    {
+        var exists = await ticketService.BranchExistsAsync(ticketId, branchName, cancellationToken);
+        return Ok(exists);
+    }
+
     [HttpGet("api/projects/{projectId:guid}/git/diff")]
     public async Task<ActionResult<GitDiffResult>> GetDiff(Guid projectId, [FromQuery] string source, [FromQuery] string target, CancellationToken cancellationToken)
     {

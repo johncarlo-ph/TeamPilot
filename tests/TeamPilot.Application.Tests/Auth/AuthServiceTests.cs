@@ -100,7 +100,7 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RefreshAsync_WithValidToken_RevokesOldTokenAndIssuesNewOne()
+    public async Task RefreshAsync_WithValidToken_RevokesOldTokenAndIssuesNewOneWithoutAuditLogging()
     {
         var user = User.Create("Jane Doe", "user@example.com");
         var existingToken = RefreshToken.Create(user.Id, "hash-of:old-token-value", DateTime.UtcNow.AddDays(1));
@@ -115,9 +115,12 @@ public class AuthServiceTests
 
         Assert.True(existingToken.IsRevoked);
         Assert.Equal("raw-refresh-token-value", result.RefreshToken);
+
+        // A silent background refresh is not a user-initiated action, so it must not clutter
+        // the audit log the way login/logout/token-reuse events do.
         _auditLogger.Verify(
-            a => a.LogAsync(AuditEventType.TokenRefreshed, user.Id, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
-            Times.Once);
+            a => a.LogAsync(It.IsAny<AuditEventType>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

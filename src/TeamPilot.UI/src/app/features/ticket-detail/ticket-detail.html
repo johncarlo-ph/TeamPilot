@@ -9,37 +9,44 @@
     <div>
       <h1 class="h3 mb-1">{{ ticket.title }}</h1>
       <p class="text-body-secondary mb-0">{{ ticket.description || 'No description.' }}</p>
+      @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
+        <p class="small text-body-secondary fst-italic mb-0 mt-1">Reason: {{ ticket.cancellationReason }}</p>
+      }
     </div>
-    <app-status-badge [value]="ticket.status"></app-status-badge>
+    <div class="d-flex align-items-center gap-2">
+      @if (ticket.status === 'ToDo' || ticket.status === 'InProgress' || ticket.status === 'ForReview') {
+        <button type="button" class="btn btn-sm btn-outline-danger" (click)="cancelTicket()">Cancel Ticket</button>
+      }
+      <app-status-badge [value]="ticket.status"></app-status-badge>
+    </div>
   </div>
 
   <div class="row g-3">
     <div class="col-12 col-lg-7">
       <div class="card mb-3">
-        <div class="card-header">Agent Assignments</div>
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <span>Agent Assignments</span>
+          @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
+            <button type="button" class="btn btn-sm btn-primary" [disabled]="starting()" (click)="startPipeline()">
+              {{ starting() ? 'Running...' : (ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline') }}
+            </button>
+          }
+        </div>
         <div class="card-body">
           @if (!ticket.assignments.length) {
-            <p class="text-body-secondary mb-0">No agents assigned yet.</p>
+            <p class="text-body-secondary mb-0">
+              No agents assigned yet - Research, Design, Coding, and Testing run automatically
+              in order once started.
+            </p>
           } @else {
             <ul class="list-group list-group-flush">
               @for (assignment of ticket.assignments; track assignment.agentId) {
-                <li class="list-group-item d-flex align-items-center justify-content-between px-0">
-                  <div>
-                    <div class="fw-semibold">{{ agentName(assignment.agentId) }}</div>
-                    <div class="small text-body-secondary">
-                      {{ assignment.roleAtAssignment }} &middot; assigned
-                      {{ assignment.assignedAtUtc | date: 'short' }}
-                    </div>
+                <li class="list-group-item px-0">
+                  <div class="fw-semibold">{{ agentName(assignment.agentId) }}</div>
+                  <div class="small text-body-secondary">
+                    {{ assignment.roleAtAssignment }} &middot; assigned
+                    {{ assignment.assignedAtUtc | date: 'short' }}
                   </div>
-                  @if (ticket.status === 'InProgress') {
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-outline-primary"
-                      (click)="executeAgent(assignment.agentId)"
-                    >
-                      Execute
-                    </button>
-                  }
                 </li>
               }
             </ul>
@@ -60,7 +67,12 @@
                   >{{ commit.message }}
                 </p>
                 <p class="small text-body-secondary mb-1">
-                  {{ commit.branchName }} &middot; {{ commit.createdAtUtc | date: 'short' }}
+                  @if (branchUrl(commit.branchName); as url) {
+                    <a [href]="url" target="_blank" rel="noopener noreferrer">{{ commit.branchName }}</a>
+                  } @else {
+                    {{ commit.branchName }}
+                  }
+                  &middot; {{ commit.createdAtUtc | date: 'short' }}
                 </p>
                 <app-diff-viewer [content]="commit.diffContent"></app-diff-viewer>
               </div>
@@ -69,7 +81,11 @@
         </div>
       </div>
 
-      <app-branch-panel [ticket]="ticket" (branchCreated)="onBranchCreated()"></app-branch-panel>
+      <app-branch-panel
+        [ticket]="ticket"
+        [remoteUrl]="project()?.remoteUrl ?? null"
+        (changed)="onBranchChanged()"
+      ></app-branch-panel>
     </div>
 
     <div class="col-12 col-lg-5">

@@ -1,5 +1,6 @@
 using FluentValidation;
 using Microsoft.Extensions.Logging;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -22,6 +23,7 @@ public sealed class ApprovalGateService(
     IPipelineService pipelineService,
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<SubmitReviewRequest> validator,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
@@ -44,6 +46,8 @@ public sealed class ApprovalGateService(
 
         var review = Review.Create(ticket.Id, request.ReviewerName, request.Decision, request.Comments);
         ticket.RecordReview(review);
+
+        await auditLogger.LogActionAsync(AuditEventType.ReviewSubmitted, $"Review ({request.Decision}) submitted for ticket '{ticket.Title}' by {request.ReviewerName}.", cancellationToken);
 
         switch (request.Decision)
         {

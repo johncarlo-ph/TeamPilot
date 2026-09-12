@@ -1,13 +1,13 @@
 // String-literal unions mirroring the API's C# enums exactly (JsonStringEnumConverter
 // serializes every enum as its member name, never a raw integer).
 
-export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done';
+export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done' | 'Cancelled';
 
-export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done'];
+export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done', 'Cancelled'];
 
-export type AgentRole = 'Orchestrator' | 'Research' | 'Design' | 'Coding' | 'Testing';
+export type AgentRole = 'Research' | 'Design' | 'Coding' | 'Testing';
 
-export const AGENT_ROLES: AgentRole[] = ['Orchestrator', 'Research', 'Design', 'Coding', 'Testing'];
+export const AGENT_ROLES: AgentRole[] = ['Research', 'Design', 'Coding', 'Testing'];
 
 export type AgentStatus = 'Active' | 'Inactive';
 
@@ -15,8 +15,30 @@ export type AuditEventType =
   | 'LoginSucceeded'
   | 'LoginFailed'
   | 'Logout'
-  | 'TokenRefreshed'
-  | 'TokenReuseDetected';
+  | 'TokenReuseDetected'
+  | 'ProjectCreated'
+  | 'ProjectUpdated'
+  | 'AgentConfigurationUpdated'
+  | 'AgentStatusUpdated'
+  | 'AgentInstructionUpdated'
+  | 'InstructionTemplateCreated'
+  | 'InstructionTemplateUpdated'
+  | 'InstructionTemplateDeleted'
+  | 'TicketCreated'
+  | 'TicketPipelineStarted'
+  | 'TicketMovedToReview'
+  | 'ReviewSubmitted'
+  | 'ConflictsDetected'
+  | 'ConflictResolutionSuggested'
+  | 'ConflictResolvedManually'
+  | 'ConflictAiSuggestionAccepted'
+  | 'GitBranchCreated'
+  | 'PipelineRunTriggered'
+  | 'PipelineRunStarted'
+  | 'PipelineRunCompleted'
+  | 'UserRolesChanged'
+  | 'UserStatusChanged'
+  | 'UserProjectAssignmentsChanged';
 
 export type ConflictStatus =
   | 'Detected'

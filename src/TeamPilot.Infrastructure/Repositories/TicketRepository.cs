@@ -30,4 +30,16 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
 
     public async Task AddAsync(Ticket ticket, CancellationToken cancellationToken = default) =>
         await dbContext.Tickets.AddAsync(ticket, cancellationToken);
+
+    public async Task<TicketStatus?> GetStatusAsync(Guid id, CancellationToken cancellationToken = default) =>
+        await dbContext.Tickets
+            .AsNoTracking()
+            .Where(t => t.Id == id)
+            .Select(t => (TicketStatus?)t.Status)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public async Task<Ticket?> GetByBranchNameAsync(Guid projectId, string branchName, CancellationToken cancellationToken = default) =>
+        await dbContext.Tickets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.ProjectId == projectId && t.BranchName == branchName, cancellationToken);
 }

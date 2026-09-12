@@ -236,6 +236,41 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.ToTable("Instructions", (string)null);
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.InstructionTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("InstructionTemplates", (string)null);
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.PipelineRun", b =>
                 {
                     b.Property<Guid>("Id")
@@ -409,6 +444,10 @@ namespace TeamPilot.Infrastructure.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -435,7 +474,9 @@ namespace TeamPilot.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectId");
+                    b.HasIndex("ProjectId", "BranchName")
+                        .IsUnique()
+                        .HasFilter("[BranchName] IS NOT NULL");
 
                     b.ToTable("Tickets", (string)null);
                 });

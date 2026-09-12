@@ -1,6 +1,13 @@
 @if (loading()) {
   <div class="text-body-secondary">Loading instructions...</div>
 } @else {
+  <div class="alert alert-warning small" role="alert">
+    <strong>Mid-pipeline edits only affect stages that haven't started yet.</strong>
+    If you edit an instruction while this agent's ticket is already running, it applies to any
+    stage that hasn't started yet - including a Coding retry after a Testing failure - but a
+    stage already in progress will finish using whatever instructions were current when it
+    started.
+  </div>
   <form [formGroup]="form" (ngSubmit)="save()">
     @for (type of types; track type) {
       <div class="mb-3">
@@ -8,6 +15,20 @@
           <span>{{ type }}</span>
           <span class="text-body-secondary small">current: {{ currentVersionLabel(type) }}</span>
         </label>
+        <div class="mb-1">
+          <label class="form-label small text-body-secondary mb-1">Template</label>
+          <select
+            class="form-select form-select-sm"
+            [value]="selectedTemplateIds()[type]"
+            [disabled]="!templatesByType()[type].length"
+            (change)="applyTemplate(type, $any($event.target).value)"
+          >
+            <option value="">Populate from template...</option>
+            @for (template of templatesByType()[type]; track template.id) {
+              <option [value]="template.id">{{ template.name }}</option>
+            }
+          </select>
+        </div>
         <textarea class="form-control" rows="4" [formControlName]="type"></textarea>
         @if (historyByType()[type].length > 1) {
           <details class="small text-body-secondary mt-1">

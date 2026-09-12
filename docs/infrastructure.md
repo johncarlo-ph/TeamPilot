@@ -79,10 +79,20 @@ Mistral later means adding a new `case` and a new connector class — no changes
 
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
 `Project` owns its own sandbox clone, the service holds no per-project state; every method
-(`CloneAsync`, `PushAsync`, `FetchAsync`, `EnsureBranchAsync`, `CommitFileAsync`, `GetDiffAsync`,
-`DetectMergeConflictsAsync`, `MergeBranchAsync`) opens and disposes its own
-`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
-repository rather than opening an existing one).
+(`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
+`CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeBranchAsync`,
+`DeleteBranchAsync`) opens and disposes its own `LibGit2Sharp.Repository` handle per call
+(`CloneAsync` is the one exception — it creates the repository rather than opening an existing
+one).
+
+**`DeleteBranchAsync` pushes an empty source ref (`:refs/heads/{branchName}`) to delete the
+remote branch** — the standard Git protocol convention, supported directly by LibGit2Sharp's
+`Network.Push(Remote, string, PushOptions)` overload rather than needing a special "delete" API.
+It also guards against deleting the branch that's currently checked out in the sandbox (which
+LibGit2Sharp would otherwise reject): if `repo.Head` is sitting on the branch being deleted, it
+checks out `baseBranchName` first. The local branch ref is removed after the remote delete
+succeeds; if it was never fetched/created locally in the first place, that's a silent no-op
+rather than an error.
 
 **Projects are cloned into a server-managed sandbox, not pointed at a path someone else prepared.**
 `LibGit2SharpGitService.CloneAsync(projectId, remoteUrl, accessToken, ct)` computes
@@ -113,6 +123,17 @@ on one instance won't decrypt on another.
 - Repository classes are thin: a query or two per method, `AsNoTracking()` for anything not
   going to be mutated, `.Include()` only where the caller actually needs the related data
   loaded (see `TicketRepository.GetByIdAsync` vs. `ListAsync`).
+- `TicketRepository.GetStatusAsync` and `GetByBranchNameAsync` are both deliberately
+  `AsNoTracking()` projections/queries rather than reusing `GetByIdAsync` - a second tracking
+  query against the same already-tracked `Ticket` would just return the change tracker's
+  identity-mapped instance instead of hitting the database, which defeats the point of checking
+  for another request's concurrent update (used by `OrchestrationService` to notice a
+  mid-pipeline cancellation, and by `TicketService.LinkBranchAsync` to enforce one branch per
+  ticket).
+- `Tickets` has a composite unique index on `(ProjectId, BranchName)` with a SQL Server filtered
+  predicate (`HasFilter("[BranchName] IS NOT NULL")`) - the first filtered index in the schema,
+  needed because `BranchName` is nullable for every ticket that hasn't linked one yet and a
+  plain unique index would only tolerate a single `NULL` row per project.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.
@@ -174,8 +195,9 @@ Infrastructure mostly lets exceptions propagate rather than translating them:
 currently bubble up to the API's `GlobalExceptionHandler` and are mapped generically to HTTP
 500. Two places Infrastructure *does* translate an error: `ExternalIdentityValidator` wraps any
 token-validation failure as the Application's own `AuthenticationFailedException` (→ 401), and
-`LibGit2SharpGitService`'s remote operations (`CloneAsync`/`PushAsync`/`FetchAsync`) wrap
-`LibGit2SharpException` as `GitOperationException` (→ 422) — local-only Git operations
+`LibGit2SharpGitService`'s remote operations (`CloneAsync`/`PushAsync`/`FetchAsync`/
+`DeleteBranchAsync`'s remote delete) wrap `LibGit2SharpException` as `GitOperationException`
+(→ 422) — local-only Git operations
 (commit/diff/detect-conflicts/merge) still let `LibGit2SharpException`/`InvalidOperationException`
 bubble to 500/409, since those failures point at a server-side bug rather than bad user input.
 

@@ -1,4 +1,5 @@
 using Moq;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Pipelines;
@@ -14,6 +15,7 @@ public class PipelineServiceTests
 {
     private readonly Mock<IPipelineRunRepository> _pipelineRunRepository = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly PipelineService _sut;
 
@@ -22,6 +24,7 @@ public class PipelineServiceTests
         _sut = new PipelineService(
             _pipelineRunRepository.Object,
             _projectAccessGuard.Object,
+            _auditLogger.Object,
             _unitOfWork.Object,
             new CompletePipelineRunRequestValidator());
     }

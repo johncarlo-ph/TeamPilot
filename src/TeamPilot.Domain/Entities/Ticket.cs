@@ -26,6 +26,8 @@ public class Ticket : Entity
 
     public string? BranchName { get; private set; }
 
+    public string? CancellationReason { get; private set; }
+
     public IReadOnlyCollection<TicketAgentAssignment> Assignments => _assignments.AsReadOnly();
 
     public IReadOnlyCollection<Commit> Commits => _commits.AsReadOnly();
@@ -92,6 +94,14 @@ public class Ticket : Entity
         if (string.IsNullOrWhiteSpace(branchName))
         {
             throw new ArgumentException("Branch name is required.", nameof(branchName));
+        }
+
+        // Guards against a gap UnlinkBranch would otherwise open: deleting a Cancelled ticket's
+        // branch clears BranchName, which would make this terminal, abandoned ticket look like
+        // it's eligible to link a fresh branch and resume work.
+        if (Status == TicketStatus.Cancelled)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "link a branch");
         }
 
         BranchName = branchName;
@@ -161,6 +171,43 @@ public class Ticket : Entity
         }
 
         _conflicts.Add(conflict);
+        MarkUpdated();
+    }
+
+    /// <summary>
+    /// Abandons the ticket - terminal, like <see cref="Approve"/>, but reachable from any
+    /// pre-merge state (unlike <see cref="Approve"/>, which only applies from <see cref="TicketStatus.ForReview"/>).
+    /// Once <see cref="TicketStatus.Done"/>, the work is already merged, so there's nothing left
+    /// to abandon.
+    /// </summary>
+    public void Cancel(string? reason)
+    {
+        if (Status is not (TicketStatus.ToDo or TicketStatus.InProgress or TicketStatus.ForReview))
+        {
+            throw new InvalidTicketStateTransitionException(Status, "cancel");
+        }
+
+        Status = TicketStatus.Cancelled;
+        CancellationReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        MarkUpdated();
+    }
+
+    /// <summary>
+    /// Clears the linked branch after it's been deleted from Git - only allowed once the ticket
+    /// is <see cref="TicketStatus.Cancelled"/>, since that's the only state where the branch's
+    /// commits are known to be abandoned rather than still-needed work. This is also what frees
+    /// the branch name up for a different ticket to claim (see the unique index on
+    /// <c>(ProjectId, BranchName)</c>) - reusing a name whose branch still exists would silently
+    /// mix its old commits into the new ticket.
+    /// </summary>
+    public void UnlinkBranch()
+    {
+        if (Status != TicketStatus.Cancelled)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "delete the linked branch");
+        }
+
+        BranchName = null;
         MarkUpdated();
     }
 }

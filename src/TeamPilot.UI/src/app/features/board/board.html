@@ -1,7 +1,10 @@
-<div class="d-flex align-items-center justify-content-between mb-4">
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
   <div>
     <a routerLink="/projects" class="small text-decoration-none">&larr; All projects</a>
-    <h1 class="h3 mb-0">Ticket Board</h1>
+    <div class="d-flex align-items-baseline gap-2 flex-wrap">
+      <h1 class="h3 mb-0">{{ project()?.name ?? 'Loading…' }}</h1>
+      <span class="text-body-secondary">Ticket Board</span>
+    </div>
   </div>
   <div class="d-flex gap-2">
     <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']">Agents</a>
@@ -18,9 +21,9 @@
   <div class="row g-3">
     @for (column of columns; track column.status) {
       <div class="col-12 col-md-6 col-xl-3">
-        <div class="bg-body-tertiary rounded-3 p-2 h-100">
-          <h2 class="h6 text-uppercase text-body-secondary px-1 mb-2">
-            {{ column.title }}
+        <div class="board-column p-2 h-100" [class]="column.accentClass">
+          <h2 class="board-column-title px-1 mb-2">
+            <span aria-hidden="true">{{ column.icon }}</span> {{ column.title }}
             <span class="badge text-bg-light border ms-1">{{ ticketsByStatus()[column.status].length }}</span>
           </h2>
           <div
@@ -49,13 +52,6 @@
   (closed)="createFormOpen.set(false)"
   (created)="createTicket($event)"
 ></app-create-ticket-form>
-
-<app-assign-agents-modal
-  [open]="assignTarget() !== null"
-  [agents]="agents()"
-  (closed)="assignTarget.set(null)"
-  (assigned)="confirmAssignAgents($event)"
-></app-assign-agents-modal>
 
 <app-review-form
   [open]="reviewTarget() !== null"

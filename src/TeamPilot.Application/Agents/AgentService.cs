@@ -1,41 +1,45 @@
 using FluentValidation;
 using TeamPilot.Application.Agents.Dtos;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
-using TeamPilot.Application.Projects;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
-using TeamPilot.Domain.Exceptions;
 
 namespace TeamPilot.Application.Agents;
 
 public sealed class AgentService(
     IAgentRepository agentRepository,
-    IProjectRepository projectRepository,
     IProjectAccessGuard projectAccessGuard,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
-    IValidator<CreateAgentRequest> createValidator,
     IValidator<UpdateAgentConfigurationRequest> updateConfigurationValidator) : IAgentService
 {
-    public async Task<AgentDto> CreateAsync(Guid projectId, CreateAgentRequest request, CancellationToken cancellationToken = default)
+    private static readonly AgentRole[] PipelineRoles =
+        [AgentRole.Research, AgentRole.Design, AgentRole.Coding, AgentRole.Testing];
+
+    public async Task EnsureDefaultAgentsAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
-        await createValidator.EnsureValidAsync(request, cancellationToken);
-        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+        var created = false;
 
-        _ = await projectRepository.GetByIdAsync(projectId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Project), projectId);
-
-        if (request.Role == AgentRole.Orchestrator && await agentRepository.HasOrchestratorAsync(projectId, cancellationToken))
+        foreach (var role in PipelineRoles)
         {
-            throw new ProjectAlreadyHasOrchestratorException(projectId);
+            var existing = await agentRepository.GetByProjectAndRoleAsync(projectId, role, cancellationToken);
+            if (existing is not null)
+            {
+                continue;
+            }
+
+            var agent = Agent.Create(projectId, $"{role} Agent", role);
+            await agentRepository.AddAsync(agent, cancellationToken);
+            created = true;
         }
 
-        var agent = Agent.Create(projectId, request.Name, request.Role, request.ConfigurationJson ?? "{}");
-        await agentRepository.AddAsync(agent, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return ToDto(agent);
+        if (created)
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<AgentDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -66,6 +70,8 @@ public sealed class AgentService(
         await projectAccessGuard.EnsureAccessAsync(agent.ProjectId, cancellationToken);
 
         agent.UpdateConfiguration(request.ConfigurationJson);
+
+        await auditLogger.LogActionAsync(AuditEventType.AgentConfigurationUpdated, $"Configuration updated for agent '{agent.Name}'.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(agent);
@@ -87,6 +93,7 @@ public sealed class AgentService(
             agent.Deactivate();
         }
 
+        await auditLogger.LogActionAsync(AuditEventType.AgentStatusUpdated, $"Agent '{agent.Name}' set to {request.Status}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(agent);

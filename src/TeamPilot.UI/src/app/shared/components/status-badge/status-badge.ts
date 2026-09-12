@@ -6,6 +6,7 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   InProgress: 'text-bg-primary',
   ForReview: 'text-bg-warning',
   Done: 'text-bg-success',
+  Cancelled: 'text-bg-dark',
   // Agent / user status
   Active: 'text-bg-success',
   Inactive: 'text-bg-secondary',

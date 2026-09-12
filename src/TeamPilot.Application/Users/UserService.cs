@@ -10,6 +10,7 @@ namespace TeamPilot.Application.Users;
 public sealed class UserService(
     IUserRepository userRepository,
     IRefreshTokenRepository refreshTokenRepository,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork) : IUserService
 {
     public async Task<IReadOnlyList<UserDto>> ListAsync(CancellationToken cancellationToken = default)
@@ -32,6 +33,8 @@ public sealed class UserService(
             ?? throw new NotFoundException(nameof(User), id);
 
         user.SetRoles(request.Roles);
+
+        await auditLogger.LogActionAsync(AuditEventType.UserRolesChanged, $"Roles for '{user.Name}' set to [{string.Join(", ", request.Roles)}].", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(user);
@@ -55,6 +58,7 @@ public sealed class UserService(
             user.Enable();
         }
 
+        await auditLogger.LogActionAsync(AuditEventType.UserStatusChanged, $"'{user.Name}' set to {request.Status}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(user);
@@ -62,10 +66,12 @@ public sealed class UserService(
 
     public async Task SetAssignedProjectsAsync(Guid id, SetUserProjectsRequest request, CancellationToken cancellationToken = default)
     {
-        _ = await userRepository.GetByIdAsync(id, cancellationToken)
+        var user = await userRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException(nameof(User), id);
 
         await userRepository.SetAssignedProjectsAsync(id, request.ProjectIds, cancellationToken);
+
+        await auditLogger.LogActionAsync(AuditEventType.UserProjectAssignmentsChanged, $"Project assignments for '{user.Name}' updated ({request.ProjectIds.Count} project(s)).", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 

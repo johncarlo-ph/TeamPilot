@@ -1,4 +1,5 @@
 using Moq;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -8,6 +9,7 @@ using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Application.Tickets.Validators;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
 using Xunit;
 
 namespace TeamPilot.Application.Tests.Tickets;
@@ -19,6 +21,7 @@ public class TicketServiceTests
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly TicketService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
@@ -34,9 +37,11 @@ public class TicketServiceTests
             _gitService.Object,
             _credentialProtector.Object,
             _projectAccessGuard.Object,
+            _auditLogger.Object,
             _unitOfWork.Object,
             new CreateTicketRequestValidator(),
-            new CreateBranchRequestValidator());
+            new CreateBranchRequestValidator(),
+            new CancelTicketRequestValidator());
     }
 
     [Fact]
@@ -96,6 +101,57 @@ public class TicketServiceTests
     }
 
     [Fact]
+    public async Task DeleteBranchAsync_WhenTicketIsCancelled_DeletesBranchAndClearsBranchName()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.LinkBranch("feature/fix-bug");
+        ticket.Cancel("No longer needed");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.DeleteBranchAsync(ticket.Id);
+
+        Assert.Null(result.BranchName);
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/fix-bug", _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
+            Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DeleteBranchAsync_WhenTicketIsNotCancelled_ThrowsInvalidTicketStateTransitionExceptionWithoutTouchingGit()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.LinkBranch("feature/fix-bug");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<InvalidTicketStateTransitionException>(() => _sut.DeleteBranchAsync(ticket.Id));
+
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteBranchAsync_WhenTicketHasNoLinkedBranch_ThrowsInvalidOperationException()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.Cancel("No longer needed");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.DeleteBranchAsync(ticket.Id));
+    }
+
+    [Fact]
     public async Task LinkBranchAsync_WithValidBranchName_EnsuresBranchAndLinksTicket()
     {
         var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
@@ -110,5 +166,125 @@ public class TicketServiceTests
         _gitService.Verify(g => g.FetchAsync(_project.RepositoryPath, "plaintext-token", It.IsAny<CancellationToken>()), Times.Once);
         _gitService.Verify(g => g.EnsureBranchAsync(_project.RepositoryPath, "feature/fix-bug", _project.BaseBranch, It.IsAny<CancellationToken>()), Times.Once);
         _gitService.Verify(g => g.PushAsync(_project.RepositoryPath, "feature/fix-bug", "plaintext-token", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task LinkBranchAsync_WhenBranchAlreadyLinkedToAnotherTicket_ThrowsBranchAlreadyLinkedException()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var otherTicket = Ticket.Create(_project.Id, "Add feature", "desc");
+        otherTicket.LinkBranch("feature/shared");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+        _ticketRepository
+            .Setup(r => r.GetByBranchNameAsync(_project.Id, "feature/shared", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherTicket);
+
+        await Assert.ThrowsAsync<BranchAlreadyLinkedException>(() => _sut.LinkBranchAsync(ticket.Id, "feature/shared"));
+        _gitService.Verify(g => g.EnsureBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task LinkBranchAsync_WhenTicketIsCancelled_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.Cancel("No longer needed");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<InvalidTicketStateTransitionException>(() => _sut.LinkBranchAsync(ticket.Id, "feature/fix-bug"));
+    }
+
+    [Fact]
+    public async Task LinkBranchAsync_WhenReLinkingSameTicketToItsOwnBranch_Succeeds()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.LinkBranch("feature/fix-bug");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+        _ticketRepository
+            .Setup(r => r.GetByBranchNameAsync(_project.Id, "feature/fix-bug", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.LinkBranchAsync(ticket.Id, "feature/fix-bug");
+
+        Assert.Equal("feature/fix-bug", result.BranchName);
+    }
+
+    [Fact]
+    public async Task BranchExistsAsync_FetchesRemoteThenReturnsGitServiceResult()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+        _gitService
+            .Setup(g => g.BranchExistsAsync(_project.RepositoryPath, "feature/fix-bug", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var result = await _sut.BranchExistsAsync(ticket.Id, "feature/fix-bug");
+
+        Assert.True(result);
+        _gitService.Verify(g => g.FetchAsync(_project.RepositoryPath, "plaintext-token", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task BranchExistsAsync_WhenTicketDoesNotExist_ThrowsNotFoundException()
+    {
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Ticket?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.BranchExistsAsync(Guid.NewGuid(), "feature/fix-bug"));
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenTicketIsInProgress_SetsStatusToCancelledAndRecordsReason()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.CancelAsync(ticket.Id, new CancelTicketRequest("No longer needed"));
+
+        Assert.Equal(TicketStatus.Cancelled, result.Status);
+        Assert.Equal("No longer needed", result.CancellationReason);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenTicketIsDone_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+        ticket.MoveToReview();
+        ticket.Approve();
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<InvalidTicketStateTransitionException>(
+            () => _sut.CancelAsync(ticket.Id, new CancelTicketRequest(null)));
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenTicketDoesNotExist_ThrowsNotFoundException()
+    {
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Ticket?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.CancelAsync(Guid.NewGuid(), new CancelTicketRequest(null)));
     }
 }

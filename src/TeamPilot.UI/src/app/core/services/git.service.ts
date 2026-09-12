@@ -13,6 +13,15 @@ export class GitService {
     return this.http.post<TicketDto>(`${this.apiBaseUrl}/git/branches`, request);
   }
 
+  deleteBranch(ticketId: string): Observable<TicketDto> {
+    return this.http.delete<TicketDto>(`${this.apiBaseUrl}/git/branches/${ticketId}`);
+  }
+
+  branchExists(ticketId: string, branchName: string): Observable<boolean> {
+    const params = new HttpParams().set('ticketId', ticketId).set('branchName', branchName);
+    return this.http.get<boolean>(`${this.apiBaseUrl}/git/branches/exists`, { params });
+  }
+
   diff(projectId: string, source: string, target: string): Observable<GitDiffResult> {
     const params = new HttpParams().set('source', source).set('target', target);
     return this.http.get<GitDiffResult>(`${this.apiBaseUrl}/projects/${projectId}/git/diff`, {

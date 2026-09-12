@@ -45,6 +45,25 @@ which the API layer maps to HTTP 409 Conflict. `NotFoundException`, `ValidationE
 layer, because "the requested id doesn't exist" or "you don't have permission" are use-case
 concerns, not violations of a business rule about the entity's own state.
 
+**`Ticket.UnlinkBranch` only works once `Cancelled`, and it's the only thing that frees a branch
+name for reuse.** The `(ProjectId, BranchName)` uniqueness enforced in Infrastructure (see
+[docs/infrastructure.md](infrastructure.md)) is otherwise permanent - a branch stays claimed by
+whichever ticket linked it first, even after that ticket is `Done` or `Cancelled`, because the
+branch may still carry commits nobody's accounted for. `UnlinkBranch` is the explicit exception:
+it's only called after the branch has actually been deleted from Git (`TicketService.DeleteBranchAsync`),
+at which point there's nothing left to protect against, so clearing `BranchName` is safe. It
+throws `InvalidTicketStateTransitionException` from any other status - deleting an active
+ticket's branch out from under it would leave `Ticket.BranchName` pointing at nothing.
+
+**`Ticket.Cancel` is a terminal abandon, reachable from any pre-merge status.** Unlike `Approve`
+(only from `ForReview`), `Cancel` accepts `ToDo`, `InProgress`, or `ForReview` — a ticket can be
+abandoned at any point before it's merged, since nothing about abandoning it depends on how far
+the pipeline got. It's not allowed from `Done`: the work is already merged, so there's nothing
+left to cancel, and once `Cancelled` there's no path back (no "reopen") in this pass. The
+optional reason is trimmed and stored as `CancellationReason` rather than discarded, since
+that's the whole point of the feature — capturing *why* (e.g., a requirement changed) is more
+useful later than a bare status flip.
+
 **Dependencies:** none (this is the point).
 
 ## Entities at a glance
@@ -52,9 +71,10 @@ concerns, not violations of a business rule about the entity's own state.
 | Entity | Represents | Key behavior methods |
 |---|---|---|
 | `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
-| `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict` |
-| `Agent` | An AI agent (Orchestrator/Research/Design/Coding/Testing) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
+| `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Cancel` |
+| `Agent` | An AI agent (Research/Design/Coding/Testing) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
+| `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
 | `Review` | A human approval-gate decision | *(immutable once created)* |
 | `Conflict` | A detected merge conflict, with an optional AI-suggested resolution | `RecordAiSuggestion`, `ResolveManually`, `AcceptAiSuggestion` |
@@ -76,7 +96,9 @@ responsibilities (e.g. Research investigates, Coding implements, Testing verifie
 naming any framework or language, so it applies to any project. An admin edits it like any other
 instruction: calling `Agent.AddInstructionVersion` for a type that already has a default adds a
 new version that supersedes it, rather than replacing it in place — the default is never mutated,
-only superseded.
+only superseded. This is the only way to customize an agent's behavior — `Agent` instances
+themselves are never created or deleted through the API; see "Every project always has exactly
+one agent per pipeline role" in [docs/application.md](application.md).
 
 ## Code style notes
 
@@ -130,8 +152,8 @@ ticket.Approve();                             // ForReview -> Done
 ## Error handling
 
 Invariant violations throw a `DomainException` subtype (e.g.
-`InvalidTicketStateTransitionException`, `InvalidConflictStateTransitionException`,
-`ProjectAlreadyHasOrchestratorException`). These are allowed to propagate all the way to the
+`InvalidTicketStateTransitionException`, `InvalidConflictStateTransitionException`). These are
+allowed to propagate all the way to the
 API's `GlobalExceptionHandler`, which maps any `DomainException` to HTTP 409 — the Domain layer
 does not catch or wrap its own exceptions.
 

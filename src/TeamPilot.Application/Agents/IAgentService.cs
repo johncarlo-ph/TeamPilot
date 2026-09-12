@@ -5,10 +5,12 @@ namespace TeamPilot.Application.Agents;
 public interface IAgentService
 {
     /// <summary>
-    /// Creates an agent under a project. Throws <c>ProjectAlreadyHasOrchestratorException</c>
-    /// if <see cref="CreateAgentRequest.Role"/> is Orchestrator and the project already has one.
+    /// Ensures the project has one active agent for each pipeline role
+    /// (Research/Design/Coding/Testing), creating whichever are missing. Called on project
+    /// creation, and again defensively before running a ticket's pipeline so projects created
+    /// before this existed self-heal.
     /// </summary>
-    Task<AgentDto> CreateAsync(Guid projectId, CreateAgentRequest request, CancellationToken cancellationToken = default);
+    Task EnsureDefaultAgentsAsync(Guid projectId, CancellationToken cancellationToken = default);
 
     Task<AgentDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 

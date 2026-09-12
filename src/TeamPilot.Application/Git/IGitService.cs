@@ -20,6 +20,11 @@ public interface IGitService
     /// <summary>Fetches the latest refs from the sandbox's <c>origin</c> remote.</summary>
     Task FetchAsync(string repositoryPath, string accessToken, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns whether <paramref name="branchName"/> already exists, either as a local
+    /// branch or as a remote-tracking branch from <c>origin</c> (reflects the state as of the
+    /// last <see cref="FetchAsync"/>).</summary>
+    Task<bool> BranchExistsAsync(string repositoryPath, string branchName, CancellationToken cancellationToken = default);
+
     /// <summary>Creates <paramref name="branchName"/> from the tip of
     /// <paramref name="baseBranchName"/> if it doesn't already exist locally.</summary>
     Task EnsureBranchAsync(string repositoryPath, string branchName, string baseBranchName, CancellationToken cancellationToken = default);
@@ -38,6 +43,11 @@ public interface IGitService
     Task<GitMergeConflictResult> DetectMergeConflictsAsync(string repositoryPath, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
 
     Task MergeBranchAsync(string repositoryPath, string sourceBranch, string targetBranch, string mergerName, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes <paramref name="branchName"/> from both the remote and the local
+    /// sandbox. <paramref name="baseBranchName"/> is checked out first if the sandbox's HEAD
+    /// happens to be sitting on the branch being deleted.</summary>
+    Task DeleteBranchAsync(string repositoryPath, string branchName, string baseBranchName, string accessToken, CancellationToken cancellationToken = default);
 }
 
 public sealed record GitCommitResult(string CommitHash, string DiffContent);

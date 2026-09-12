@@ -79,6 +79,15 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
             },
             cancellationToken);
 
+    public Task<bool> BranchExistsAsync(string repositoryPath, string branchName, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                return repo.Branches[branchName] != null || repo.Branches[$"origin/{branchName}"] != null;
+            },
+            cancellationToken);
+
     public Task EnsureBranchAsync(string repositoryPath, string branchName, string baseBranchName, CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
@@ -194,6 +203,46 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                     repo.Reset(ResetMode.Hard, target.Tip);
                     throw new InvalidOperationException(
                         $"Merging '{sourceBranch}' into '{targetBranch}' resulted in conflicts. Resolve conflicts before approving.");
+                }
+            },
+            cancellationToken);
+
+    public Task DeleteBranchAsync(string repositoryPath, string branchName, string baseBranchName, string accessToken, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+
+                // Can't delete the currently checked-out branch - if the sandbox's HEAD is
+                // sitting on it (e.g. left there by the last commit), switch to the base branch
+                // first so the local delete below doesn't fail.
+                if (string.Equals(repo.Head.FriendlyName, branchName, StringComparison.Ordinal))
+                {
+                    var baseBranch = repo.Branches[baseBranchName];
+                    if (baseBranch is not null)
+                    {
+                        Commands.Checkout(repo, baseBranch);
+                    }
+                }
+
+                var remote = GetOriginRemote(repo);
+                var pushOptions = new PushOptions { CredentialsProvider = (_, _, _) => BuildCredentials(accessToken) };
+
+                try
+                {
+                    // An empty source ref is the standard Git protocol convention for "delete
+                    // this ref on the remote".
+                    repo.Network.Push(remote, $":refs/heads/{branchName}", pushOptions);
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    throw new GitOperationException($"Could not delete branch '{branchName}' from the remote.", ex);
+                }
+
+                var localBranch = repo.Branches[branchName];
+                if (localBranch is not null)
+                {
+                    repo.Branches.Remove(localBranch);
                 }
             },
             cancellationToken);

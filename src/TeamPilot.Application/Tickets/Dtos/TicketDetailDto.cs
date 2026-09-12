@@ -12,6 +12,7 @@ public sealed record TicketDetailDto(
     string Description,
     TicketStatus Status,
     string? BranchName,
+    string? CancellationReason,
     IReadOnlyCollection<TicketAgentAssignmentDto> Assignments,
     IReadOnlyCollection<CommitDto> Commits,
     IReadOnlyCollection<ReviewDto> Reviews,

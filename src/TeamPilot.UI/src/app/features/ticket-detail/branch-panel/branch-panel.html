@@ -1,7 +1,9 @@
 <div class="card">
   <div class="card-header">Git</div>
   <div class="card-body">
-    @if (!ticket().branchName) {
+    @if (!ticket().branchName && ticket().status === 'Cancelled') {
+      <p class="text-body-secondary mb-3">Branch deleted — this ticket is cancelled.</p>
+    } @else if (!ticket().branchName) {
       <div class="input-group mb-3">
         <input
           type="text"
@@ -10,13 +12,23 @@
           [ngModel]="newBranchName()"
           (ngModelChange)="newBranchName.set($event)"
         />
-        <button type="button" class="btn btn-outline-primary" (click)="createBranch()">
-          Link Branch
+        <button type="button" class="btn btn-outline-primary" [disabled]="checkingBranch()" (click)="createBranch()">
+          {{ checkingBranch() ? 'Checking...' : 'Link Branch' }}
         </button>
       </div>
     } @else {
-      <p class="mb-3">
-        Linked branch: <code>{{ ticket().branchName }}</code>
+      <p class="mb-3 d-flex align-items-center justify-content-between">
+        <span>
+          Linked branch:
+          @if (linkedBranchUrl(); as url) {
+            <a [href]="url" target="_blank" rel="noopener noreferrer"><code>{{ ticket().branchName }}</code></a>
+          } @else {
+            <code>{{ ticket().branchName }}</code>
+          }
+        </span>
+        @if (ticket().status === 'Cancelled') {
+          <button type="button" class="btn btn-sm btn-outline-danger" (click)="deleteBranch()">Delete Branch</button>
+        }
       </p>
     }
 
@@ -60,3 +72,23 @@
     }
   </div>
 </div>
+
+<app-modal [open]="confirmModalOpen()" title="Link Branch" (closed)="cancelLinkBranch()">
+  @if (branchAlreadyExists()) {
+    <p>
+      An existing branch named <code>{{ pendingBranchName() }}</code> was found. Link this
+      ticket to it?
+    </p>
+  } @else {
+    <p>
+      No branch named <code>{{ pendingBranchName() }}</code> exists yet. A new branch will be
+      created and linked to this ticket.
+    </p>
+  }
+  <div class="d-flex justify-content-end gap-2">
+    <button type="button" class="btn btn-outline-secondary" (click)="cancelLinkBranch()">Cancel</button>
+    <button type="button" class="btn btn-primary" (click)="confirmLinkBranch()">
+      {{ branchAlreadyExists() ? 'Link Branch' : 'Create Branch' }}
+    </button>
+  </div>
+</app-modal>

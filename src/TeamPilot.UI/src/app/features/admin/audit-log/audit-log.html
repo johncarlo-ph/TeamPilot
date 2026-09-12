@@ -18,7 +18,7 @@
         @for (entry of entries(); track entry.id) {
           <tr>
             <td>{{ entry.eventType }}</td>
-            <td>{{ entry.userId || '—' }}</td>
+            <td>{{ entry.userName || '—' }}</td>
             <td>{{ entry.detail || '—' }}</td>
             <td>{{ entry.ipAddress || '—' }}</td>
             <td>{{ entry.createdAtUtc | date: 'medium' }}</td>

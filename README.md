@@ -1,10 +1,10 @@
 # TeamPilot
 
 TeamPilot is an AI-powered ticketing and development-orchestration system. It combines a
-Kanban-style ticket board, AI agent orchestration (research/design/coding/testing agents managed
-by a per-project orchestrator), Git integration, and a human approval gate, so that a project's
-day-to-day development work can be tracked, delegated to AI agents, reviewed, and merged
-through one system.
+Kanban-style ticket board, AI agent orchestration (every project runs the same fixed
+Research → Design → Coding → Testing pipeline, with a bounded Coding/Testing retry loop),
+Git integration, and a human approval gate, so that a project's day-to-day development work can
+be tracked, delegated to AI agents, reviewed, and merged through one system.
 
 This repository contains both the **backend API** (`TeamPilot.API`), built with
 .NET 10 / ASP.NET Core, and the **frontend** (`TeamPilot.UI`), an Angular 21 single-page
@@ -31,10 +31,11 @@ merges — with role-based access so people only see and act on the projects the
 
 **Scope (current).**
 - Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
-  server-managed sandbox on creation, kept in sync via push/fetch), orchestrator + sub-agents,
-  ticket board, and CI/CD pipeline run history.
-- Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, with agent assignment, LLM-driven
-  agent work, Git commits, merge-conflict detection/resolution, and an approval gate.
+  server-managed sandbox on creation, kept in sync via push/fetch), its 4 system-provisioned
+  pipeline agents (Research/Design/Coding/Testing), ticket board, and CI/CD pipeline run history.
+- Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the automatic
+  Research → Design → Coding → Testing pipeline, Git commits, merge-conflict
+  detection/resolution, and an approval gate.
 - Identity: sign-in via Google or Microsoft only (no local passwords), JWT-based sessions with
   rotating refresh tokens, and three fixed roles (Admin, Analyst, Developer).
 - CI/CD: status tracking only (`PipelineRun` entities with a Queued → Running →

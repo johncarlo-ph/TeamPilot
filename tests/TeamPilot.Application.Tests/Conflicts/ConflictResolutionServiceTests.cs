@@ -1,4 +1,5 @@
 using Moq;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Conflicts;
 using TeamPilot.Application.Conflicts.Dtos;
@@ -21,6 +22,7 @@ public class ConflictResolutionServiceTests
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<ILlmConnector> _llmConnector = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
+    private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ConflictResolutionService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
@@ -36,6 +38,7 @@ public class ConflictResolutionServiceTests
             _gitService.Object,
             _llmConnector.Object,
             _projectAccessGuard.Object,
+            _auditLogger.Object,
             _unitOfWork.Object,
             new ResolveConflictManuallyRequestValidator(),
             new AcceptAiSuggestionRequestValidator());

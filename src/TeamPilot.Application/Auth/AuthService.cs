@@ -99,7 +99,6 @@ public sealed class AuthService(
         }
 
         var result = await IssueTokensAsync(user, cancellationToken, existingToken);
-        await auditLogger.LogAsync(AuditEventType.TokenRefreshed, user.Id, null, ipAddress, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return result;

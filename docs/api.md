@@ -49,10 +49,11 @@ decides HTTP status codes from exceptions — no controller has its own try/catc
 |---|---|---|
 | `AuthController` | `/api/auth` | `[AllowAnonymous]` login/refresh/logout; `GET /me` requires auth but no specific role |
 | `ProjectsController` | `/api/projects` | `Create`/`Update` are `[Authorize(Roles="Admin")]`; `List`/`GetById` are project-scoped in the service. `Create` synchronously clones the submitted `RemoteUrl` before returning - can be slow for large repos, and returns 422 (`GitOperationException`) if the clone fails |
-| `TicketsController` | `/api/projects/{projectId}/tickets`, `/api/tickets/{id}/...` | Ticket board CRUD and actions |
-| `AgentsController` | `/api/projects/{projectId}/agents`, `/api/agents/{id}` | Agent CRUD |
+| `TicketsController` | `/api/projects/{projectId}/tickets`, `/api/tickets/{id}/...` | Ticket board CRUD; `POST /tickets/{id}/start` runs the full Research→Design→Coding→Testing pipeline (`OrchestrationService.RunPipelineAsync`) in one call; `POST /tickets/{id}/cancel` abandons a pre-merge ticket (`ToDo`/`InProgress`/`ForReview`) with an optional reason, terminal, no Git side effects |
+| `AgentsController` | `/api/projects/{projectId}/agents`, `/api/agents/{id}` | Read/update only — list, get, edit configuration/status. No `POST`: all 4 agents (Research/Design/Coding/Testing) are system-provisioned per project, never created via the API |
 | `InstructionsController` | `/api/agents/{agentId}/instructions` | Versioned instructions |
-| `GitController` | `/api/git/branches`, `/api/projects/{projectId}/git/{diff,conflicts}` | Thin `IGitService` pass-throughs with an explicit `IProjectAccessGuard` check |
+| `InstructionTemplatesController` | `/api/instruction-templates` | Global, not project-scoped. `GET`/`GET/{id}` open to any authenticated user; `POST`/`PUT/{id}`/`DELETE/{id}` are `[Authorize(Roles="Admin")]` per-action |
+| `GitController` | `/api/git/branches`, `/api/git/branches/{ticketId}`, `/api/git/branches/exists`, `/api/projects/{projectId}/git/{diff,conflicts}` | `POST /branches`, `DELETE /branches/{ticketId}`, and `GET /branches/exists` delegate to `ITicketService` (which enforces project access internally); `diff`/`conflicts` are thin `IGitService` pass-throughs with an explicit `IProjectAccessGuard` check. `POST /branches` returns 409 (`BranchAlreadyLinkedException`) if the branch name is already linked to a different ticket in the same project; `DELETE /branches/{ticketId}` returns 409 (`InvalidTicketStateTransitionException`) unless the ticket is `Cancelled` |
 | `ReviewsController` | `/api/tickets/{ticketId}/reviews` | Approval-gate submissions |
 | `ConflictsController` | `/api/tickets/{ticketId}/conflicts`, `/api/conflicts/{id}/...` | Conflict detection/resolution |
 | `PipelineRunsController` | `/api/projects/{projectId}/pipeline-runs`, `/api/pipeline-runs/{id}/...` | CI/CD status tracking |

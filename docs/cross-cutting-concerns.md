@@ -15,11 +15,18 @@ rather than string interpolation, so log fields stay queryable in whatever sink 
 
 **Audit logging.** A dedicated, append-only mechanism separate from general application
 logging: `IAuditLogger.LogAsync(eventType, userId, detail, ipAddress)` writes an
-`AuditLogEntry` row on every login (success/failure), logout, token refresh, and detected
-refresh-token reuse. It participates in the same `IUnitOfWork.SaveChangesAsync()` call as the
-operation it's logging (not a separate transaction), so an audit entry and the event it
-describes are always persisted atomically. Readable only by Admins, via
-`GET /api/audit-log`.
+`AuditLogEntry` row for a fixed set of `AuditEventType`s. The auth flow (login success/failure,
+logout, detected refresh-token reuse) calls this directly with an explicit `userId`/`ipAddress`
+since those requests are anonymous. Every other state-changing use case (creating/updating a
+project, ticket, or agent, submitting a review, triggering a pipeline run, changing a user's
+roles, etc.) instead calls the convenience overload `IAuditLogger.LogActionAsync(eventType,
+detail)`, which reads the caller's id and IP off `ICurrentUserContext` so services don't have to
+thread those values through every call site. A silent background token refresh is deliberately
+**not** logged - it isn't a user-initiated action. Either way, the entry participates in the same
+`IUnitOfWork.SaveChangesAsync()` call as the operation it's logging (not a separate transaction),
+so an audit entry and the event it describes are always persisted atomically. Readable only by
+Admins, via `GET /api/audit-log`, which resolves each entry's `UserId` to a display name
+(`AuditLogEntryDto.UserName`) so the UI never shows a raw account id.
 
 **Constants.** There is no single "constants" file — fixed sets of values are modeled as
 enums (`TicketStatus`, `UserRole`, `AuditEventType`, etc.) rather than string/int constants,

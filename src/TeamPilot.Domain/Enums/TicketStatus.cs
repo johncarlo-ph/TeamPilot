@@ -5,5 +5,6 @@ public enum TicketStatus
     ToDo,
     InProgress,
     ForReview,
-    Done
+    Done,
+    Cancelled
 }

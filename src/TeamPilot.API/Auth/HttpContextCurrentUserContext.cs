@@ -28,6 +28,8 @@ public class HttpContextCurrentUserContext(IHttpContextAccessor httpContextAcces
 
     public string? Email => Principal?.FindFirst("email")?.Value;
 
+    public string? IpAddress => httpContextAccessor.HttpContext?.Connection.RemoteIpAddress?.ToString();
+
     public IReadOnlyCollection<UserRole> Roles =>
         Principal?.FindAll(ClaimTypes.Role)
             .Select(claim => Enum.TryParse<UserRole>(claim.Value, out var role) ? role : (UserRole?)null)

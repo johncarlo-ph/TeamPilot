@@ -106,4 +106,108 @@ public class TicketTests
 
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Cancel_WhenStatusIsToDo_SetsStatusToCancelledAndTreatsBlankReasonAsNull(string? reason)
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+
+        ticket.Cancel(reason);
+
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+        Assert.Null(ticket.CancellationReason);
+    }
+
+    [Fact]
+    public void Cancel_WhenStatusIsInProgress_SetsStatusToCancelledAndTrimsReason()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+
+        ticket.Cancel("  Requirement changed  ");
+
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+        Assert.Equal("Requirement changed", ticket.CancellationReason);
+    }
+
+    [Fact]
+    public void Cancel_WhenStatusIsForReview_SetsStatusToCancelled()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+        ticket.MoveToReview();
+
+        ticket.Cancel("No longer needed");
+
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+    }
+
+    [Fact]
+    public void Cancel_WhenStatusIsDone_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+        ticket.MoveToReview();
+        ticket.Approve();
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Cancel("Too late"));
+    }
+
+    [Fact]
+    public void Cancel_WhenAlreadyCancelled_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.Cancel("First reason");
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Cancel("Second reason"));
+    }
+
+    [Fact]
+    public void LinkBranch_WhenCancelled_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.Cancel("No longer needed");
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.LinkBranch("feature/fix-login-bug"));
+    }
+
+    [Fact]
+    public void UnlinkBranch_WhenCancelled_ClearsBranchName()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.LinkBranch("feature/fix-login-bug");
+        ticket.Cancel("No longer needed");
+
+        ticket.UnlinkBranch();
+
+        Assert.Null(ticket.BranchName);
+    }
+
+    [Theory]
+    [InlineData(nameof(TicketStatus.ToDo))]
+    [InlineData(nameof(TicketStatus.InProgress))]
+    [InlineData(nameof(TicketStatus.ForReview))]
+    [InlineData(nameof(TicketStatus.Done))]
+    public void UnlinkBranch_WhenNotCancelled_ThrowsInvalidTicketStateTransitionException(string statusName)
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+        ticket.LinkBranch("feature/fix-login-bug");
+
+        switch (Enum.Parse<TicketStatus>(statusName))
+        {
+            case TicketStatus.ForReview:
+                ticket.MoveToReview();
+                break;
+            case TicketStatus.Done:
+                ticket.MoveToReview();
+                ticket.Approve();
+                break;
+        }
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.UnlinkBranch());
+    }
 }

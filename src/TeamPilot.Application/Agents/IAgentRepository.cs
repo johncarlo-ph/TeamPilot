@@ -1,4 +1,5 @@
 using TeamPilot.Domain.Entities;
+using TeamPilot.Domain.Enums;
 
 namespace TeamPilot.Application.Agents;
 
@@ -13,9 +14,10 @@ public interface IAgentRepository
     Task<IReadOnlyList<Agent>> ListAsync(Guid projectId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Whether the project already has an Orchestrator agent - each project may have only one.
+    /// Finds the project's single active agent for a pipeline role
+    /// (Research/Design/Coding/Testing), or <see langword="null"/> if none is active.
     /// </summary>
-    Task<bool> HasOrchestratorAsync(Guid projectId, CancellationToken cancellationToken = default);
+    Task<Agent?> GetByProjectAndRoleAsync(Guid projectId, AgentRole role, CancellationToken cancellationToken = default);
 
     Task AddAsync(Agent agent, CancellationToken cancellationToken = default);
 }

@@ -9,6 +9,7 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Conflicts;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Instructions;
+using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
@@ -37,6 +38,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
         services.AddScoped<IInstructionRepository, InstructionRepository>();
+        services.AddScoped<IInstructionTemplateRepository, InstructionTemplateRepository>();
         services.AddScoped<ICommitRepository, CommitRepository>();
         services.AddScoped<IReviewRepository, ReviewRepository>();
         services.AddScoped<IConflictRepository, ConflictRepository>();

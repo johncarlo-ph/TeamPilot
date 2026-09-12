@@ -9,5 +9,6 @@ public sealed record TicketDto(
     string Description,
     TicketStatus Status,
     string? BranchName,
+    string? CancellationReason,
     DateTime CreatedAtUtc,
     DateTime? UpdatedAtUtc);

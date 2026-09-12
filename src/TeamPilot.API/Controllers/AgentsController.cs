@@ -7,13 +7,6 @@ namespace TeamPilot.API.Controllers;
 [ApiController]
 public class AgentsController(IAgentService agentService) : ControllerBase
 {
-    [HttpPost("api/projects/{projectId:guid}/agents")]
-    public async Task<ActionResult<AgentDto>> Create(Guid projectId, [FromBody] CreateAgentRequest request, CancellationToken cancellationToken)
-    {
-        var agent = await agentService.CreateAsync(projectId, request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = agent.Id }, agent);
-    }
-
     [HttpGet("api/projects/{projectId:guid}/agents")]
     public async Task<ActionResult<IReadOnlyList<AgentDto>>> List(Guid projectId, CancellationToken cancellationToken)
     {

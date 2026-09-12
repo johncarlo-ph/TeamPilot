@@ -2,8 +2,12 @@
 
 <div class="d-flex align-items-center justify-content-between mt-2 mb-4">
   <h1 class="h3 mb-0">Agents</h1>
-  <button type="button" class="btn btn-primary" (click)="formOpen.set(true)">New Agent</button>
 </div>
+
+<p class="text-body-secondary">
+  Research, Design, Coding, and Testing agents are provisioned automatically for every project.
+  Select one below to edit its instructions.
+</p>
 
 @if (loading()) {
   <div class="text-body-secondary">Loading agents...</div>
@@ -51,11 +55,11 @@
     </div>
 
     <div class="col-12 col-lg-7">
-      @if (selectedAgentId(); as agentId) {
+      @if (selectedAgent(); as agent) {
         <div class="card">
           <div class="card-header">Edit Agent Instructions</div>
           <div class="card-body">
-            <app-instruction-editor [agentId]="agentId"></app-instruction-editor>
+            <app-instruction-editor [agentId]="agent.id" [agentRole]="agent.role"></app-instruction-editor>
           </div>
         </div>
       } @else {
@@ -64,9 +68,3 @@
     </div>
   </div>
 }
-
-<app-agent-form
-  [open]="formOpen()"
-  (closed)="formOpen.set(false)"
-  (created)="create($event)"
-></app-agent-form>

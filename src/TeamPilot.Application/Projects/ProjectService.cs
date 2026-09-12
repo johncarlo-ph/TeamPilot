@@ -1,4 +1,6 @@
 using FluentValidation;
+using TeamPilot.Application.Agents;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -13,10 +15,12 @@ namespace TeamPilot.Application.Projects;
 public sealed class ProjectService(
     IProjectRepository projectRepository,
     IUserRepository userRepository,
+    IAgentService agentService,
     ICurrentUserContext currentUser,
     IProjectAccessGuard projectAccessGuard,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<CreateProjectRequest> createValidator,
     IValidator<UpdateProjectRequest> updateValidator) : IProjectService
@@ -34,6 +38,13 @@ public sealed class ProjectService(
         project.AssignSandboxPath(sandboxPath);
 
         await projectRepository.AddAsync(project, cancellationToken);
+
+        // Every project always has exactly one Research/Design/Coding/Testing agent, so a
+        // ticket's pipeline can unambiguously find each stage's agent without a manual
+        // assignment step.
+        await agentService.EnsureDefaultAgentsAsync(project.Id, cancellationToken);
+
+        await auditLogger.LogActionAsync(AuditEventType.ProjectCreated, $"Project '{project.Name}' created.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(project);
@@ -80,6 +91,7 @@ public sealed class ProjectService(
             project.RotateAccessToken(credentialProtector.Protect(request.AccessToken));
         }
 
+        await auditLogger.LogActionAsync(AuditEventType.ProjectUpdated, $"Project '{project.Name}' updated.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(project);

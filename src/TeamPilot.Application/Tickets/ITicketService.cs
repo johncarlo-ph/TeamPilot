@@ -14,8 +14,28 @@ public interface ITicketService
     Task<TicketDto> MoveToReviewAsync(Guid id, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Abandons the ticket - allowed from any pre-merge status (<c>ToDo</c>, <c>InProgress</c>,
+    /// <c>ForReview</c>); once <c>Done</c>, the work is already merged and there's nothing left
+    /// to cancel.
+    /// </summary>
+    Task<TicketDto> CancelAsync(Guid id, CancelTicketRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes the ticket's linked branch from the remote and the local sandbox, then clears
+    /// <see cref="TeamPilot.Domain.Entities.Ticket.BranchName"/> - only allowed for a
+    /// <c>Cancelled</c> ticket (see <see cref="TeamPilot.Domain.Entities.Ticket.UnlinkBranch"/>).
+    /// </summary>
+    Task<TicketDto> DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Ensures the branch exists in the ticket's project's sandbox Git repository and links
     /// it to the ticket.
     /// </summary>
     Task<TicketDto> LinkBranchAsync(Guid ticketId, string branchName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetches the ticket's project remote and reports whether <paramref name="branchName"/>
+    /// already exists (locally or on the remote), without creating or linking anything.
+    /// </summary>
+    Task<bool> BranchExistsAsync(Guid ticketId, string branchName, CancellationToken cancellationToken = default);
 }

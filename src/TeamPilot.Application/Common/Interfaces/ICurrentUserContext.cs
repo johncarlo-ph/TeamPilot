@@ -17,6 +17,8 @@ public interface ICurrentUserContext
 
     string? Email { get; }
 
+    string? IpAddress { get; }
+
     IReadOnlyCollection<UserRole> Roles { get; }
 
     bool IsInRole(UserRole role);

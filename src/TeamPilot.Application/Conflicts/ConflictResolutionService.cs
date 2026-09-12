@@ -1,4 +1,5 @@
 using FluentValidation;
+using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -8,6 +9,7 @@ using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Domain.Entities;
+using TeamPilot.Domain.Enums;
 
 namespace TeamPilot.Application.Conflicts;
 
@@ -18,6 +20,7 @@ public sealed class ConflictResolutionService(
     IGitService gitService,
     ILlmConnector llmConnector,
     IProjectAccessGuard projectAccessGuard,
+    IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<ResolveConflictManuallyRequest> resolveManuallyValidator,
     IValidator<AcceptAiSuggestionRequest> acceptAiSuggestionValidator) : IConflictResolutionService
@@ -52,6 +55,7 @@ public sealed class ConflictResolutionService(
 
         if (conflicts.Count > 0)
         {
+            await auditLogger.LogActionAsync(AuditEventType.ConflictsDetected, $"{conflicts.Count} conflict(s) detected on ticket '{ticket.Title}'.", cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
@@ -66,6 +70,8 @@ public sealed class ConflictResolutionService(
         var llmResponse = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
 
         conflict.RecordAiSuggestion(llmResponse.Content);
+
+        await auditLogger.LogActionAsync(AuditEventType.ConflictResolutionSuggested, $"AI resolution suggested for conflict in '{conflict.FilePath}'.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(conflict);
@@ -78,6 +84,8 @@ public sealed class ConflictResolutionService(
         var conflict = await GetConflictWithAccessAsync(conflictId, cancellationToken);
 
         conflict.ResolveManually(request.Note, request.ResolvedBy);
+
+        await auditLogger.LogActionAsync(AuditEventType.ConflictResolvedManually, $"Conflict in '{conflict.FilePath}' resolved manually by {request.ResolvedBy}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(conflict);
@@ -90,6 +98,8 @@ public sealed class ConflictResolutionService(
         var conflict = await GetConflictWithAccessAsync(conflictId, cancellationToken);
 
         conflict.AcceptAiSuggestion(request.ResolvedBy);
+
+        await auditLogger.LogActionAsync(AuditEventType.ConflictAiSuggestionAccepted, $"AI suggestion accepted for conflict in '{conflict.FilePath}' by {request.ResolvedBy}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(conflict);

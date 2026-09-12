@@ -19,6 +19,7 @@ internal static class TicketMappings
         ticket.Description,
         ticket.Status,
         ticket.BranchName,
+        ticket.CancellationReason,
         ticket.CreatedAtUtc,
         ticket.UpdatedAtUtc);
 
@@ -29,6 +30,7 @@ internal static class TicketMappings
         ticket.Description,
         ticket.Status,
         ticket.BranchName,
+        ticket.CancellationReason,
         ticket.Assignments
             .Select(a => new TicketAgentAssignmentDto(a.AgentId, a.RoleAtAssignment, a.AssignedAtUtc))
             .ToList(),

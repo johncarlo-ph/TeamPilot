@@ -19,6 +19,7 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
             AuthenticationFailedException => (StatusCodes.Status401Unauthorized, "Authentication failed"),
             ForbiddenException => (StatusCodes.Status403Forbidden, "Forbidden"),
             NotFoundException => (StatusCodes.Status404NotFound, "Resource not found"),
+            BranchAlreadyLinkedException => (StatusCodes.Status409Conflict, "Branch already in use"),
             GitOperationException => (StatusCodes.Status422UnprocessableEntity, "Git operation failed"),
             DomainException => (StatusCodes.Status409Conflict, "Invalid operation for the current state"),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred"),

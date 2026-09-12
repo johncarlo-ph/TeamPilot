@@ -6,13 +6,21 @@ import { distinctUntilChanged, interval, map, startWith, switchMap } from 'rxjs'
 import { TicketsService } from '../../core/services/tickets.service';
 import { AgentsService } from '../../core/services/agents.service';
 import { ReviewsService } from '../../core/services/reviews.service';
+import { ProjectsService } from '../../core/services/projects.service';
 import { NotificationService } from '../../core/notification/notification.service';
-import { AgentDto, ReviewDecision, SubmitReviewRequest, TicketDetailDto } from '../../core/models';
+import {
+  AgentDto,
+  ProjectDto,
+  ReviewDecision,
+  SubmitReviewRequest,
+  TicketDetailDto,
+} from '../../core/models';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
 import { DiffViewer } from '../../shared/components/diff-viewer/diff-viewer';
 import { BranchPanel } from './branch-panel/branch-panel';
 import { ConflictsPanel } from './conflicts-panel/conflicts-panel';
 import { ReviewForm } from './review-form/review-form';
+import { buildBranchUrl } from '../../core/utils/git-url.util';
 
 const POLL_INTERVAL_MS = 10000;
 
@@ -26,12 +34,18 @@ export class TicketDetail {
   private readonly ticketsService = inject(TicketsService);
   private readonly agentsService = inject(AgentsService);
   private readonly reviewsService = inject(ReviewsService);
+  private readonly projectsService = inject(ProjectsService);
   private readonly notifications = inject(NotificationService);
 
   readonly ticket = signal<TicketDetailDto | null>(null);
+  readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
-  readonly agentsById = signal<Record<string, AgentDto>>({});
+  readonly agents = signal<AgentDto[]>([]);
+  readonly agentsById = computed(() =>
+    Object.fromEntries(this.agents().map((a) => [a.id, a])) as Record<string, AgentDto>
+  );
   readonly reviewFormOpen = signal(false);
+  readonly starting = signal(false);
 
   readonly ticketId = computed(() => this.route.snapshot.paramMap.get('id')!);
 
@@ -55,6 +69,7 @@ export class TicketDetail {
           this.loading.set(false);
           if (isFirstLoad) {
             this.loadAgents(ticket.projectId);
+            this.loadProject(ticket.projectId);
           }
         },
         error: () => this.loading.set(false),
@@ -65,16 +80,39 @@ export class TicketDetail {
     return this.agentsById()[agentId]?.name ?? agentId;
   }
 
-  executeAgent(agentId: string): void {
+  branchUrl(branchName: string): string | null {
+    return buildBranchUrl(this.project()?.remoteUrl, branchName);
+  }
+
+  startPipeline(): void {
     const ticket = this.ticket();
     if (!ticket) {
       return;
     }
-    this.ticketsService.executeAgent(ticket.id, agentId).subscribe({
+    this.starting.set(true);
+    this.ticketsService.startPipeline(ticket.id).subscribe({
       next: (result) => {
+        this.starting.set(false);
         this.notifications.success(
-          result.commit ? 'Agent produced a new commit.' : 'Agent completed its work.'
+          result.testingPassed
+            ? 'Pipeline complete - testing passed.'
+            : `Pipeline complete - testing failed after ${result.testingAttempts} attempts.`
         );
+        this.refresh();
+      },
+      error: () => this.starting.set(false),
+    });
+  }
+
+  cancelTicket(): void {
+    const ticket = this.ticket();
+    if (!ticket || !confirm(`Cancel ticket "${ticket.title}"? This cannot be undone.`)) {
+      return;
+    }
+    const reason = prompt('Reason for cancelling (optional):')?.trim() || null;
+    this.ticketsService.cancel(ticket.id, { reason }).subscribe({
+      next: () => {
+        this.notifications.success('Ticket cancelled.');
         this.refresh();
       },
     });
@@ -94,7 +132,7 @@ export class TicketDetail {
     });
   }
 
-  onBranchCreated(): void {
+  onBranchChanged(): void {
     this.refresh();
   }
 
@@ -107,9 +145,11 @@ export class TicketDetail {
   }
 
   private loadAgents(projectId: string): void {
-    this.agentsService.listForProject(projectId).subscribe((agents) => {
-      this.agentsById.set(Object.fromEntries(agents.map((a) => [a.id, a])));
-    });
+    this.agentsService.listForProject(projectId).subscribe((agents) => this.agents.set(agents));
+  }
+
+  private loadProject(projectId: string): void {
+    this.projectsService.getById(projectId).subscribe((project) => this.project.set(project));
   }
 
   protected readonly reviewInitialDecision: ReviewDecision = 'Approve';

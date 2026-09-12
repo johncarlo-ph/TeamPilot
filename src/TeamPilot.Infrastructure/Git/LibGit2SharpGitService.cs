@@ -1,6 +1,8 @@
 using LibGit2Sharp;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Git;
 
@@ -18,6 +20,24 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
 {
     private readonly GitOptions _options = options.Value;
 
+    /// <summary>Retries the network-facing LibGit2Sharp calls (clone/push/fetch) on transient
+    /// failures - LibGit2Sharp doesn't distinguish a transient connectivity blip from a permanent
+    /// error (bad URL/token) via exception type, so a permanent failure just takes a few extra
+    /// attempts (with backoff) before surfacing as the same <see cref="GitOperationException"/> it
+    /// would have without this pipeline. Local-only operations (commit/diff/merge) are
+    /// deliberately not wrapped: they aren't subject to network transience, and blindly retrying a
+    /// file write/commit risks duplicating side effects instead of just re-attempting a request.</summary>
+    private static readonly ResiliencePipeline RemoteOperationResilience = new ResiliencePipelineBuilder()
+        .AddRetry(new RetryStrategyOptions
+        {
+            ShouldHandle = new PredicateBuilder().Handle<LibGit2SharpException>(),
+            MaxRetryAttempts = 3,
+            BackoffType = DelayBackoffType.Exponential,
+            Delay = TimeSpan.FromSeconds(1),
+            UseJitter = true,
+        })
+        .Build();
+
     public Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
@@ -28,7 +48,20 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 {
                     var cloneOptions = new CloneOptions();
                     cloneOptions.FetchOptions.CredentialsProvider = (_, _, _) => BuildCredentials(accessToken);
-                    Repository.Clone(remoteUrl, localPath, cloneOptions);
+
+                    RemoteOperationResilience.Execute(() =>
+                    {
+                        // A failed attempt can leave a partial clone on disk; clear it before each
+                        // attempt (a no-op on the first, since localPath is freshly computed) so a
+                        // retry doesn't fail with a "directory already exists" error that would
+                        // mask the real one.
+                        if (Directory.Exists(localPath))
+                        {
+                            Directory.Delete(localPath, recursive: true);
+                        }
+
+                        Repository.Clone(remoteUrl, localPath, cloneOptions);
+                    });
                 }
                 catch (LibGit2SharpException ex)
                 {
@@ -50,7 +83,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
 
                 try
                 {
-                    repo.Network.Push(remote, branch.CanonicalName, pushOptions);
+                    RemoteOperationResilience.Execute(() => repo.Network.Push(remote, branch.CanonicalName, pushOptions));
                 }
                 catch (LibGit2SharpException ex)
                 {
@@ -69,8 +102,8 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
 
                 try
                 {
-                    var refSpecs = remote.FetchRefSpecs.Select(spec => spec.Specification);
-                    Commands.Fetch(repo, remote.Name, refSpecs, fetchOptions, null);
+                    var refSpecs = remote.FetchRefSpecs.Select(spec => spec.Specification).ToList();
+                    RemoteOperationResilience.Execute(() => Commands.Fetch(repo, remote.Name, refSpecs, fetchOptions, null));
                 }
                 catch (LibGit2SharpException ex)
                 {
@@ -232,7 +265,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 {
                     // An empty source ref is the standard Git protocol convention for "delete
                     // this ref on the remote".
-                    repo.Network.Push(remote, $":refs/heads/{branchName}", pushOptions);
+                    RemoteOperationResilience.Execute(() => repo.Network.Push(remote, $":refs/heads/{branchName}", pushOptions));
                 }
                 catch (LibGit2SharpException ex)
                 {

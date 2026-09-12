@@ -242,15 +242,48 @@ var commit = repo.Commit(message, signature, signature);
 ## Error handling
 
 Infrastructure mostly lets exceptions propagate rather than translating them:
-`DbUpdateException` (constraint violations) and `HttpRequestException` (Claude API failures)
-currently bubble up to the API's `GlobalExceptionHandler` and are mapped generically to HTTP
-500. Two places Infrastructure *does* translate an error: `ExternalIdentityValidator` wraps any
-token-validation failure as the Application's own `AuthenticationFailedException` (→ 401), and
-`LibGit2SharpGitService`'s remote operations (`CloneAsync`/`PushAsync`/`FetchAsync`/
-`DeleteBranchAsync`'s remote delete) wrap `LibGit2SharpException` as `GitOperationException`
-(→ 422) — local-only Git operations
+`DbUpdateException` (constraint violations) currently bubbles up to the API's
+`GlobalExceptionHandler` and is mapped generically to HTTP 500. Two places Infrastructure *does*
+translate an error: `ExternalIdentityValidator` wraps any token-validation failure as the
+Application's own `AuthenticationFailedException` (→ 401), and `LibGit2SharpGitService`'s remote
+operations (`CloneAsync`/`PushAsync`/`FetchAsync`/`DeleteBranchAsync`'s remote delete) wrap
+`LibGit2SharpException` as `GitOperationException` (→ 422) — local-only Git operations
 (commit/diff/detect-conflicts/merge) still let `LibGit2SharpException`/`InvalidOperationException`
 bubble to 500/409, since those failures point at a server-side bug rather than bad user input.
+An unhandled Claude API failure (e.g. `HttpRequestException`, or an `HttpRequestException`/
+`TimeoutRejectedException` surfaced after the resilience pipeline below exhausts its retries)
+still bubbles to `GlobalExceptionHandler` and maps to 500.
+
+## Resiliency
+
+Both external-network dependencies — the Claude HTTP client and LibGit2Sharp's remote
+operations — retry transient failures instead of failing a pipeline stage on the first blip.
+
+**Claude HTTP client (`AddLlmConnector` in
+[`InfrastructureServiceCollectionExtensions`](../src/TeamPilot.Infrastructure/DependencyInjection/InfrastructureServiceCollectionExtensions.cs)).**
+`.AddStandardResilienceHandler(...)` (from `Microsoft.Extensions.Http.Resilience`) adds retry
+(3 attempts, exponential backoff with jitter), a circuit breaker, and attempt/total timeouts
+around every `HttpClient` call `ClaudeLlmConnector` makes. The library's own defaults (a 10s
+attempt timeout) are too short for a real completion, so the handler is configured from
+`Llm:TimeoutSeconds` (default 60s): `AttemptTimeout` is set to that value directly, the circuit
+breaker's `SamplingDuration` to twice that (the minimum the library allows), and
+`TotalRequestTimeout` to `AttemptTimeout × (MaxRetryAttempts + 1)`. `ClaudeLlmConnector` itself
+sets `HttpClient.Timeout = Timeout.InfiniteTimeSpan` so that fixed client-level timeout can't
+race the resilience pipeline's own budget and cut a retry short.
+
+**LibGit2Sharp remote operations (`LibGit2SharpGitService.RemoteOperationResilience`).**
+LibGit2Sharp isn't `HttpClient`-based, so this is a plain Polly `ResiliencePipeline` (3 retries,
+exponential backoff with jitter) wrapping only the calls that already talk to the remote and
+translate `LibGit2SharpException` → `GitOperationException`: `CloneAsync`, `PushAsync`,
+`FetchAsync`, and the remote-delete push inside `DeleteBranchAsync`. Local-only operations
+(commit/diff/detect-conflicts/merge) are deliberately not wrapped — they aren't subject to
+network transience, and blindly retrying a file write/commit risks duplicating side effects
+rather than just re-attempting a request. `CloneAsync`'s retried delegate also deletes any
+partial clone left on disk by a failed attempt before retrying, so a retry doesn't fail with a
+spurious "directory already exists" error that would mask the original one. LibGit2Sharp doesn't
+distinguish a transient connectivity blip from a permanent error (bad URL/token) by exception
+type, so a permanent failure just takes a few extra attempts (with backoff) before surfacing as
+the same `GitOperationException` it would have without this pipeline.
 
 ## Future considerations
 
@@ -258,9 +291,6 @@ bubble to 500/409, since those failures point at a server-side bug rather than b
   violation on `User.Email` surfacing as a 409 rather than a generic 500) — not done yet
   because no code path currently allows a client to trigger one that isn't already caught by
   FluentValidation first.
-- **Resiliency policies** for the Claude HTTP client and LibGit2Sharp calls (retry-on-transient,
-  circuit breaker) — noted as a one-line addition (`AddStandardResilienceHandler()`) during
-  design but not implemented, since no production load exists yet to tune it against.
 - **Asymmetric JWT signing** (RS256) if a second service ever needs to validate TeamPilot's
   access tokens independently.
 - **Multi-provider LLM support**: the `ILlmConnector` seam is ready; only `ClaudeLlmConnector`

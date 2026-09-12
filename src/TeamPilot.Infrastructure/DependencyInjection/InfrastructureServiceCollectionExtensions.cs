@@ -74,12 +74,26 @@ public static class InfrastructureServiceCollectionExtensions
 
     private static void AddLlmConnector(IServiceCollection services, IConfiguration configuration)
     {
-        var provider = configuration.GetSection(LlmOptions.SectionName)["Provider"] ?? "Claude";
+        var llmSection = configuration.GetSection(LlmOptions.SectionName);
+        var provider = llmSection["Provider"] ?? "Claude";
 
         switch (provider)
         {
             case "Claude":
-                services.AddHttpClient<ILlmConnector, ClaudeLlmConnector>();
+                var timeoutSeconds = llmSection.GetValue("TimeoutSeconds", 60);
+                services.AddHttpClient<ILlmConnector, ClaudeLlmConnector>()
+                    .AddStandardResilienceHandler(resilience =>
+                    {
+                        // A single completion can legitimately take up to Llm:TimeoutSeconds, so the
+                        // attempt timeout must match it (the library default of 10s would otherwise
+                        // make every slow-but-successful call retry pointlessly). The circuit
+                        // breaker's sampling window is required to be at least 2x the attempt
+                        // timeout, and the total budget must cover every retry attempt.
+                        var attemptTimeout = TimeSpan.FromSeconds(timeoutSeconds);
+                        resilience.AttemptTimeout.Timeout = attemptTimeout;
+                        resilience.CircuitBreaker.SamplingDuration = attemptTimeout * 2;
+                        resilience.TotalRequestTimeout.Timeout = attemptTimeout * (resilience.Retry.MaxRetryAttempts + 1);
+                    });
                 break;
             default:
                 throw new NotSupportedException($"LLM provider '{provider}' is not supported. Supported providers: Claude.");

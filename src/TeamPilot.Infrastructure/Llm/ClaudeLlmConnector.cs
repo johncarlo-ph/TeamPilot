@@ -22,7 +22,11 @@ public class ClaudeLlmConnector : ILlmConnector
         _httpClient = httpClient;
         _options = options.Value;
         _httpClient.BaseAddress ??= new Uri(_options.BaseUrl);
-        _httpClient.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);
+
+        // The resilience handler registered in AddLlmConnector owns request timing (attempt +
+        // total budget, both derived from Llm:TimeoutSeconds) - leaving HttpClient's own Timeout
+        // at a finite value here would race it and could cut a retry attempt short.
+        _httpClient.Timeout = Timeout.InfiniteTimeSpan;
     }
 
     public async Task<LlmResponse> SendPromptAsync(LlmRequest request, CancellationToken cancellationToken = default)

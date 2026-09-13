@@ -16,8 +16,13 @@
         </label>
       }
     </div>
-    <button type="button" class="btn btn-sm btn-outline-primary mb-4" (click)="saveRoles()">
-      Save Roles
+    <button
+      type="button"
+      class="btn btn-sm btn-outline-primary mb-4"
+      [disabled]="savingRoles()"
+      (click)="saveRoles()"
+    >
+      {{ savingRoles() ? 'Saving...' : 'Save Roles' }}
     </button>
 
     <h3 class="h6">Assigned Projects</h3>
@@ -37,8 +42,13 @@
           </label>
         }
       </div>
-      <button type="button" class="btn btn-sm btn-outline-primary mb-3" (click)="saveProjects()">
-        Save Projects
+      <button
+        type="button"
+        class="btn btn-sm btn-outline-primary mb-3"
+        [disabled]="savingProjects()"
+        (click)="saveProjects()"
+      >
+        {{ savingProjects() ? 'Saving...' : 'Save Projects' }}
       </button>
     }
 
@@ -49,9 +59,10 @@
         class="btn btn-sm"
         [class.btn-danger]="user.status === 'Active'"
         [class.btn-success]="user.status !== 'Active'"
+        [disabled]="togglingStatus()"
         (click)="statusToggled.emit()"
       >
-        {{ user.status === 'Active' ? 'Disable Account' : 'Enable Account' }}
+        {{ togglingStatus() ? 'Working...' : user.status === 'Active' ? 'Disable Account' : 'Enable Account' }}
       </button>
     </div>
   }

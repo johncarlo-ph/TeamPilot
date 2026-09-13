@@ -55,18 +55,20 @@
                 <button
                   type="button"
                   class="btn btn-sm btn-outline-primary"
+                  [disabled]="isProcessing(conflict.id)"
                   (click)="suggestResolution(conflict)"
                 >
-                  Suggest AI Resolution
+                  {{ isProcessing(conflict.id) ? 'Suggesting...' : 'Suggest AI Resolution' }}
                 </button>
               }
               @if (conflict.status === 'AiResolutionSuggested') {
                 <button
                   type="button"
                   class="btn btn-sm btn-success"
+                  [disabled]="isProcessing(conflict.id)"
                   (click)="acceptAiSuggestion(conflict)"
                 >
-                  Accept AI Suggestion
+                  {{ isProcessing(conflict.id) ? 'Accepting...' : 'Accept AI Suggestion' }}
                 </button>
               }
             </div>
@@ -92,9 +94,10 @@
               <button
                 type="button"
                 class="btn btn-sm btn-outline-secondary"
+                [disabled]="isProcessing(conflict.id)"
                 (click)="resolveManually(conflict)"
               >
-                Resolve Manually
+                {{ isProcessing(conflict.id) ? 'Resolving...' : 'Resolve Manually' }}
               </button>
             </div>
             <p class="small text-body-secondary mt-2 mb-0">

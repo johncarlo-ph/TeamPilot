@@ -26,6 +26,7 @@ export class InstructionTemplateForm {
 
   readonly open = input(false);
   readonly template = input<InstructionTemplateDto | null>(null);
+  readonly saving = input(false);
   readonly closed = output<void>();
   readonly saved = output<InstructionTemplateFormValue>();
 

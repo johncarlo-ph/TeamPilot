@@ -19,10 +19,11 @@
           <select
             class="form-select form-select-sm"
             [value]="selectedTemplateIds()[type]"
-            [disabled]="!templatesByType()[type].length"
             (change)="applyTemplate(type, $any($event.target).value)"
           >
-            <option value="">Populate from template...</option>
+            <option value="">
+              {{ templatesByType()[type].length ? 'Populate from template...' : 'No templates for this role/type yet' }}
+            </option>
             @for (template of templatesByType()[type]; track template.id) {
               <option [value]="template.id">{{ template.name }}</option>
             }
@@ -49,6 +50,8 @@
         }
       </div>
     }
-    <button type="submit" class="btn btn-outline-primary">Save &amp; Ingest</button>
+    <button type="submit" class="btn btn-outline-primary" [disabled]="saving()">
+      {{ saving() ? 'Saving...' : 'Save & Ingest' }}
+    </button>
   </form>
 }

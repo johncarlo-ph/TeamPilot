@@ -22,6 +22,7 @@ export class ReviewForm {
    * linked yet — this is blocked client-side until the backend guards it properly.
    */
   readonly hasLinkedBranch = input(true);
+  readonly submitting = input(false);
   readonly closed = output<void>();
   readonly submitted = output<SubmitReviewRequest>();
 

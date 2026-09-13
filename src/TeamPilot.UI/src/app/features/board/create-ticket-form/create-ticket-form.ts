@@ -12,6 +12,7 @@ export class CreateTicketForm {
   private readonly fb = inject(FormBuilder);
 
   readonly open = input(false);
+  readonly creating = input(false);
   readonly closed = output<void>();
   readonly created = output<CreateTicketRequest>();
 

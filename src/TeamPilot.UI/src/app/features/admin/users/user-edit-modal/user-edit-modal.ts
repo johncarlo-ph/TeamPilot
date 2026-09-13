@@ -15,6 +15,8 @@ export class UserEditModal {
 
   readonly open = input(false);
   readonly user = input<UserDto | null>(null);
+  readonly savingRoles = input(false);
+  readonly togglingStatus = input(false);
   readonly closed = output<void>();
   readonly rolesChanged = output<UserRole[]>();
   readonly statusToggled = output<void>();
@@ -23,6 +25,7 @@ export class UserEditModal {
   readonly allProjects = signal<ProjectDto[]>([]);
   readonly selectedRoles = signal(new Set<UserRole>());
   readonly assignedProjectIds = signal(new Set<string>());
+  readonly savingProjects = signal(false);
 
   constructor() {
     this.projectsService.list().subscribe((projects) => this.allProjects.set(projects));
@@ -71,8 +74,12 @@ export class UserEditModal {
     if (!user) {
       return;
     }
+    this.savingProjects.set(true);
     this.usersService
       .setProjects(user.id, { projectIds: Array.from(this.assignedProjectIds()) })
-      .subscribe();
+      .subscribe({
+        next: () => this.savingProjects.set(false),
+        error: () => this.savingProjects.set(false),
+      });
   }
 }

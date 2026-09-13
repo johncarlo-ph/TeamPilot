@@ -20,6 +20,7 @@ export class ProjectList {
   readonly loading = signal(true);
   readonly formOpen = signal(false);
   readonly editingProject = signal<ProjectDto | null>(null);
+  readonly saving = signal(false);
 
   constructor() {
     this.reload();
@@ -56,12 +57,15 @@ export class ProjectList {
       ? this.projectsService.update(editing.id, request as UpdateProjectRequest)
       : this.projectsService.create(request as CreateProjectRequest);
 
+    this.saving.set(true);
     result$.subscribe({
       next: () => {
+        this.saving.set(false);
         this.notifications.success(editing ? 'Project updated.' : 'Project created.');
         this.formOpen.set(false);
         this.reload();
       },
+      error: () => this.saving.set(false),
     });
   }
 }

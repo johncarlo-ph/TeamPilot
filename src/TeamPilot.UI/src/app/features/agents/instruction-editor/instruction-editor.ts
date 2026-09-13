@@ -32,6 +32,7 @@ export class InstructionEditor {
   readonly instructions = signal<InstructionDto[]>([]);
   readonly templates = signal<InstructionTemplateDto[]>([]);
   readonly loading = signal(true);
+  readonly saving = signal(false);
 
   readonly form = this.fb.nonNullable.group({
     Constitution: [''],
@@ -115,16 +116,19 @@ export class InstructionEditor {
       return;
     }
 
+    this.saving.set(true);
     let remaining = requests.length;
     requests.forEach((request$) =>
       request$.subscribe({
         next: () => {
           remaining -= 1;
           if (remaining === 0) {
+            this.saving.set(false);
             this.notifications.success('Instructions saved and ready for ingestion.');
             this.reload(this.agentId());
           }
         },
+        error: () => this.saving.set(false),
       })
     );
   }

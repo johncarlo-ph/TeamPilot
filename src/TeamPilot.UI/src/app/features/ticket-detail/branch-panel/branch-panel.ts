@@ -32,6 +32,8 @@ export class BranchPanel {
   readonly confirmModalOpen = signal(false);
   readonly pendingBranchName = signal('');
   readonly branchAlreadyExists = signal(false);
+  readonly linkingBranch = signal(false);
+  readonly deletingBranch = signal(false);
 
   createBranch(): void {
     const branchName = this.newBranchName().trim();
@@ -52,8 +54,10 @@ export class BranchPanel {
 
   confirmLinkBranch(): void {
     const branchName = this.pendingBranchName();
+    this.linkingBranch.set(true);
     this.gitService.createBranch({ ticketId: this.ticket().id, branchName }).subscribe({
       next: (updated) => {
+        this.linkingBranch.set(false);
         this.notifications.success(
           this.branchAlreadyExists() ? 'Existing branch linked to ticket.' : 'New branch created and linked to ticket.'
         );
@@ -61,6 +65,7 @@ export class BranchPanel {
         this.confirmModalOpen.set(false);
         this.changed.emit(updated);
       },
+      error: () => this.linkingBranch.set(false),
     });
   }
 
@@ -74,11 +79,14 @@ export class BranchPanel {
     if (!branchName || !confirm(`Delete branch "${branchName}"? This cannot be undone.`)) {
       return;
     }
+    this.deletingBranch.set(true);
     this.gitService.deleteBranch(ticket.id).subscribe({
       next: (updated) => {
+        this.deletingBranch.set(false);
         this.notifications.success('Branch deleted.');
         this.changed.emit(updated);
       },
+      error: () => this.deletingBranch.set(false),
     });
   }
 

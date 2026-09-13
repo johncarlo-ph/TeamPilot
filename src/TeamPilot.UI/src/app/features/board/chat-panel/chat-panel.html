@@ -38,9 +38,10 @@
                     <button
                       type="button"
                       class="btn btn-sm btn-success mt-2"
+                      [disabled]="isCreatingTicket(message)"
                       (click)="approveTicket(message)"
                     >
-                      Create ticket
+                      {{ isCreatingTicket(message) ? 'Creating...' : 'Create ticket' }}
                     </button>
                   }
                 </div>

@@ -34,8 +34,13 @@
           }
         </span>
         @if (ticket().status === 'Cancelled') {
-          <button type="button" class="btn btn-sm btn-danger" (click)="deleteBranch()">
-            Delete Branch
+          <button
+            type="button"
+            class="btn btn-sm btn-danger"
+            [disabled]="deletingBranch()"
+            (click)="deleteBranch()"
+          >
+            {{ deletingBranch() ? 'Deleting...' : 'Delete Branch' }}
           </button>
         }
       </p>
@@ -69,7 +74,7 @@
           [disabled]="diffLoading()"
           (click)="loadDiff()"
         >
-          View Diff
+          {{ diffLoading() ? 'Loading...' : 'View Diff' }}
         </button>
       </div>
     </div>
@@ -100,11 +105,21 @@
     </p>
   }
   <div class="d-flex justify-content-end gap-2">
-    <button type="button" class="btn btn-outline-secondary" (click)="cancelLinkBranch()">
+    <button
+      type="button"
+      class="btn btn-outline-secondary"
+      [disabled]="linkingBranch()"
+      (click)="cancelLinkBranch()"
+    >
       Cancel
     </button>
-    <button type="button" class="btn btn-outline-primary" (click)="confirmLinkBranch()">
-      {{ branchAlreadyExists() ? 'Link Branch' : 'Create Branch' }}
+    <button
+      type="button"
+      class="btn btn-outline-primary"
+      [disabled]="linkingBranch()"
+      (click)="confirmLinkBranch()"
+    >
+      {{ linkingBranch() ? 'Working...' : branchAlreadyExists() ? 'Link Branch' : 'Create Branch' }}
     </button>
   </div>
 </app-modal>

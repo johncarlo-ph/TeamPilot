@@ -174,8 +174,9 @@ belongs to no project. The one place it's consumed outside its own admin page is
 `features/agents/instruction-editor/instruction-editor.ts`, which now takes an `agentRole` input
 (the agents list already had this — it just wasn't being looked up and passed down before) and
 fetches templates filtered to that role, one **Template** dropdown per instruction type. The
-dropdown is always rendered (disabled, not hidden, when no template exists yet for that
-role/type) rather than appearing only once a template exists. Selecting a template fills the
+dropdown is always rendered and always enabled (never disabled, even with zero matching
+templates) - the placeholder option's label switches between "Populate from template..." and
+"No templates for this role/type yet" so an empty dropdown doesn't read as broken. Selecting a template fills the
 matching textarea (`form.get(type).setValue(...)`) and the `<select>` keeps showing the picked
 option, tracked in a `selectedTemplateIds` signal keyed by instruction type — it's still just a
 content fill, not a persisted association (the selection resets on save/reload); the existing
@@ -214,6 +215,25 @@ role check is enough here, since the backend independently re-validates role, sc
 assignment history before actually deleting anything (see [docs/application.md](application.md)).
 It isn't disabled by the `locked()` pipeline banner, matching the backend: an unscheduled agent
 can't affect a running ticket either way.
+
+**Every action button shows its own loading state and is disabled for the duration of its
+request.** Any button that triggers an HTTP call owns a `signal(false)` flag (e.g. `saving`,
+`deleting`, `starting`) set to `true` right before the `subscribe(...)` call and reset in both
+the `next` and `error` callbacks, bound to that button's `[disabled]` and, for most, swapped into
+its label (e.g. `"Save"` → `"Saving..."`) so a slow request can't be double-submitted and the user
+always sees it's in flight. Where a form or action is reused across multiple items in a list
+(conflict resolution actions, workflow-stage Remove/loop-back, pipeline-run Start/Complete), the
+flag is a `ReadonlySet<string>` of in-flight ids instead of one boolean, so only the row actually
+being mutated disables — the rest of the list stays interactive. Where the button lives in a
+reusable child component (`ReviewForm`, `CreateTicketForm`, `ProjectForm`,
+`InstructionTemplateForm`) and the actual API call is made by the parent that owns the
+`(submitted)`/`(saved)`/`(created)` output, the flag is threaded down as a `saving`/`submitting`/
+`creating` input instead of living in the child, since the child has no way to know when the
+parent's request resolves. This is why forms without their own dedicated inline error UI (see
+"No inline server-error handling" below) still gained an `error` callback: not to show a message,
+but to reset the loading flag so a failed request doesn't leave the button stuck disabled.
+Purely local actions (opening/closing a modal, toggling a signal, drag-and-drop reordering) are
+unaffected — this convention only applies to buttons that call into the HTTP layer.
 
 ## Authorization (client-side mirror, not enforcement)
 
@@ -324,8 +344,10 @@ than a toast).
   on a `Custom`-role agent calls `DELETE /api/projects/{projectId}/workflow/agents/{agentId}`,
   which really does permanently delete it - only shown for `Custom` agents, since that's the only
   role the API will actually let you delete (see [docs/domain.md](domain.md)).
-- **No inline server-error handling on any form**, `project-form` included: `project-list.ts`'s
-  `save()` has no `error` callback on its `subscribe`, so a failed create (e.g. an unreachable
-  remote or bad access token, surfaced by the API as 422) only shows the generic
-  `errorInterceptor` toast, and the modal stays open with whatever was typed. Consistent with
-  every other form today, not a regression specific to this one.
+- **No inline server-error handling on any form**, `project-form` included: every
+  button-triggered request's `error` callback only resets that button's loading signal (see
+  "Every action button shows its own loading state" above) — a failed create (e.g. an
+  unreachable remote or bad access token, surfaced by the API as 422) still only shows the
+  generic `errorInterceptor` toast, and the modal stays open with whatever was typed, rather than
+  a field-level inline message. Consistent with every other form today, not a regression specific
+  to this one.

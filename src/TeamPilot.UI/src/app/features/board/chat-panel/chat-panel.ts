@@ -22,6 +22,7 @@ export class ChatPanel {
   readonly loading = signal(true);
   readonly sending = signal(false);
   readonly createdTicketMessageIds = signal<ReadonlySet<string>>(new Set());
+  readonly creatingTicketMessageIds = signal<ReadonlySet<string>>(new Set());
 
   readonly form = this.fb.nonNullable.group({
     content: ['', Validators.required],
@@ -76,10 +77,11 @@ export class ChatPanel {
   }
 
   approveTicket(message: ChatMessageDto): void {
-    if (!message.proposedTicketTitle || this.isTicketCreated(message)) {
+    if (!message.proposedTicketTitle || this.isTicketCreated(message) || this.isCreatingTicket(message)) {
       return;
     }
 
+    this.creatingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
     this.ticketsService
       .create(this.projectId(), {
         title: message.proposedTicketTitle,
@@ -89,11 +91,25 @@ export class ChatPanel {
         next: () => {
           this.notifications.success('Ticket created.');
           this.createdTicketMessageIds.update((ids) => new Set(ids).add(message.id));
+          this.removeCreatingId(message.id);
         },
+        error: () => this.removeCreatingId(message.id),
       });
   }
 
   isTicketCreated(message: ChatMessageDto): boolean {
     return this.createdTicketMessageIds().has(message.id);
+  }
+
+  isCreatingTicket(message: ChatMessageDto): boolean {
+    return this.creatingTicketMessageIds().has(message.id);
+  }
+
+  private removeCreatingId(messageId: string): void {
+    this.creatingTicketMessageIds.update((ids) => {
+      const next = new Set(ids);
+      next.delete(messageId);
+      return next;
+    });
   }
 }

@@ -21,6 +21,12 @@ export class InstructionTemplates {
   readonly loading = signal(true);
   readonly formOpen = signal(false);
   readonly editingTemplate = signal<InstructionTemplateDto | null>(null);
+  readonly saving = signal(false);
+  readonly deletingIds = signal<ReadonlySet<string>>(new Set());
+
+  isDeleting(id: string): boolean {
+    return this.deletingIds().has(id);
+  }
 
   constructor() {
     this.reload();
@@ -53,12 +59,15 @@ export class InstructionTemplates {
       ? this.templatesService.update(editing.id, { name: value.name, content: value.content })
       : this.templatesService.create(value);
 
+    this.saving.set(true);
     request$.subscribe({
       next: () => {
+        this.saving.set(false);
         this.notifications.success(editing ? 'Template updated.' : 'Template created.');
         this.formOpen.set(false);
         this.reload();
       },
+      error: () => this.saving.set(false),
     });
   }
 
@@ -66,11 +75,18 @@ export class InstructionTemplates {
     if (!confirm(`Delete instruction template "${template.name}"? This cannot be undone.`)) {
       return;
     }
+    this.deletingIds.update((ids) => new Set(ids).add(template.id));
     this.templatesService.delete(template.id).subscribe({
       next: () => {
         this.notifications.success('Template deleted.');
         this.templates.update((templates) => templates.filter((t) => t.id !== template.id));
       },
+      error: () =>
+        this.deletingIds.update((ids) => {
+          const next = new Set(ids);
+          next.delete(template.id);
+          return next;
+        }),
     });
   }
 }

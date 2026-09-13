@@ -60,10 +60,10 @@
                   <button
                     type="button"
                     class="btn btn-outline-danger btn-sm"
-                    [disabled]="locked()"
+                    [disabled]="locked() || isProcessing(stage.id)"
                     (click)="removeStage(stage)"
                   >
-                    Remove
+                    {{ isProcessing(stage.id) ? 'Removing...' : 'Remove' }}
                   </button>
                 }
               </div>
@@ -73,8 +73,8 @@
                   Loops back to position {{ (stageForLoopBackTarget(stage.loopBackToStageId)?.order ?? 0) + 1 }}
                   on failure, up to {{ stage.maxLoopIterations }} attempt(s).
                   @if (authService.isAdmin()) {
-                    <button type="button" class="btn btn-link btn-sm p-0 ms-1" [disabled]="locked()" (click)="clearLoopBack(stage)">
-                      Clear
+                    <button type="button" class="btn btn-link btn-sm p-0 ms-1" [disabled]="locked() || isProcessing(stage.id)" (click)="clearLoopBack(stage)">
+                      {{ isProcessing(stage.id) ? 'Clearing...' : 'Clear' }}
                     </button>
                   }
                 </div>
@@ -127,8 +127,10 @@
                     />
                   </div>
                   <div class="d-flex gap-2">
-                    <button type="button" class="btn btn-primary btn-sm" (click)="saveLoopBack(stage)">Save</button>
-                    <button type="button" class="btn btn-outline-secondary btn-sm" (click)="cancelLoopBackEditor()">Cancel</button>
+                    <button type="button" class="btn btn-primary btn-sm" [disabled]="savingLoopBack()" (click)="saveLoopBack(stage)">
+                      {{ savingLoopBack() ? 'Saving...' : 'Save' }}
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm" [disabled]="savingLoopBack()" (click)="cancelLoopBackEditor()">Cancel</button>
                   </div>
                 </div>
               }
@@ -148,12 +150,12 @@
                 <div class="fw-semibold">{{ agent.name }}</div>
                 <div class="small text-body-secondary">{{ agent.role }}</div>
               </div>
-              <button type="button" class="btn btn-outline-primary btn-sm" [disabled]="locked()" (click)="addToPipeline(agent)">
-                Add to pipeline
+              <button type="button" class="btn btn-outline-primary btn-sm" [disabled]="locked() || isProcessing(agent.id)" (click)="addToPipeline(agent)">
+                {{ isProcessing(agent.id) ? 'Adding...' : 'Add to pipeline' }}
               </button>
               @if (agent.role === 'Custom') {
-                <button type="button" class="btn btn-outline-danger btn-sm" (click)="deleteCustomAgent(agent)">
-                  Remove
+                <button type="button" class="btn btn-outline-danger btn-sm" [disabled]="isProcessing(agent.id)" (click)="deleteCustomAgent(agent)">
+                  {{ isProcessing(agent.id) ? 'Removing...' : 'Remove' }}
                 </button>
               }
             </div>
@@ -191,5 +193,7 @@
     The agent starts with no instructions. Add its Constitution, Guideline, and Requirement below,
     then use "Add to pipeline" once it's ready.
   </p>
-  <button type="button" class="btn btn-primary" (click)="createCustomAgent()">Create</button>
+  <button type="button" class="btn btn-primary" [disabled]="creatingAgent()" (click)="createCustomAgent()">
+    {{ creatingAgent() ? 'Creating...' : 'Create' }}
+  </button>
 </app-modal>

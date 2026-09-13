@@ -62,6 +62,7 @@
 
 <app-create-ticket-form
   [open]="createFormOpen()"
+  [creating]="creatingTicket()"
   (closed)="createFormOpen.set(false)"
   (created)="createTicket($event)"
 ></app-create-ticket-form>
@@ -70,6 +71,7 @@
   [open]="reviewTarget() !== null"
   [initialDecision]="reviewInitialDecision()"
   [hasLinkedBranch]="!!reviewTarget()?.branchName"
+  [submitting]="submittingReview()"
   (closed)="reviewTarget.set(null)"
   (submitted)="confirmReview($event)"
 ></app-review-form>

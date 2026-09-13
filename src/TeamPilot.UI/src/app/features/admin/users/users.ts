@@ -17,6 +17,8 @@ export class Users {
   readonly users = signal<UserDto[]>([]);
   readonly loading = signal(true);
   readonly editingUser = signal<UserDto | null>(null);
+  readonly savingRoles = signal(false);
+  readonly togglingStatus = signal(false);
 
   constructor() {
     this.reload();
@@ -42,12 +44,15 @@ export class Users {
     if (!user) {
       return;
     }
+    this.savingRoles.set(true);
     this.usersService.setRoles(user.id, { roles }).subscribe({
       next: (updated) => {
+        this.savingRoles.set(false);
         this.patchUser(updated);
         this.editingUser.set(updated);
         this.notifications.success('Roles updated.');
       },
+      error: () => this.savingRoles.set(false),
     });
   }
 
@@ -57,12 +62,15 @@ export class Users {
       return;
     }
     const status = user.status === 'Active' ? 'Disabled' : 'Active';
+    this.togglingStatus.set(true);
     this.usersService.setStatus(user.id, { status }).subscribe({
       next: (updated) => {
+        this.togglingStatus.set(false);
         this.patchUser(updated);
         this.editingUser.set(updated);
         this.notifications.success(`Account ${status.toLowerCase()}.`);
       },
+      error: () => this.togglingStatus.set(false),
     });
   }
 

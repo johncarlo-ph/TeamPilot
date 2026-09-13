@@ -31,10 +31,31 @@ export class Agents {
 
   readonly newAgentModalOpen = signal(false);
   readonly newAgentName = signal('');
+  readonly creatingAgent = signal(false);
 
   readonly loopBackEditorStageId = signal<string | null>(null);
   readonly loopBackTargetId = signal('');
   readonly loopBackMaxIterations = signal(3);
+  readonly savingLoopBack = signal(false);
+
+  /** Ids of stages/agents with an in-flight mutation (remove, add-to-pipeline, delete, clear loop-back). */
+  readonly processingIds = signal<ReadonlySet<string>>(new Set());
+
+  isProcessing(id: string): boolean {
+    return this.processingIds().has(id);
+  }
+
+  private setProcessing(id: string, processing: boolean): void {
+    this.processingIds.update((ids) => {
+      const next = new Set(ids);
+      if (processing) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
 
   readonly locked = computed(() => this.inProgressCount() > 0);
 
@@ -80,22 +101,28 @@ export class Agents {
       return;
     }
 
+    this.creatingAgent.set(true);
     this.workflowService.createCustomAgent(this.projectId, { name }).subscribe({
       next: (agent) => {
+        this.creatingAgent.set(false);
         this.unscheduledAgents.update((agents) => [...agents, agent]);
         this.newAgentModalOpen.set(false);
         this.notifications.success(`'${agent.name}' created - add its instructions, then add it to the pipeline.`);
         this.selectAgent(agent);
       },
+      error: () => this.creatingAgent.set(false),
     });
   }
 
   addToPipeline(agent: AgentDto): void {
+    this.setProcessing(agent.id, true);
     this.workflowService.addStage(this.projectId, { agentId: agent.id }).subscribe({
       next: () => {
+        this.setProcessing(agent.id, false);
         this.notifications.success(`'${agent.name}' added to the pipeline.`);
         this.reload();
       },
+      error: () => this.setProcessing(agent.id, false),
     });
   }
 
@@ -104,8 +131,10 @@ export class Agents {
       return;
     }
 
+    this.setProcessing(agent.id, true);
     this.workflowService.deleteCustomAgent(this.projectId, agent.id).subscribe({
       next: () => {
+        this.setProcessing(agent.id, false);
         this.unscheduledAgents.update((agents) => agents.filter((a) => a.id !== agent.id));
         if (this.selectedAgentId() === agent.id) {
           this.selectedAgentId.set(null);
@@ -113,6 +142,7 @@ export class Agents {
         }
         this.notifications.success(`'${agent.name}' deleted.`);
       },
+      error: () => this.setProcessing(agent.id, false),
     });
   }
 
@@ -121,11 +151,13 @@ export class Agents {
       return;
     }
 
+    this.setProcessing(stage.id, true);
     this.workflowService.removeStage(this.projectId, stage.id).subscribe({
       next: () => {
         this.notifications.success(`'${stage.agent.name}' removed from the pipeline.`);
         this.reload();
       },
+      error: () => this.setProcessing(stage.id, false),
     });
   }
 
@@ -145,6 +177,7 @@ export class Agents {
       return;
     }
 
+    this.savingLoopBack.set(true);
     this.workflowService
       .setLoopBack(this.projectId, stage.id, {
         targetStageId,
@@ -152,19 +185,24 @@ export class Agents {
       })
       .subscribe({
         next: (updated) => {
+          this.savingLoopBack.set(false);
           this.patchStage(updated);
           this.loopBackEditorStageId.set(null);
           this.notifications.success('Loop-back saved.');
         },
+        error: () => this.savingLoopBack.set(false),
       });
   }
 
   clearLoopBack(stage: WorkflowStageDto): void {
+    this.setProcessing(stage.id, true);
     this.workflowService.clearLoopBack(this.projectId, stage.id).subscribe({
       next: (updated) => {
+        this.setProcessing(stage.id, false);
         this.patchStage(updated);
         this.notifications.success('Loop-back cleared.');
       },
+      error: () => this.setProcessing(stage.id, false),
     });
   }
 

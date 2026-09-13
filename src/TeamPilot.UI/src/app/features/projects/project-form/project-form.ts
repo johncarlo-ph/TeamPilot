@@ -13,6 +13,7 @@ export class ProjectForm {
 
   readonly open = input(false);
   readonly project = input<ProjectDto | null>(null);
+  readonly saving = input(false);
   readonly closed = output<void>();
   readonly saved = output<CreateProjectRequest | UpdateProjectRequest>();
 

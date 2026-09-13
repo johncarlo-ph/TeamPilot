@@ -44,8 +44,10 @@ export class Board {
   readonly loading = signal(true);
 
   readonly createFormOpen = signal(false);
+  readonly creatingTicket = signal(false);
   readonly reviewTarget = signal<TicketDto | null>(null);
   readonly reviewInitialDecision = signal<ReviewDecision>('Approve');
+  readonly submittingReview = signal(false);
 
   readonly ticketsByStatus = computed(() => {
     const grouped: Record<BoardStatus, TicketDto[]> = {
@@ -104,12 +106,15 @@ export class Board {
   }
 
   createTicket(request: { title: string; description: string | null }): void {
+    this.creatingTicket.set(true);
     this.ticketsService.create(this.projectId, request).subscribe({
       next: (ticket) => {
+        this.creatingTicket.set(false);
         this.tickets.update((tickets) => [...tickets, ticket]);
         this.notifications.success('Ticket created.');
         this.createFormOpen.set(false);
       },
+      error: () => this.creatingTicket.set(false),
     });
   }
 
@@ -159,12 +164,15 @@ export class Board {
     if (!ticket) {
       return;
     }
+    this.submittingReview.set(true);
     this.reviewsService.submit(ticket.id, request).subscribe({
       next: (updated) => {
+        this.submittingReview.set(false);
         this.patchTicket(updated);
         this.notifications.success('Review submitted.');
         this.reviewTarget.set(null);
       },
+      error: () => this.submittingReview.set(false),
     });
   }
 

@@ -34,6 +34,8 @@ export class TicketDetail {
   readonly loading = signal(true);
   readonly reviewFormOpen = signal(false);
   readonly starting = signal(false);
+  readonly cancelling = signal(false);
+  readonly submittingReview = signal(false);
 
   readonly ticketId = computed(() => this.route.snapshot.paramMap.get('id')!);
 
@@ -97,11 +99,14 @@ export class TicketDetail {
       return;
     }
     const reason = prompt('Reason for cancelling (optional):')?.trim() || null;
+    this.cancelling.set(true);
     this.ticketsService.cancel(ticket.id, { reason }).subscribe({
       next: () => {
+        this.cancelling.set(false);
         this.notifications.success('Ticket cancelled.');
         this.refresh();
       },
+      error: () => this.cancelling.set(false),
     });
   }
 
@@ -110,12 +115,15 @@ export class TicketDetail {
     if (!ticket) {
       return;
     }
+    this.submittingReview.set(true);
     this.reviewsService.submit(ticket.id, request).subscribe({
       next: () => {
+        this.submittingReview.set(false);
         this.notifications.success('Review submitted.');
         this.reviewFormOpen.set(false);
         this.refresh();
       },
+      error: () => this.submittingReview.set(false),
     });
   }
 

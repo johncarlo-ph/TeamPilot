@@ -39,12 +39,18 @@
               <button
                 type="button"
                 class="btn btn-sm btn-outline-secondary me-1"
+                [disabled]="isDeleting(template.id)"
                 (click)="openEdit(template)"
               >
                 Edit
               </button>
-              <button type="button" class="btn btn-sm btn-danger" (click)="delete(template)">
-                Delete
+              <button
+                type="button"
+                class="btn btn-sm btn-danger"
+                [disabled]="isDeleting(template.id)"
+                (click)="delete(template)"
+              >
+                {{ isDeleting(template.id) ? 'Deleting...' : 'Delete' }}
               </button>
             </td>
           </tr>
@@ -61,6 +67,7 @@
 <app-instruction-template-form
   [open]="formOpen()"
   [template]="editingTemplate()"
+  [saving]="saving()"
   (closed)="formOpen.set(false)"
   (saved)="save($event)"
 ></app-instruction-template-form>

@@ -30,8 +30,13 @@
       @if (
         ticket.status === 'ToDo' || ticket.status === 'InProgress' || ticket.status === 'ForReview'
       ) {
-        <button type="button" class="btn btn-sm btn-outline-danger" (click)="cancelTicket()">
-          Cancel Ticket
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-danger"
+          [disabled]="cancelling()"
+          (click)="cancelTicket()"
+        >
+          {{ cancelling() ? 'Cancelling...' : 'Cancel Ticket' }}
         </button>
       }
     </div>
@@ -125,6 +130,7 @@
     [open]="reviewFormOpen()"
     [initialDecision]="reviewInitialDecision"
     [hasLinkedBranch]="!!ticket.branchName"
+    [submitting]="submittingReview()"
     (closed)="reviewFormOpen.set(false)"
     (submitted)="submitReview($event)"
   ></app-review-form>

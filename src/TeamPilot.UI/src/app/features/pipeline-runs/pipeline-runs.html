@@ -12,7 +12,9 @@
     [ngModel]="triggerReason()"
     (ngModelChange)="triggerReason.set($event)"
   />
-  <button type="button" class="btn btn-outline-primary" (click)="trigger()">Trigger Run</button>
+  <button type="button" class="btn btn-outline-primary" [disabled]="triggering()" (click)="trigger()">
+    {{ triggering() ? 'Triggering...' : 'Trigger Run' }}
+  </button>
 </div>
 
 @if (loading()) {
@@ -40,19 +42,30 @@
             <td>{{ run.completedAtUtc ? (run.completedAtUtc | date: 'short') : '—' }}</td>
             <td class="text-end">
               @if (run.status === 'Queued') {
-                <button type="button" class="btn btn-sm btn-outline-primary" (click)="start(run)">
-                  Start
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  [disabled]="isProcessing(run.id)"
+                  (click)="start(run)"
+                >
+                  {{ isProcessing(run.id) ? 'Starting...' : 'Start' }}
                 </button>
               }
               @if (run.status === 'Running') {
                 <button
                   type="button"
                   class="btn btn-sm btn-success me-1"
+                  [disabled]="isProcessing(run.id)"
                   (click)="complete(run, true)"
                 >
                   Mark Succeeded
                 </button>
-                <button type="button" class="btn btn-sm btn-danger" (click)="complete(run, false)">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger"
+                  [disabled]="isProcessing(run.id)"
+                  (click)="complete(run, false)"
+                >
                   Mark Failed
                 </button>
               }

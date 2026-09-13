@@ -51,6 +51,7 @@
 <app-project-form
   [open]="formOpen()"
   [project]="editingProject()"
+  [saving]="saving()"
   (closed)="closeForm()"
   (saved)="save($event)"
 ></app-project-form>

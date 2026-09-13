@@ -40,6 +40,8 @@
 <app-user-edit-modal
   [open]="editingUser() !== null"
   [user]="editingUser()"
+  [savingRoles]="savingRoles()"
+  [togglingStatus]="togglingStatus()"
   (closed)="editingUser.set(null)"
   (rolesChanged)="saveRoles($event)"
   (statusToggled)="toggleStatus()"

@@ -25,6 +25,23 @@ export class ConflictsPanel {
   readonly resolvingNoteByConflictId = signal<Record<string, string>>({});
   readonly resolvingContentByConflictId = signal<Record<string, string>>({});
   readonly detecting = signal(false);
+  readonly processingConflictIds = signal<ReadonlySet<string>>(new Set());
+
+  isProcessing(conflictId: string): boolean {
+    return this.processingConflictIds().has(conflictId);
+  }
+
+  private setProcessing(conflictId: string, processing: boolean): void {
+    this.processingConflictIds.update((ids) => {
+      const next = new Set(ids);
+      if (processing) {
+        next.add(conflictId);
+      } else {
+        next.delete(conflictId);
+      }
+      return next;
+    });
+  }
 
   get resolvedByName(): string {
     return this.authService.currentUser()?.name ?? '';
@@ -60,19 +77,27 @@ export class ConflictsPanel {
   }
 
   suggestResolution(conflict: ConflictDto): void {
+    this.setProcessing(conflict.id, true);
     this.conflictsService.suggestResolution(conflict.id).subscribe({
-      next: () => this.changed.emit(),
+      next: () => {
+        this.setProcessing(conflict.id, false);
+        this.changed.emit();
+      },
+      error: () => this.setProcessing(conflict.id, false),
     });
   }
 
   acceptAiSuggestion(conflict: ConflictDto): void {
+    this.setProcessing(conflict.id, true);
     this.conflictsService
       .acceptAiSuggestion(conflict.id, { resolvedBy: this.resolvedByName })
       .subscribe({
         next: () => {
+          this.setProcessing(conflict.id, false);
           this.notifications.success('AI suggestion accepted.');
           this.changed.emit();
         },
+        error: () => this.setProcessing(conflict.id, false),
       });
   }
 
@@ -83,13 +108,16 @@ export class ConflictsPanel {
       return;
     }
     const note = this.noteFor(conflict.id).trim() || null;
+    this.setProcessing(conflict.id, true);
     this.conflictsService
       .resolveManually(conflict.id, { resolvedContent, note, resolvedBy: this.resolvedByName })
       .subscribe({
         next: () => {
+          this.setProcessing(conflict.id, false);
           this.notifications.success('Conflict resolved.');
           this.changed.emit();
         },
+        error: () => this.setProcessing(conflict.id, false),
       });
   }
 }

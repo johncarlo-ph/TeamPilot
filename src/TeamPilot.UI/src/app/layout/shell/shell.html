@@ -23,8 +23,13 @@
         }
       </ul>
       <span class="text-body-secondary small">{{ authService.currentUser()?.name }}</span>
-      <button type="button" class="btn btn-outline-secondary btn-sm" (click)="logout()">
-        Sign out
+      <button
+        type="button"
+        class="btn btn-outline-secondary btn-sm"
+        [disabled]="loggingOut()"
+        (click)="logout()"
+      >
+        {{ loggingOut() ? 'Signing out...' : 'Sign out' }}
       </button>
     </div>
   </div>

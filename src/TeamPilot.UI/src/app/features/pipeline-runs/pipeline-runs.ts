@@ -21,6 +21,24 @@ export class PipelineRuns {
   readonly runs = signal<PipelineRunDto[]>([]);
   readonly loading = signal(true);
   readonly triggerReason = signal('');
+  readonly triggering = signal(false);
+  readonly processingIds = signal<ReadonlySet<string>>(new Set());
+
+  isProcessing(id: string): boolean {
+    return this.processingIds().has(id);
+  }
+
+  private setProcessing(id: string, processing: boolean): void {
+    this.processingIds.update((ids) => {
+      const next = new Set(ids);
+      if (processing) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
 
   constructor() {
     this.reload();
@@ -42,21 +60,36 @@ export class PipelineRuns {
     if (!reason) {
       return;
     }
+    this.triggering.set(true);
     this.pipelineRunsService.trigger(this.projectId, { triggerReason: reason }).subscribe({
       next: (run) => {
+        this.triggering.set(false);
         this.runs.update((runs) => [run, ...runs]);
         this.triggerReason.set('');
       },
+      error: () => this.triggering.set(false),
     });
   }
 
   start(run: PipelineRunDto): void {
-    this.pipelineRunsService.start(run.id).subscribe({ next: (updated) => this.patch(updated) });
+    this.setProcessing(run.id, true);
+    this.pipelineRunsService.start(run.id).subscribe({
+      next: (updated) => {
+        this.setProcessing(run.id, false);
+        this.patch(updated);
+      },
+      error: () => this.setProcessing(run.id, false),
+    });
   }
 
   complete(run: PipelineRunDto, succeeded: boolean): void {
+    this.setProcessing(run.id, true);
     this.pipelineRunsService.complete(run.id, { succeeded, logOutput: null }).subscribe({
-      next: (updated) => this.patch(updated),
+      next: (updated) => {
+        this.setProcessing(run.id, false);
+        this.patch(updated);
+      },
+      error: () => this.setProcessing(run.id, false),
     });
   }
 

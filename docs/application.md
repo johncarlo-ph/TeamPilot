@@ -27,7 +27,7 @@ Infrastructure both depend on it, but it depends on neither.
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
 | [`Workflow/`](../src/TeamPilot.Application/Workflow) | Admin-configurable per-project agent workflow: add a blank custom agent, place/remove/reorder stages, and set/clear a stage's loop-back - see "The agent workflow is admin-configurable per project" below |
 | [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure |
-| [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
+| [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
 | [`Pipelines/`](../src/TeamPilot.Application/Pipelines) | CI/CD status-tracking use cases |
@@ -239,7 +239,12 @@ assistant's final text reply:
 
 - **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
   [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction),
-  `list_tickets` (wraps `ITicketRepository.ListAsync`), and `propose_ticket(title, description)`.
+  `list_tickets` (wraps `ITicketRepository.ListAsync`, lean id/title/status rows),
+  `get_ticket(id)` (wraps `ITicketRepository.GetByIdAsync` for one ticket's full title/status/
+  description/branch/cancellation reason — rejected as not found if the id belongs to a
+  different project), and `propose_ticket(title, description)`. The model is instructed to use
+  `list_tickets`/`get_ticket` to ground answers about existing work and to check for
+  related/duplicate tickets before drafting a new one.
 - **`propose_ticket` never writes to the database.** It only captures the drafted title/
   description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
   `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks

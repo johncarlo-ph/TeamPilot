@@ -88,15 +88,17 @@ approved from the chat panel — appears without a manual refresh.
 ### Live Agent chat
 
 Every project also has a **Live Agent** — a chat you can ask about the project itself: general
-questions, explanations of code in the project's repository, and the project's business rules.
-It only reads the repository (nothing it does can change, move, or delete a file), and it only
-looks at files relevant to what you actually asked.
+questions, explanations of code in the project's repository, the project's business rules, and
+questions about its existing tickets. It only reads the repository (nothing it does can change,
+move, or delete a file), and it only looks at files and tickets relevant to what you actually
+asked.
 
 If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
-card right in the chat, with a **Create ticket** button. Nothing is created until you click that
-button; the Live Agent never adds a ticket to the board on its own. Once you approve it, the new
-ticket appears on the board (in To Do) the next time the board polls, just like one you created
-yourself with **New Ticket**.
+card right in the chat, with a **Create ticket** button. Before drafting, it checks the board's
+existing tickets and will call out related or duplicate ones in the draft when relevant. Nothing
+is created until you click that button; the Live Agent never adds a ticket to the board on its
+own. Once you approve it, the new ticket appears on the board (in To Do) the next time the board
+polls, just like one you created yourself with **New Ticket**.
 
 **New Ticket** — available to anyone assigned to the project. New tickets always start in To Do.
 

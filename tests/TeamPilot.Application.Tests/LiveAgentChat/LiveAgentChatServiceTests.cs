@@ -111,6 +111,59 @@ public class LiveAgentChatServiceTests
     }
 
     [Fact]
+    public async Task SendMessageAsync_ModelReadsATicket_ExecutesGetTicketAndReturnsFinalAnswer()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix login bug", "Users can't sign in with Google.");
+
+        var toolUseResponse = new LlmConversationResponse(
+            [new LlmToolUseBlock("call-1", "get_ticket", $$"""{"id":"{{ticket.Id}}"}""")],
+            "tool_use",
+            "claude-test",
+            10,
+            20);
+
+        _ticketRepository
+            .Setup(t => t.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        _llmConnector
+            .SetupSequence(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(toolUseResponse)
+            .ReturnsAsync(FinalTextResponse("That ticket is about a Google sign-in bug."));
+
+        var reply = await _sut.SendMessageAsync(_project.Id, new SendChatMessageRequest("What is the login bug ticket about?"));
+
+        Assert.Equal("That ticket is about a Google sign-in bug.", reply.Content);
+        _ticketRepository.Verify(t => t.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SendMessageAsync_ModelReadsATicketFromAnotherProject_ReturnsNotFoundWithoutLeakingIt()
+    {
+        var otherProjectTicket = Ticket.Create(Guid.NewGuid(), "Unrelated ticket", "Belongs to a different project.");
+
+        var toolUseResponse = new LlmConversationResponse(
+            [new LlmToolUseBlock("call-1", "get_ticket", $$"""{"id":"{{otherProjectTicket.Id}}"}""")],
+            "tool_use",
+            "claude-test",
+            10,
+            20);
+
+        _ticketRepository
+            .Setup(t => t.GetByIdAsync(otherProjectTicket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(otherProjectTicket);
+
+        _llmConnector
+            .SetupSequence(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(toolUseResponse)
+            .ReturnsAsync(FinalTextResponse("I couldn't find that ticket."));
+
+        var reply = await _sut.SendMessageAsync(_project.Id, new SendChatMessageRequest($"Tell me about ticket {otherProjectTicket.Id}"));
+
+        Assert.Equal("I couldn't find that ticket.", reply.Content);
+    }
+
+    [Fact]
     public async Task SendMessageAsync_ModelDraftsATicket_CapturesProposalWithoutCreatingATicket()
     {
         var proposeResponse = new LlmConversationResponse(

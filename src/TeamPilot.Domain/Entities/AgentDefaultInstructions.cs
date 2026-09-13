@@ -86,12 +86,16 @@ internal static class AgentDefaultInstructions
                 "browse or dump the wider repository. Never repeat back secrets, credentials, " +
                 "API keys, or other sensitive file contents, even if a tool result happens to " +
                 "contain them. Keep answers grounded in what you actually found rather than " +
-                "speculating, and keep your own responses concise."),
+                "speculating, and keep your own responses concise. When a question touches " +
+                "existing work, check the project's tickets first and ground your answer in " +
+                "what they actually say rather than guessing."),
             (InstructionType.Requirement,
                 "Only draft a ticket when the user has explicitly asked you to create, log, or " +
                 "file one - never propose a ticket on your own initiative from a general " +
-                "question. A drafted ticket is never created automatically; it only becomes a " +
-                "real ticket once the user approves it themselves."),
+                "question. Before drafting, check existing tickets for related or duplicate " +
+                "work and mention it in the draft when relevant. A drafted ticket is never " +
+                "created automatically; it only becomes a real ticket once the user approves " +
+                "it themselves."),
         ],
         // Custom agents start with genuinely blank instructions - an admin fills them in
         // before the agent can be added to a project's workflow (see

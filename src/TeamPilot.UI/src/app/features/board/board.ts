@@ -2,7 +2,7 @@ import { CdkDragDrop, DragDropModule } from '@angular/cdk/drag-drop';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { distinctUntilChanged, interval, map, startWith, switchMap } from 'rxjs';
+import { Subject, distinctUntilChanged, interval, map, merge, startWith, switchMap } from 'rxjs';
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { ProjectsService } from '../../core/services/projects.service';
@@ -51,11 +51,19 @@ export class Board {
   readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
 
+  readonly chatCollapsed = signal(false);
+
   readonly createFormOpen = signal(false);
   readonly creatingTicket = signal(false);
   readonly reviewTarget = signal<TicketDto | null>(null);
   readonly reviewInitialDecision = signal<ReviewDecision>('Approve');
   readonly submittingReview = signal(false);
+
+  // Forces the next poll tick to fire immediately after a mutation, cancelling (via switchMap)
+  // any poll request that was already in flight before the mutation - without this, a stale
+  // in-flight poll response can land after an optimistic update and overwrite it with pre-mutation
+  // data, making e.g. a just-created ticket flicker away until the following poll cycle.
+  private readonly refreshTrigger$ = new Subject<void>();
 
   readonly ticketsByStatus = computed(() => {
     const grouped: Record<BoardStatus, TicketDto[]> = {
@@ -85,7 +93,7 @@ export class Board {
         map((params) => params.get('projectId')!),
         distinctUntilChanged(),
         switchMap((projectId) =>
-          interval(POLL_INTERVAL_MS).pipe(
+          merge(interval(POLL_INTERVAL_MS), this.refreshTrigger$).pipe(
             startWith(0),
             switchMap(() => this.ticketsService.listForProject(projectId))
           )
@@ -124,6 +132,7 @@ export class Board {
       next: (ticket) => {
         this.creatingTicket.set(false);
         this.tickets.update((tickets) => [...tickets, ticket]);
+        this.refreshTrigger$.next();
         this.notifications.success('Ticket created.');
         this.createFormOpen.set(false);
       },
@@ -144,6 +153,7 @@ export class Board {
       this.ticketsService.startPipeline(ticket.id).subscribe({
         next: (result) => {
           this.patchTicket(result.ticket);
+          this.refreshTrigger$.next();
           this.notifications.success(
             result.testingPassed
               ? 'Pipeline complete - testing passed.'
@@ -155,7 +165,10 @@ export class Board {
     }
     if (ticket.status === 'InProgress' && targetStatus === 'ForReview') {
       this.ticketsService.moveToReview(ticket.id).subscribe({
-        next: (updated) => this.patchTicket(updated),
+        next: (updated) => {
+          this.patchTicket(updated);
+          this.refreshTrigger$.next();
+        },
       });
       return;
     }
@@ -182,7 +195,12 @@ export class Board {
       next: (updated) => {
         this.submittingReview.set(false);
         this.patchTicket(updated);
-        this.notifications.success('Review submitted.');
+        this.refreshTrigger$.next();
+        this.notifications.success(
+          request.decision === 'RequestChanges'
+            ? 'Review submitted - the pipeline is now running in the background.'
+            : 'Review submitted.'
+        );
         this.reviewTarget.set(null);
       },
       error: () => this.submittingReview.set(false),

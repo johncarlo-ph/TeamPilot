@@ -46,6 +46,8 @@ export class InstructionEditor {
     Requirement: '',
   });
 
+  readonly isCustomAgent = computed(() => this.agentRole() === 'Custom');
+
   readonly historyByType = computed(() => {
     const grouped: Record<InstructionType, InstructionDto[]> = {
       Constitution: [],
@@ -84,6 +86,14 @@ export class InstructionEditor {
         this.instructionTemplatesService.list(role).subscribe((templates) => this.templates.set(templates));
       }
     });
+
+    effect(() => {
+      if (this.isCustomAgent()) {
+        this.form.controls.Constitution.enable({ emitEvent: false });
+      } else {
+        this.form.controls.Constitution.disable({ emitEvent: false });
+      }
+    });
   }
 
   currentVersionLabel(type: InstructionType): string {
@@ -92,6 +102,9 @@ export class InstructionEditor {
   }
 
   applyTemplate(type: InstructionType, templateId: string): void {
+    if (type === 'Constitution' && !this.isCustomAgent()) {
+      return;
+    }
     const template = this.templatesByType()[type].find((t) => t.id === templateId);
     if (template) {
       this.form.controls[type].setValue(template.content);
@@ -103,6 +116,7 @@ export class InstructionEditor {
     const value = this.form.getRawValue();
     const updatedBy = this.authService.currentUser()?.name ?? null;
     const requests = this.types
+      .filter((type) => type !== 'Constitution' || this.isCustomAgent())
       .filter((type) => value[type].trim())
       .map((type) =>
         this.instructionsService.addVersion(this.agentId(), {

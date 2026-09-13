@@ -4,8 +4,9 @@
     {
       "name": "TeamPilot.API",
       "runtimeExecutable": "dotnet",
-      "runtimeArgs": ["run", "--project", "src/TeamPilot.API", "--launch-profile", "http"],
-      "port": 5245
+      "runtimeArgs": ["run", "--project", "src/TeamPilot.API", "--launch-profile", "https"],
+      "port": 7085,
+      "url": "https://localhost:7085"
     },
     {
       "name": "TeamPilot.UI",

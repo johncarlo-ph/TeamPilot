@@ -1,8 +1,8 @@
-import { Component, effect, inject, input, signal } from '@angular/core';
+import { Component, effect, inject, input, output, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { LiveAgentChatService } from '../../../core/services/live-agent-chat.service';
-import { TicketsService } from '../../../core/services/tickets.service';
 import { NotificationService } from '../../../core/notification/notification.service';
+import { AuthService } from '../../../core/services/auth.service';
 import { ChatMessageDto } from '../../../core/models';
 
 @Component({
@@ -12,17 +12,24 @@ import { ChatMessageDto } from '../../../core/models';
 })
 export class ChatPanel {
   private readonly chatService = inject(LiveAgentChatService);
-  private readonly ticketsService = inject(TicketsService);
   private readonly notifications = inject(NotificationService);
+  private readonly authService = inject(AuthService);
   private readonly fb = inject(FormBuilder);
 
   readonly projectId = input.required<string>();
+  // Layout state (collapsed to a thin strip so the board can expand) lives in the parent Board,
+  // not here - collapsing is a board-layout concern, and this component already takes its data
+  // scope (projectId) as an input the same way.
+  readonly collapsed = input(false);
+  readonly collapsedChange = output<boolean>();
 
   readonly messages = signal<ChatMessageDto[]>([]);
   readonly loading = signal(true);
   readonly sending = signal(false);
-  readonly createdTicketMessageIds = signal<ReadonlySet<string>>(new Set());
-  readonly creatingTicketMessageIds = signal<ReadonlySet<string>>(new Set());
+  // The decision itself is persisted server-side on the message (createdTicketId/ticketRejected)
+  // so it survives a reload and is visible to every user - this only tracks an in-flight
+  // approve/reject request so both buttons can be disabled while it's outstanding.
+  readonly processingTicketMessageIds = signal<ReadonlySet<string>>(new Set());
 
   readonly form = this.fb.nonNullable.group({
     content: ['', Validators.required],
@@ -40,6 +47,10 @@ export class ChatPanel {
         error: () => this.loading.set(false),
       });
     });
+  }
+
+  toggleCollapsed(): void {
+    this.collapsedChange.emit(!this.collapsed());
   }
 
   send(): void {
@@ -62,6 +73,9 @@ export class ChatPanel {
         content,
         proposedTicketTitle: null,
         proposedTicketDescription: null,
+        createdTicketId: null,
+        ticketRejected: false,
+        senderName: this.authService.currentUser()?.name ?? null,
         createdAtUtc: new Date().toISOString(),
       },
     ]);
@@ -77,36 +91,54 @@ export class ChatPanel {
   }
 
   approveTicket(message: ChatMessageDto): void {
-    if (!message.proposedTicketTitle || this.isTicketCreated(message) || this.isCreatingTicket(message)) {
+    if (!message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
       return;
     }
 
-    this.creatingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
-    this.ticketsService
-      .create(this.projectId(), {
-        title: message.proposedTicketTitle,
-        description: message.proposedTicketDescription,
-      })
-      .subscribe({
-        next: () => {
-          this.notifications.success('Ticket created.');
-          this.createdTicketMessageIds.update((ids) => new Set(ids).add(message.id));
-          this.removeCreatingId(message.id);
-        },
-        error: () => this.removeCreatingId(message.id),
-      });
+    this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
+    this.chatService.approveTicket(this.projectId(), message.id).subscribe({
+      next: (updated) => {
+        this.notifications.success('Ticket created.');
+        this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
+        this.removeProcessingId(message.id);
+      },
+      error: () => this.removeProcessingId(message.id),
+    });
+  }
+
+  rejectTicket(message: ChatMessageDto): void {
+    if (!message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
+      return;
+    }
+
+    this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
+    this.chatService.rejectTicket(this.projectId(), message.id).subscribe({
+      next: (updated) => {
+        this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
+        this.removeProcessingId(message.id);
+      },
+      error: () => this.removeProcessingId(message.id),
+    });
   }
 
   isTicketCreated(message: ChatMessageDto): boolean {
-    return this.createdTicketMessageIds().has(message.id);
+    return message.createdTicketId !== null;
   }
 
-  isCreatingTicket(message: ChatMessageDto): boolean {
-    return this.creatingTicketMessageIds().has(message.id);
+  isTicketRejected(message: ChatMessageDto): boolean {
+    return message.ticketRejected;
   }
 
-  private removeCreatingId(messageId: string): void {
-    this.creatingTicketMessageIds.update((ids) => {
+  isTicketDecided(message: ChatMessageDto): boolean {
+    return this.isTicketCreated(message) || this.isTicketRejected(message);
+  }
+
+  isProcessingTicket(message: ChatMessageDto): boolean {
+    return this.processingTicketMessageIds().has(message.id);
+  }
+
+  private removeProcessingId(messageId: string): void {
+    this.processingTicketMessageIds.update((ids) => {
       const next = new Set(ids);
       next.delete(messageId);
       return next;

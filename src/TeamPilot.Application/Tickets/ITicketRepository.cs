@@ -40,4 +40,13 @@ public interface ITicketRepository
     /// <see cref="TicketStatus.InProgress"/>, without loading full ticket rows.
     /// </summary>
     Task<int> CountByStatusAsync(Guid projectId, TicketStatus status, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ticket counts grouped by status for each of the given projects, in one query - used by
+    /// <c>ProjectService</c> to populate the project list's summary badges without an N+1 fetch
+    /// per project. A project with no tickets, or no tickets in a given status, simply has no
+    /// entry for it - callers default missing statuses to zero.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, IReadOnlyDictionary<TicketStatus, int>>> GetStatusCountsByProjectAsync(
+        IReadOnlyCollection<Guid> projectIds, CancellationToken cancellationToken = default);
 }

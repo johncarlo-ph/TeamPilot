@@ -1,5 +1,6 @@
 using TeamPilot.Domain.Common;
 using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
 
 namespace TeamPilot.Domain.Entities;
 
@@ -94,7 +95,11 @@ public class Agent : Entity
 
     /// <summary>
     /// Appends a new version of an instruction, superseding the previous current version of the same type.
-    /// Prior versions are retained for history rather than overwritten.
+    /// Prior versions are retained for history rather than overwritten. Once a default/standing role
+    /// (anything but <see cref="AgentRole.Custom"/>) has its initial Constitution seeded by
+    /// <see cref="Create"/>, that Constitution can never be re-versioned - it is fixed so the orchestration
+    /// pipeline can rely on what each stage fundamentally is. Use this agent's Guideline or Requirement
+    /// instructions to tune its behavior instead. A Custom agent's Constitution has no such restriction.
     /// </summary>
     public Instruction AddInstructionVersion(InstructionType type, string content, string? updatedBy)
     {
@@ -104,6 +109,11 @@ public class Agent : Entity
         }
 
         var versionsOfType = _instructions.Where(i => i.Type == type).ToList();
+
+        if (type == InstructionType.Constitution && Role != AgentRole.Custom && versionsOfType.Count > 0)
+        {
+            throw new ConstitutionEditNotAllowedException(Role);
+        }
 
         foreach (var current in versionsOfType.Where(i => i.IsCurrent))
         {

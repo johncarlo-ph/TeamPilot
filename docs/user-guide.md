@@ -58,8 +58,9 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 ## Projects
 
 `/projects` — the landing page after sign-in. One card per project the account is assigned to,
-showing name, description, and the connected remote repository URL, with an **Open Board**
-button.
+showing name, description, the connected remote repository URL, and a row of count badges — one
+per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked, 👀 For Review, ✅ Done) - so you can see
+where a project's tickets stand without opening its board, with an **Open Board** button.
 
 **New Project / Edit Project** — Admin only; the button and each card's Edit link are hidden
 for Analysts and Developers. Creating a project clones its remote repository right away, so the
@@ -85,6 +86,12 @@ clickable link to the remote once you're on the [ticket detail](#ticket-detail) 
 polls for changes roughly every 8 seconds, so a teammate's update — including a ticket you just
 approved from the chat panel — appears without a manual refresh.
 
+The chat panel has a small round arrow button in its header that collapses it down to a thin
+strip, giving the board itself the extra width — handy on a smaller screen or a project with a
+lot of columns. The collapsed strip shows the same button, now a 💬 icon; click it to expand the
+chat back to full size. Both the collapse and the chat panel's own height animate smoothly, and
+the chat panel always stretches to fill the space down to the bottom of the window.
+
 ### Live Agent chat
 
 Every project also has a **Live Agent** — a chat you can ask about the project itself: general
@@ -93,12 +100,20 @@ questions about its existing tickets. It only reads the repository (nothing it d
 move, or delete a file), and it only looks at files and tickets relevant to what you actually
 asked.
 
+The chat is shared by everyone with access to the project, so each message is labeled with the
+name of the person who sent it (the Live Agent's own replies are labeled **Live Agent**).
+
 If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
-card right in the chat, with a **Create ticket** button. Before drafting, it checks the board's
-existing tickets and will call out related or duplicate ones in the draft when relevant. Nothing
-is created until you click that button; the Live Agent never adds a ticket to the board on its
-own. Once you approve it, the new ticket appears on the board (in To Do) the next time the board
-polls, just like one you created yourself with **New Ticket**.
+card right in the chat, with **Create ticket** and **Reject** buttons side by side. Before
+drafting, it checks the board's existing tickets and will call out related or duplicate ones in
+the draft when relevant. Nothing is created until you click **Create ticket**; the Live Agent
+never adds a ticket to the board on its own. Once you approve it, the new ticket appears on the
+board (in To Do) the next time the board polls, just like one you created yourself with
+**New Ticket**, and the card shows a **Ticket created** badge instead of the buttons. If the
+draft isn't what you wanted, click **Reject** instead — nothing is created, and the card shows a
+**Ticket rejected** badge, so the buttons don't stay there inviting an accidental click later.
+Either way, the badge sticks even after you reload the page or if a teammate looks at the same
+chat, so nobody can approve or reject the same draft twice.
 
 **New Ticket** — available to anyone assigned to the project. New tickets always start in To Do.
 
@@ -189,9 +204,12 @@ Blocked ticket (e.g. its goal no longer applies because a requirement changed). 
 confirmation, then an optional reason, and sets the ticket to **Cancelled** — permanent, with no
 way back. Since a ticket's work only ever lives on its own feature branch until a human approves
 it, and Cancel is only available before that approval, cancelling never touches the project's
-base branch or remote history — it just stops tracking the ticket as active work. Cancelled
-tickets drop off the board entirely (they're not a column, unlike Blocked) but stay reachable
-from wherever their link was shared, showing the reason if one was given.
+base branch — it just stops tracking the ticket as active work. If the ticket has a linked
+branch, cancelling deletes it from the remote in the same action (see [Git](#git) below), since a
+Cancelled ticket drops off the board entirely (they're not a column, unlike Blocked) with no other
+link back to its detail page — leaving the branch to be deleted manually later would leave it
+essentially unreachable. The ticket itself stays reachable from wherever its link was shared,
+showing the cancellation reason if one was given.
 
 ### Git
 
@@ -212,16 +230,17 @@ project's base branch and pushed to the remote right away). Nothing is created o
 that confirmation is accepted.
 
 > **A branch can only ever belong to one ticket.** If the name you enter is already linked to a
-> different ticket in this project — including a Cancelled one, since its old branch may still
-> carry commits from before it was abandoned — linking is refused with an error naming that
-> other ticket. Start a new ticket instead of trying to reuse the branch.
+> different ticket in this project — including a Cancelled one that still has a branch linked
+> (see below for why that's now the exception rather than the rule), since its old branch may
+> still carry commits from before it was abandoned — linking is refused with an error naming
+> that other ticket. Start a new ticket instead of trying to reuse the branch.
 
-Once a ticket is **Cancelled**, a **Delete Branch** button appears next to the linked branch
-name. Confirming it permanently deletes that branch from the project's remote (and the local
-copy TeamPilot keeps) — this is genuinely irreversible, unlike everything else in this list.
-It's the one way to actually free up a branch name for reuse by another ticket; leaving a
-cancelled ticket's branch alone (the default — nothing deletes it automatically) keeps that name
-permanently reserved to that ticket.
+**Cancelling a ticket automatically deletes its linked branch** from the project's remote (and
+the local copy TeamPilot keeps) in the same action — this is genuinely irreversible, unlike
+everything else in this list, and it's also what frees the branch name up for reuse by another
+ticket right away. If a Cancelled ticket still shows a linked branch anyway (e.g. it was
+cancelled before this behavior existed, or the automatic deletion needs retrying), a
+**Delete Branch** button appears next to the branch name to do it manually.
 
 > **Approval needs a branch.** A ticket can't be approved until it has a linked branch —
 > **Approve** is disabled on the review form until one exists, since approving merges that
@@ -273,7 +292,8 @@ agents in the order tickets run through them; selecting one edits its instructio
 The standing Live Agent isn't listed here — it's managed via the
 [Live Agent chat](#live-agent-chat) instead.
 
-**Everyone assigned to the project can view the pipeline and edit any agent's instructions.**
+**Everyone assigned to the project can view the pipeline and edit any agent's instructions**
+(subject to the Constitution being fixed on default agents — see **Editing instructions** below).
 Reordering the pipeline, adding or removing an agent, and configuring a loop-back are
 **Admin-only** — a Developer or Analyst sees the same ordered list, but without the drag handle,
 Remove button, or loop-back controls.
@@ -317,14 +337,23 @@ already-scheduled agent's instructions is unaffected by this lock.
 **Editing instructions** — each agent has three instruction fields: **Constitution**,
 **Guideline**, and **Requirement** — the standing text given to an agent before it works. A new
 agent starts with a generic, technology-agnostic default for each field based on its role (shown
-as version 1, authored by "System"); edit and save any field to add project- or
-technology-specific instructions on top of that default. Each field shows its current version
-number and, if there's history, a disclosure listing every prior version with author and date.
-Above each field, a **Template** dropdown is always shown (greyed out if there's nothing to pick
+as version 1, authored by "System"); edit and save a field to add project- or technology-specific
+instructions on top of that default. Each field shows its current version number and, if there's
+history, a disclosure listing every prior version with author and date. Above a Guideline or
+Requirement field, a **Template** dropdown is always shown (greyed out if there's nothing to pick
 yet) and lists any saved [instruction templates](#admin-instruction-templates) that match this
 agent's role and that field's type — picking one fills the textarea with the template's content,
 and the dropdown keeps showing what you picked, so you can review or tweak it before saving;
 nothing is applied until you save.
+
+> **A default agent's Constitution is fixed.** For the standing Research, Design, Coding,
+> Testing, and Live Agent roles, the Constitution field is read-only (labeled **Fixed**, with no
+> Template dropdown) — it defines what that role fundamentally is in the pipeline, and changing it
+> is not allowed since the pipeline's own logic (e.g. Testing looping back to Coding) depends on
+> each stage staying what its role says it is. Use that agent's Guideline or Requirement instead
+> to adapt how it works for your project. A **custom** agent has no such restriction — its
+> Constitution is yours to define and edit like any other field, since it has no built-in role to
+> preserve.
 
 > **Saving creates a new version.** **Save & Ingest** never overwrites — it adds a new version
 > for every field that was changed and leaves the others untouched. A field left blank is
@@ -413,22 +442,24 @@ versioned instructions at the time.
 - **Almost nothing can be deleted.** Projects, tickets, and agents can be created and edited
   (agents can also be deactivated), but not deleted through the UI. A ticket can be **Cancelled**
   instead (see [Ticket detail](#ticket-detail)) — that's a permanent status, not a deletion; the
-  ticket and its history stay on record. Instruction templates and, once a ticket is Cancelled,
-  its Git branch are the two real exceptions — both genuinely, irreversibly deleted when you
-  click their **Delete** button. An agent's **Remove** button on the
+  ticket and its history stay on record. Instruction templates and a Cancelled ticket's Git
+  branch are the two real exceptions — both genuinely, irreversibly deleted, the branch
+  automatically as part of cancelling (or manually via its **Delete Branch** button, for a ticket
+  cancelled before this was automatic). An agent's **Remove** button on the
   [Agent Pipeline](#agent-pipeline--instructions) page looks like a third exception but usually
   isn't: it only takes the agent out of the pipeline sequence — the agent itself, and its
   instructions and commit history, are untouched and it can be added back later. The one genuine
   exception is a custom agent that's never actually run — its "Available agents" **Remove**
   button really does delete it permanently, since there's nothing on record to lose.
 - **A ticket keeps one branch for life — with one exception.** Once linked in the Git panel, it
-  can't be swapped for a different one. Deleting a Cancelled ticket's branch (manually, see
-  [Ticket detail](#ticket-detail), or automatically via **Reject**, see [Reviews](#reviews)) is
-  the only way that field goes back to empty, and even then a Cancelled ticket can't link a new
-  one — it's terminal either way.
-- **Approving and Rejecting both have real, irreversible side effects.** Approve merges code;
-  Reject deletes the ticket's branch. Request Changes, Resolve Conflict, and comments just
-  record a decision (though Request Changes does trigger a new pipeline run).
+  can't be swapped for a different one. Deleting the branch — automatically when the ticket is
+  Cancelled or Rejected (see [Reviews](#reviews)), or manually for a ticket cancelled before that
+  was automatic — is the only way that field goes back to empty, and even then a Cancelled ticket
+  can't link a new one — it's terminal either way.
+- **Cancelling, Approving, and Rejecting all have real, irreversible side effects.** Cancelling
+  and Rejecting both delete the ticket's branch; Approve merges code instead. Request Changes,
+  Resolve Conflict, and comments just record a decision (though Request Changes does trigger a
+  new pipeline run).
 - **New sign-ins start with nothing.** A first-time sign-in has zero roles and zero project
   assignments — see [Admin: Users](#admin-users).
 - **A project's remote URL is set once.** It can't be edited after the project is created — get

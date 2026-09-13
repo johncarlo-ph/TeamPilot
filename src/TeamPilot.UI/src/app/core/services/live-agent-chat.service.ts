@@ -16,4 +16,18 @@ export class LiveAgentChatService {
   sendMessage(projectId: string, request: SendChatMessageRequest): Observable<ChatMessageDto> {
     return this.http.post<ChatMessageDto>(`${this.apiBaseUrl}/projects/${projectId}/live-agent/messages`, request);
   }
+
+  approveTicket(projectId: string, messageId: string): Observable<ChatMessageDto> {
+    return this.http.post<ChatMessageDto>(
+      `${this.apiBaseUrl}/projects/${projectId}/live-agent/messages/${messageId}/approve-ticket`,
+      null
+    );
+  }
+
+  rejectTicket(projectId: string, messageId: string): Observable<ChatMessageDto> {
+    return this.http.post<ChatMessageDto>(
+      `${this.apiBaseUrl}/projects/${projectId}/live-agent/messages/${messageId}/reject-ticket`,
+      null
+    );
+  }
 }

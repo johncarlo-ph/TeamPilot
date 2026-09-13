@@ -10,8 +10,10 @@ using TeamPilot.Application.LiveAgentChat.Dtos;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Tickets;
+using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
 
 namespace TeamPilot.Application.LiveAgentChat;
 
@@ -29,9 +31,11 @@ public sealed class LiveAgentChatService(
     IInstructionRepository instructionRepository,
     IProjectRepository projectRepository,
     ITicketRepository ticketRepository,
+    ITicketService ticketService,
     IGitService gitService,
     ILlmConnector llmConnector,
     IProjectAccessGuard projectAccessGuard,
+    ICurrentUserContext currentUser,
     IUnitOfWork unitOfWork,
     IValidator<SendChatMessageRequest> sendValidator) : ILiveAgentChatService
 {
@@ -44,6 +48,66 @@ public sealed class LiveAgentChatService(
 
         var conversation = await conversationRepository.GetByProjectIdAsync(projectId, cancellationToken);
         return conversation is null ? [] : conversation.Messages.Select(ToDto).ToList();
+    }
+
+    public async Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken = default)
+    {
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var message = await GetMessageOrThrowAsync(projectId, messageId, cancellationToken);
+
+        // Idempotent: a message already marked approved (e.g. a second click before the UI
+        // re-rendered, or two users racing on the same draft) just returns its current state
+        // rather than creating a duplicate ticket or erroring.
+        if (message.CreatedTicketId is not null)
+        {
+            return ToDto(message);
+        }
+
+        // Checked here, before creating anything, rather than left to MarkTicketCreated's own
+        // guard below - failing after ticketService.CreateAsync already ran would leave an
+        // orphan Ticket with no message ever pointing at it.
+        if (message.TicketRejected)
+        {
+            throw new ChatMessageTicketApprovalException("This message's proposed ticket was already rejected.");
+        }
+
+        var ticket = await ticketService.CreateAsync(
+            projectId,
+            new CreateTicketRequest(message.ProposedTicketTitle ?? string.Empty, message.ProposedTicketDescription),
+            cancellationToken);
+
+        message.MarkTicketCreated(ticket.Id);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ToDto(message);
+    }
+
+    public async Task<ChatMessageDto> RejectTicketAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken = default)
+    {
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var message = await GetMessageOrThrowAsync(projectId, messageId, cancellationToken);
+
+        // Idempotent, same reasoning as ApproveTicketAsync.
+        if (message.TicketRejected)
+        {
+            return ToDto(message);
+        }
+
+        message.RejectTicket();
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ToDto(message);
+    }
+
+    private async Task<ChatMessage> GetMessageOrThrowAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken)
+    {
+        var conversation = await conversationRepository.GetByProjectIdAsync(projectId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Conversation), projectId);
+
+        return conversation.Messages.FirstOrDefault(m => m.Id == messageId)
+            ?? throw new NotFoundException(nameof(ChatMessage), messageId);
     }
 
     public async Task<ChatMessageDto> SendMessageAsync(Guid projectId, SendChatMessageRequest request, CancellationToken cancellationToken = default)
@@ -65,7 +129,7 @@ public sealed class LiveAgentChatService(
             await conversationRepository.AddAsync(conversation, cancellationToken);
         }
 
-        conversation.AddMessage(ChatMessageRole.User, request.Content);
+        conversation.AddMessage(ChatMessageRole.User, request.Content, senderName: currentUser.Name);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var instructions = await AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, liveAgent.Id, cancellationToken);
@@ -142,14 +206,24 @@ public sealed class LiveAgentChatService(
                     case "list_files":
                     {
                         var path = TryGetString(input, "path");
-                        var entries = await gitService.ListFilesAsync(project.RepositoryPath, path, cancellationToken);
+                        IReadOnlyList<string> entries;
+                        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+                        {
+                            entries = await gitService.ListFilesAsync(project.RepositoryPath, path, cancellationToken);
+                        }
+
                         return (entries.Count == 0 ? "(empty)" : string.Join("\n", entries), false, null);
                     }
 
                     case "read_file":
                     {
                         var path = TryGetString(input, "path") ?? string.Empty;
-                        var result = await gitService.ReadFileAsync(project.RepositoryPath, path, cancellationToken);
+                        GitFileReadResult result;
+                        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+                        {
+                            result = await gitService.ReadFileAsync(project.RepositoryPath, path, cancellationToken);
+                        }
+
                         if (!result.Found)
                         {
                             return ("File not found or not accessible.", true, null);
@@ -263,7 +337,9 @@ public sealed class LiveAgentChatService(
             "Draft a new ticket for the user to review. Call this ONLY when the user has explicitly asked you to create, " +
             "log, or file a ticket - never propose one on your own initiative from a general question. Before drafting, " +
             "check list_tickets/get_ticket for related or duplicate existing tickets and reference them by id in the " +
-            "description when relevant. This does not create the ticket; the user must approve it themselves in the chat.",
+            "description when relevant. Describe the problem and the desired behavior only - never cite a specific file " +
+            "path or line number, since the code may have changed by the time the ticket is worked on. This does not " +
+            "create the ticket; the user must approve it themselves in the chat.",
             """{"type":"object","properties":{"title":{"type":"string","description":"Short ticket title."},"description":{"type":"string","description":"Ticket description."}},"required":["title","description"]}"""),
     ];
 
@@ -273,5 +349,8 @@ public sealed class LiveAgentChatService(
         message.Content,
         message.ProposedTicketTitle,
         message.ProposedTicketDescription,
+        message.CreatedTicketId,
+        message.TicketRejected,
+        message.SenderName,
         message.CreatedAtUtc);
 }

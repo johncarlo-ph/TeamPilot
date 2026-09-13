@@ -7,6 +7,7 @@ using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Projects.Dtos;
 using TeamPilot.Application.Projects.Validators;
+using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Users;
 using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
@@ -18,6 +19,7 @@ namespace TeamPilot.Application.Tests.Projects;
 public class ProjectServiceTests
 {
     private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IUserRepository> _userRepository = new();
     private readonly Mock<IAgentService> _agentService = new();
     private readonly Mock<IWorkflowService> _workflowService = new();
@@ -35,9 +37,13 @@ public class ProjectServiceTests
         _gitService
             .Setup(g => g.CloneAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid projectId, string _, string _, CancellationToken _) => $"C:/git-sandboxes/{projectId}");
+        _ticketRepository
+            .Setup(r => r.GetStatusCountsByProjectAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, IReadOnlyDictionary<TicketStatus, int>>());
 
         _sut = new ProjectService(
             _projectRepository.Object,
+            _ticketRepository.Object,
             _userRepository.Object,
             _agentService.Object,
             _workflowService.Object,
@@ -209,5 +215,45 @@ public class ProjectServiceTests
 
         Assert.Single(result);
         Assert.Equal(projectA.Id, result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListAsync_PopulatesTicketStatusCountsFromTheRepository()
+    {
+        var projectA = Project.Create("A", "desc", "https://github.com/org/a.git", "encrypted-token", "main");
+        _projectRepository.Setup(r => r.ListAsync(It.IsAny<CancellationToken>())).ReturnsAsync([projectA]);
+        _currentUser.Setup(c => c.IsInRole(UserRole.Admin)).Returns(true);
+        _ticketRepository
+            .Setup(r => r.GetStatusCountsByProjectAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, IReadOnlyDictionary<TicketStatus, int>>
+            {
+                [projectA.Id] = new Dictionary<TicketStatus, int>
+                {
+                    [TicketStatus.ToDo] = 2,
+                    [TicketStatus.Blocked] = 1,
+                },
+            });
+
+        var result = await _sut.ListAsync();
+
+        Assert.Equal(2, result[0].TicketStatusCounts.ToDo);
+        Assert.Equal(1, result[0].TicketStatusCounts.Blocked);
+        Assert.Equal(0, result[0].TicketStatusCounts.InProgress);
+        Assert.Equal(0, result[0].TicketStatusCounts.ForReview);
+        Assert.Equal(0, result[0].TicketStatusCounts.Done);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithValidRequest_ReturnsZeroedTicketStatusCounts()
+    {
+        var request = new CreateProjectRequest("TeamPilot", "desc", "https://github.com/org/teampilot.git", "pat-123", "main");
+
+        var result = await _sut.CreateAsync(request);
+
+        Assert.Equal(0, result.TicketStatusCounts.ToDo);
+        Assert.Equal(0, result.TicketStatusCounts.InProgress);
+        Assert.Equal(0, result.TicketStatusCounts.Blocked);
+        Assert.Equal(0, result.TicketStatusCounts.ForReview);
+        Assert.Equal(0, result.TicketStatusCounts.Done);
     }
 }

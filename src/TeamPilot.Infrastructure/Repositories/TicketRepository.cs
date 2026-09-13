@@ -47,4 +47,21 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
         await dbContext.Tickets
             .AsNoTracking()
             .CountAsync(t => t.ProjectId == projectId && t.Status == status, cancellationToken);
+
+    public async Task<IReadOnlyDictionary<Guid, IReadOnlyDictionary<TicketStatus, int>>> GetStatusCountsByProjectAsync(
+        IReadOnlyCollection<Guid> projectIds, CancellationToken cancellationToken = default)
+    {
+        var counts = await dbContext.Tickets
+            .AsNoTracking()
+            .Where(t => projectIds.Contains(t.ProjectId))
+            .GroupBy(t => new { t.ProjectId, t.Status })
+            .Select(g => new { g.Key.ProjectId, g.Key.Status, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        return counts
+            .GroupBy(c => c.ProjectId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyDictionary<TicketStatus, int>)g.ToDictionary(c => c.Status, c => c.Count));
+    }
 }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Agents;
@@ -67,6 +68,16 @@ public sealed class OrchestrationService(
 
     private static readonly Regex QuestionPattern =
         new(@"QUESTION:\s*(.+)", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
+    private static readonly Regex FileBlockPattern =
+        new(@"<file\s+path=[""'](?<path>[^""']+)[""']\s*>(?<content>.*?)</file>", RegexOptions.Singleline | RegexOptions.Compiled);
+
+    /// <summary>
+    /// The Coding stage's single prompt now includes a bounded snapshot of the ticket branch's own
+    /// current files (see <see cref="AppendRepositorySnapshot"/>) plus a request for full per-file
+    /// content back, so it needs far more headroom than every other stage's default 1024.
+    /// </summary>
+    private const int CodingStageMaxTokens = 8192;
 
     public async Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default)
     {
@@ -325,7 +336,19 @@ public sealed class OrchestrationService(
         bool checkForNoChanges,
         CancellationToken cancellationToken)
     {
-        var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
+        // Gathered by plain Git/filesystem reads (no LLM call), so the agent edits against the
+        // ticket branch's real current files while still costing exactly one Claude API call for
+        // this stage invocation. Locked on its own, released before the (slow) LLM call below,
+        // rather than held for the whole method - see GitRepositoryLock.
+        IReadOnlyDictionary<string, string> snapshot;
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            snapshot = await gitService.GetRepositorySnapshotAsync(project.RepositoryPath, ticket.BranchName!, cancellationToken);
+        }
+
+        var promptWithContext = AppendRepositorySnapshot(prompt, snapshot);
+
+        var response = await llmConnector.SendPromptAsync(new LlmRequest(promptWithContext, CodingStageMaxTokens), cancellationToken);
 
         // A clarifying question pre-empts everything else - no commit/push, regardless of
         // whether this is a reaffirm-style invocation. The outer loop's own ParseQuestion check
@@ -344,31 +367,65 @@ public sealed class OrchestrationService(
             return (response.Content, null);
         }
 
+        var fileChanges = ParseFileChanges(response.Content);
+        if (fileChanges.Count == 0)
+        {
+            // Unlike the explicit CHANGES: NONE marker above, this is an unformatted response -
+            // still recorded as a StageExecution by the caller (nothing is lost), just never
+            // git-committed. Logged since it's unexpected rather than a deliberate "no changes".
+            logger.LogWarning(
+                "Coding agent {AgentId} produced no parseable <file> blocks for ticket {TicketId}; nothing committed.",
+                agent.Id,
+                ticket.Id);
+            return (response.Content, null);
+        }
+
         var message = attempt == 1
             ? $"{agent.Name} work for '{ticket.Title}'"
             : $"{agent.Name} work for '{ticket.Title}' (attempt {attempt})";
-        var relativeFilePath = $"tickets/{ticket.Id}.md";
 
-        var commitResult = await gitService.CommitFileAsync(
-            project.RepositoryPath,
-            ticket.BranchName!,
-            relativeFilePath,
-            response.Content,
-            message,
-            agent.Name,
-            cancellationToken);
+        var filesToCommit = new Dictionary<string, string>();
+        foreach (var (path, content) in fileChanges)
+        {
+            filesToCommit[path] = content;
+        }
 
-        var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
-        await gitService.PushAsync(project.RepositoryPath, ticket.BranchName!, accessToken, cancellationToken);
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            // Re-checked fresh here, holding the same lock TicketService.CancelAsync holds while
+            // persisting Cancelled and deleting a cancelled ticket's branch. Whichever of the two
+            // acquires the lock first fully finishes before the other proceeds, so a
+            // cancellation that lands while this stage's LLM call was already in flight (the one
+            // gap that's cooperative, not preemptive - the LLM call itself can't be aborted) can
+            // never be resurrected by this commit/push landing afterward, and this commit/push
+            // can never run after a cancellation whose deletion already completed. See
+            // docs/application.md.
+            var currentStatus = await ticketRepository.GetStatusAsync(ticket.Id, cancellationToken);
+            if (currentStatus == TicketStatus.Cancelled)
+            {
+                return (response.Content, null);
+            }
 
-        var commit = Commit.Create(ticket.Id, ticket.BranchName!, commitResult.CommitHash, message, commitResult.DiffContent, agent.Id);
-        ticket.AddCommit(commit);
-        // Not saved here - the caller persists this together with the StageExecution it records
-        // for every stage invocation, Coding included, in one call.
+            var commitResult = await gitService.CommitFilesAsync(
+                project.RepositoryPath,
+                ticket.BranchName!,
+                filesToCommit,
+                message,
+                agent.Name,
+                cancellationToken);
 
-        var commitDto = new CommitDto(commit.Id, commit.TicketId, commit.BranchName, commit.CommitHash, commit.Message, commit.DiffContent, commit.AuthorAgentId, commit.CreatedAtUtc);
+            var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+            await gitService.PushAsync(project.RepositoryPath, ticket.BranchName!, accessToken, cancellationToken);
 
-        return (response.Content, commitDto);
+            var commit = Commit.Create(ticket.Id, ticket.BranchName!, commitResult.CommitHash, message, commitResult.DiffContent, agent.Id);
+            ticket.AddCommit(commit);
+            // Not saved here - the caller persists this together with the StageExecution it records
+            // for every stage invocation, Coding included, in one call.
+
+            var commitDto = new CommitDto(commit.Id, commit.TicketId, commit.BranchName, commit.CommitHash, commit.Message, commit.DiffContent, commit.AuthorAgentId, commit.CreatedAtUtc);
+
+            return (response.Content, commitDto);
+        }
     }
 
     private async Task LinkBranchAsync(Ticket ticket, Project project, CancellationToken cancellationToken)
@@ -376,11 +433,20 @@ public sealed class OrchestrationService(
         var branchName = GenerateBranchName(ticket);
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
-        // Fetch first so the new branch is cut from the remote's current tip of the base
-        // branch, not a possibly-stale local one.
-        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
-        await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
-        await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            // Re-checked fresh, under the same lock: closes the window where a concurrent
+            // cancellation - one with no branch yet to delete, so it wouldn't otherwise touch
+            // Git at all - could land while this initial link is in flight, leaving a Cancelled
+            // ticket pointing at a brand-new branch nobody ever deletes.
+            await EnsureNotCancelledAsync(ticket.Id, cancellationToken);
+
+            // Fetch first so the new branch is cut from the remote's current tip of the base
+            // branch, not a possibly-stale local one.
+            await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
+            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
+            await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
+        }
 
         ticket.LinkBranch(branchName);
     }
@@ -433,9 +499,16 @@ public sealed class OrchestrationService(
             prompt += " End your response with a line reading exactly 'RESULT: PASS' or 'RESULT: FAIL'.";
         }
 
-        if (priorOwnOutput is not null && agent.Role == AgentRole.Coding)
+        if (agent.Role == AgentRole.Coding)
         {
-            prompt += " Also end your response with a line reading exactly 'CHANGES: NONE' if you made no code changes, or 'CHANGES: MADE' if you did.";
+            if (priorOwnOutput is not null)
+            {
+                prompt += " Also end your response with a line reading exactly 'CHANGES: NONE' if you made no code changes, or 'CHANGES: MADE' if you did.";
+            }
+
+            prompt += " For every file you create or modify, include its complete new content (the whole " +
+                "file, not a diff) in its own block formatted exactly as <file path=\"relative/path/from/repo/root\">" +
+                "...entire file content...</file> - one block per file, with no other text inside the tags.";
         }
 
         prompt += " If you need clarification from a human before you can continue, respond with ONLY a single line reading 'QUESTION: <your question>' and nothing else.";
@@ -493,5 +566,81 @@ public sealed class OrchestrationService(
     {
         var match = QuestionPattern.Match(output);
         return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>
+    /// Parses every <c>&lt;file path="..."&gt;...&lt;/file&gt;</c> block out of a Coding stage's raw
+    /// response (see the output contract appended in <see cref="BuildStagePrompt"/>). A path that
+    /// appears more than once keeps only its last occurrence's content, matching the model's final
+    /// intent. Not unit-tested directly, same as <see cref="ParseVerdict"/>/<see cref="ParseChanges"/>/
+    /// <see cref="ParseQuestion"/> - covered indirectly through <c>OrchestrationServiceTests</c>.
+    /// </summary>
+    private static IReadOnlyList<(string Path, string Content)> ParseFileChanges(string output)
+    {
+        var results = new List<(string Path, string Content)>();
+
+        foreach (Match match in FileBlockPattern.Matches(output))
+        {
+            var path = match.Groups["path"].Value.Trim();
+            if (path.Length == 0)
+            {
+                continue;
+            }
+
+            results.Add((path, StripSurroundingNewline(match.Groups["content"].Value)));
+        }
+
+        return results;
+    }
+
+    /// <summary>Strips exactly one leading and one trailing newline the model typically puts right
+    /// after the opening &lt;file&gt; tag / before the closing one - not a full <c>Trim()</c>, which
+    /// would also eat intentional blank lines at the start/end of the file's real content.</summary>
+    private static string StripSurroundingNewline(string content)
+    {
+        if (content.StartsWith("\r\n", StringComparison.Ordinal))
+        {
+            content = content[2..];
+        }
+        else if (content.StartsWith('\n'))
+        {
+            content = content[1..];
+        }
+
+        if (content.EndsWith("\r\n", StringComparison.Ordinal))
+        {
+            content = content[..^2];
+        }
+        else if (content.EndsWith('\n'))
+        {
+            content = content[..^1];
+        }
+
+        return content;
+    }
+
+    /// <summary>
+    /// Renders the Coding stage's repository snapshot (see <see cref="IGitService.GetRepositorySnapshotAsync"/>)
+    /// as a labeled context block appended to its prompt - plain string building, not an LLM call, so
+    /// the Coding stage still costs exactly one Claude API call per invocation. An empty snapshot (e.g.
+    /// a brand-new repository) adds nothing.
+    /// </summary>
+    private static string AppendRepositorySnapshot(string prompt, IReadOnlyDictionary<string, string> snapshot)
+    {
+        if (snapshot.Count == 0)
+        {
+            return prompt;
+        }
+
+        var builder = new StringBuilder(prompt);
+        builder.Append("\n\nCurrent contents of files already in this ticket's branch:\n\n");
+
+        foreach (var (path, content) in snapshot)
+        {
+            builder.Append("### ").Append(path).Append('\n');
+            builder.Append("```\n").Append(content).Append("\n```\n\n");
+        }
+
+        return builder.ToString();
     }
 }

@@ -110,7 +110,7 @@ public class ConflictResolutionServiceTests
         Assert.Equal(ConflictStatus.ResolvedWithAiSuggestion, result.Status);
         Assert.Equal("resolved file content", result.ResolvedContent);
         _gitService.Verify(
-            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _gitService.Verify(
             g => g.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
@@ -132,7 +132,7 @@ public class ConflictResolutionServiceTests
         Assert.Equal("final merged content", result.ResolvedContent);
         Assert.Equal("Kept both changes", result.ResolutionNote);
         _gitService.Verify(
-            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 }

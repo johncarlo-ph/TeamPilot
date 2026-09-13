@@ -6,6 +6,7 @@ using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects.Dtos;
+using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Users;
 using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
@@ -15,6 +16,7 @@ namespace TeamPilot.Application.Projects;
 
 public sealed class ProjectService(
     IProjectRepository projectRepository,
+    ITicketRepository ticketRepository,
     IUserRepository userRepository,
     IAgentService agentService,
     IWorkflowService workflowService,
@@ -53,7 +55,8 @@ public sealed class ProjectService(
         await auditLogger.LogActionAsync(AuditEventType.ProjectCreated, $"Project '{project.Name}' created.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return ToDto(project);
+        // Brand new project - no tickets exist yet, so no need to query for counts.
+        return ToDto(project, counts: null);
     }
 
     public async Task<ProjectDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -63,24 +66,25 @@ public sealed class ProjectService(
 
         await projectAccessGuard.EnsureAccessAsync(id, cancellationToken);
 
-        return ToDto(project);
+        var counts = await ticketRepository.GetStatusCountsByProjectAsync([id], cancellationToken);
+
+        return ToDto(project, counts.GetValueOrDefault(id));
     }
 
     public async Task<IReadOnlyList<ProjectDto>> ListAsync(CancellationToken cancellationToken = default)
     {
         var projects = await projectRepository.ListAsync(cancellationToken);
 
-        if (currentUser.IsInRole(UserRole.Admin))
+        if (!currentUser.IsInRole(UserRole.Admin))
         {
-            return projects.Select(ToDto).ToList();
+            var assignedProjectIds = await userRepository.GetAssignedProjectIdsAsync(currentUser.UserId, cancellationToken);
+            projects = projects.Where(p => assignedProjectIds.Contains(p.Id)).ToList();
         }
 
-        var assignedProjectIds = await userRepository.GetAssignedProjectIdsAsync(currentUser.UserId, cancellationToken);
+        var counts = await ticketRepository.GetStatusCountsByProjectAsync(
+            projects.Select(p => p.Id).ToList(), cancellationToken);
 
-        return projects
-            .Where(p => assignedProjectIds.Contains(p.Id))
-            .Select(ToDto)
-            .ToList();
+        return projects.Select(p => ToDto(p, counts.GetValueOrDefault(p.Id))).ToList();
     }
 
     public async Task<ProjectDto> UpdateAsync(Guid id, UpdateProjectRequest request, CancellationToken cancellationToken = default)
@@ -100,15 +104,23 @@ public sealed class ProjectService(
         await auditLogger.LogActionAsync(AuditEventType.ProjectUpdated, $"Project '{project.Name}' updated.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return ToDto(project);
+        var counts = await ticketRepository.GetStatusCountsByProjectAsync([id], cancellationToken);
+
+        return ToDto(project, counts.GetValueOrDefault(id));
     }
 
-    private static ProjectDto ToDto(Project project) => new(
+    private static ProjectDto ToDto(Project project, IReadOnlyDictionary<TicketStatus, int>? counts) => new(
         project.Id,
         project.Name,
         project.Description,
         project.RemoteUrl,
         project.BaseBranch,
         project.CreatedAtUtc,
-        project.UpdatedAtUtc);
+        project.UpdatedAtUtc,
+        new TicketStatusCountsDto(
+            ToDo: counts?.GetValueOrDefault(TicketStatus.ToDo) ?? 0,
+            InProgress: counts?.GetValueOrDefault(TicketStatus.InProgress) ?? 0,
+            Blocked: counts?.GetValueOrDefault(TicketStatus.Blocked) ?? 0,
+            ForReview: counts?.GetValueOrDefault(TicketStatus.ForReview) ?? 0,
+            Done: counts?.GetValueOrDefault(TicketStatus.Done) ?? 0));
 }

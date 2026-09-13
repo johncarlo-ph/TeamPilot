@@ -44,9 +44,10 @@ public class Conversation : Entity
         ChatMessageRole role,
         string content,
         string? proposedTicketTitle = null,
-        string? proposedTicketDescription = null)
+        string? proposedTicketDescription = null,
+        string? senderName = null)
     {
-        var message = ChatMessage.Create(Id, role, content, proposedTicketTitle, proposedTicketDescription);
+        var message = ChatMessage.Create(Id, role, content, proposedTicketTitle, proposedTicketDescription, senderName);
         _messages.Add(message);
         MarkUpdated();
 

@@ -1,3 +1,13 @@
+/** Mirrors the API's TicketStatusCountsDto - board-relevant statuses only, Cancelled excluded
+ * (matches BOARD_COLUMNS in features/board/board.ts). */
+export interface TicketStatusCountsDto {
+  toDo: number;
+  inProgress: number;
+  blocked: number;
+  forReview: number;
+  done: number;
+}
+
 export interface ProjectDto {
   id: string;
   name: string;
@@ -6,6 +16,7 @@ export interface ProjectDto {
   baseBranch: string;
   createdAtUtc: string;
   updatedAtUtc: string | null;
+  ticketStatusCounts: TicketStatusCountsDto;
 }
 
 export interface CreateProjectRequest {

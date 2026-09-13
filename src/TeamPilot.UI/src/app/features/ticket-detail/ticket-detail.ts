@@ -2,7 +2,17 @@ import { DatePipe } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { distinctUntilChanged, forkJoin, interval, map, startWith, switchMap } from 'rxjs';
+import {
+  Subject,
+  distinctUntilChanged,
+  forkJoin,
+  interval,
+  map,
+  merge,
+  startWith,
+  switchMap,
+  tap,
+} from 'rxjs';
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { TicketQuestionsService } from '../../core/services/ticket-questions.service';
@@ -16,7 +26,7 @@ import {
   TicketQuestionDto,
 } from '../../core/models';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
-import { DiffViewer } from '../../shared/components/diff-viewer/diff-viewer';
+import { CommitDiffViewer } from '../../shared/components/commit-diff-viewer/commit-diff-viewer';
 import { BranchPanel } from './branch-panel/branch-panel';
 import { ConflictsPanel } from './conflicts-panel/conflicts-panel';
 import { ReviewForm } from './review-form/review-form';
@@ -24,6 +34,7 @@ import { TicketQuestionPanel } from './ticket-question-panel/ticket-question-pan
 import { buildBranchUrl } from '../../core/utils/git-url.util';
 
 const POLL_INTERVAL_MS = 10000;
+const DESCRIPTION_PREVIEW_LENGTH = 400;
 
 @Component({
   selector: 'app-ticket-detail',
@@ -31,7 +42,7 @@ const POLL_INTERVAL_MS = 10000;
     RouterLink,
     DatePipe,
     StatusBadge,
-    DiffViewer,
+    CommitDiffViewer,
     BranchPanel,
     ConflictsPanel,
     ReviewForm,
@@ -55,16 +66,42 @@ export class TicketDetail {
   readonly starting = signal(false);
   readonly cancelling = signal(false);
   readonly submittingReview = signal(false);
+  readonly descriptionExpanded = signal(false);
 
   readonly ticketId = computed(() => this.route.snapshot.paramMap.get('id')!);
+
+  // Forces the next poll tick to fire immediately, cancelling (via switchMap) any poll request
+  // already in flight - otherwise a stale in-flight poll can land after refresh() and overwrite
+  // its result with pre-mutation data (e.g. the review just submitted appearing to vanish).
+  private readonly refreshTrigger$ = new Subject<void>();
+
+  readonly isDescriptionLong = computed(
+    () => (this.ticket()?.description?.length ?? 0) > DESCRIPTION_PREVIEW_LENGTH
+  );
+
+  readonly descriptionPreview = computed(() => {
+    const description = this.ticket()?.description ?? '';
+    if (this.descriptionExpanded() || description.length <= DESCRIPTION_PREVIEW_LENGTH) {
+      return description;
+    }
+    return description.slice(0, DESCRIPTION_PREVIEW_LENGTH).trimEnd() + '…';
+  });
+
+  readonly sortedReviews = computed(() => {
+    const reviews = this.ticket()?.reviews ?? [];
+    return [...reviews].sort(
+      (a, b) => new Date(b.createdAtUtc).getTime() - new Date(a.createdAtUtc).getTime()
+    );
+  });
 
   constructor() {
     this.route.paramMap
       .pipe(
         map((params) => params.get('id')!),
         distinctUntilChanged(),
+        tap(() => this.descriptionExpanded.set(false)),
         switchMap((id) =>
-          interval(POLL_INTERVAL_MS).pipe(
+          merge(interval(POLL_INTERVAL_MS), this.refreshTrigger$).pipe(
             startWith(0),
             switchMap(() =>
               forkJoin({
@@ -88,6 +125,10 @@ export class TicketDetail {
         },
         error: () => this.loading.set(false),
       });
+  }
+
+  toggleDescription(): void {
+    this.descriptionExpanded.update((expanded) => !expanded);
   }
 
   branchUrl(branchName: string): string | null {
@@ -144,7 +185,11 @@ export class TicketDetail {
     this.reviewsService.submit(ticket.id, request).subscribe({
       next: () => {
         this.submittingReview.set(false);
-        this.notifications.success('Review submitted.');
+        this.notifications.success(
+          request.decision === 'RequestChanges'
+            ? 'Review submitted - the pipeline is now running in the background.'
+            : 'Review submitted.'
+        );
         this.reviewFormOpen.set(false);
         this.refresh();
       },
@@ -165,10 +210,7 @@ export class TicketDetail {
   }
 
   private refresh(): void {
-    this.ticketsService.getById(this.ticketId()).subscribe((ticket) => this.ticket.set(ticket));
-    this.ticketQuestionsService
-      .listForTicket(this.ticketId())
-      .subscribe((questions) => this.questions.set(questions));
+    this.refreshTrigger$.next();
   }
 
   private loadProject(projectId: string): void {

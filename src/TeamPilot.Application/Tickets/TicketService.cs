@@ -82,10 +82,32 @@ public sealed class TicketService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
-        ticket.Cancel(request.Reason);
+        var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
+        ticket.Cancel(request.Reason);
         await auditLogger.LogActionAsync(AuditEventType.TicketCancelled, $"Ticket '{ticket.Title}' cancelled.", cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // Held for the rest of this method, including the SaveChangesAsync below - the same lock
+        // OrchestrationService.LinkBranchAsync/RunCodingStageAsync acquire before creating or
+        // pushing to a ticket's branch, re-checking its status fresh once they have it.
+        // Persisting Cancelled here before releasing the lock guarantees neither of those can
+        // complete afterward without seeing it, so an in-flight pipeline run can never resurrect
+        // the branch this cancellation is about to delete (or, if it has no branch yet, link a
+        // new one that would then never get deleted) - see docs/application.md. A cancelled
+        // ticket is also terminal and drops off the board with no way back to its detail page,
+        // so its branch's "Delete Branch" button would be unreachable if we waited for a manual
+        // click - clean it up as part of cancelling instead.
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(ticket.BranchName))
+            {
+                await DeleteLinkedBranchAsync(ticket, project, cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+        }
 
         return TicketMappings.ToDto(ticket);
     }
@@ -102,23 +124,32 @@ public sealed class TicketService(
             throw new InvalidOperationException("Ticket has no linked branch to delete.");
         }
 
-        var branchName = ticket.BranchName;
-
-        // Validate before touching Git - UnlinkBranch guards that this is only allowed once the
-        // ticket is Cancelled, and there's no point deleting the remote branch if that check is
-        // about to fail anyway.
-        ticket.UnlinkBranch();
-
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
+
+        // Retained as a manual fallback for a ticket that was cancelled before automatic
+        // deletion existed, or whose automatic deletion needs retrying.
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            await DeleteLinkedBranchAsync(ticket, project, cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        return TicketMappings.ToDto(ticket);
+    }
+
+    // Validate before touching Git - UnlinkBranch guards that this is only allowed once the
+    // ticket is Cancelled, and there's no point deleting the remote branch if that check is
+    // about to fail anyway. Callers hold the GitRepositoryLock for project.RepositoryPath already.
+    private async Task DeleteLinkedBranchAsync(Ticket ticket, Project project, CancellationToken cancellationToken)
+    {
+        var branchName = ticket.BranchName!;
+        ticket.UnlinkBranch();
 
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
         await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
 
         await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for ticket '{ticket.Title}'.", cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return TicketMappings.ToDto(ticket);
     }
 
     public async Task<TicketDto> LinkBranchAsync(Guid ticketId, string branchName, CancellationToken cancellationToken = default)
@@ -141,11 +172,14 @@ public sealed class TicketService(
 
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
-        // Fetch first so the new branch is cut from the remote's current tip of the base
-        // branch, not a possibly-stale local one.
-        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
-        await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
-        await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            // Fetch first so the new branch is cut from the remote's current tip of the base
+            // branch, not a possibly-stale local one.
+            await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
+            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
+            await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
+        }
 
         ticket.LinkBranch(branchName);
 
@@ -169,10 +203,13 @@ public sealed class TicketService(
 
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
-        // Fetch first so the check reflects the remote's current refs, not a possibly-stale
-        // local view.
-        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            // Fetch first so the check reflects the remote's current refs, not a possibly-stale
+            // local view.
+            await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
 
-        return await gitService.BranchExistsAsync(project.RepositoryPath, branchName, cancellationToken);
+            return await gitService.BranchExistsAsync(project.RepositoryPath, branchName, cancellationToken);
+        }
     }
 }

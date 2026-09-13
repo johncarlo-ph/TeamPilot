@@ -18,5 +18,10 @@ public sealed class AuditLogger(IAuditLogRepository auditLogRepository, ICurrent
     }
 
     public Task LogActionAsync(AuditEventType eventType, string? detail = null, CancellationToken cancellationToken = default) =>
-        LogAsync(eventType, currentUser.UserId, detail, currentUser.IpAddress, cancellationToken);
+        // UserId is a real (if all-zero) Guid even when unauthenticated (see
+        // ICurrentUserContext.UserId), not null - passing it unconditionally would try to FK an
+        // audit row to a user that doesn't exist for any caller IsAuthenticated is false for
+        // (e.g. SystemCurrentUserContext, used outside a live HTTP request). AuditLogEntry.UserId
+        // is nullable specifically for this "no attributable user" case.
+        LogAsync(eventType, currentUser.IsAuthenticated ? currentUser.UserId : null, detail, currentUser.IpAddress, cancellationToken);
 }

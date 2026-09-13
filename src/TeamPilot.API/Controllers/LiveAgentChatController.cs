@@ -20,4 +20,18 @@ public class LiveAgentChatController(ILiveAgentChatService chatService) : Contro
         var message = await chatService.SendMessageAsync(projectId, request, cancellationToken);
         return Ok(message);
     }
+
+    [HttpPost("api/projects/{projectId:guid}/live-agent/messages/{messageId:guid}/approve-ticket")]
+    public async Task<ActionResult<ChatMessageDto>> ApproveTicket(Guid projectId, Guid messageId, CancellationToken cancellationToken)
+    {
+        var message = await chatService.ApproveTicketAsync(projectId, messageId, cancellationToken);
+        return Ok(message);
+    }
+
+    [HttpPost("api/projects/{projectId:guid}/live-agent/messages/{messageId:guid}/reject-ticket")]
+    public async Task<ActionResult<ChatMessageDto>> RejectTicket(Guid projectId, Guid messageId, CancellationToken cancellationToken)
+    {
+        var message = await chatService.RejectTicketAsync(projectId, messageId, cancellationToken);
+        return Ok(message);
+    }
 }

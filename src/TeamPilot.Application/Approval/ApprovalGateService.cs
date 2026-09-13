@@ -1,4 +1,5 @@
 using FluentValidation;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
@@ -9,6 +10,7 @@ using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
+using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -21,13 +23,13 @@ public sealed class ApprovalGateService(
     IProjectRepository projectRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
-    IOrchestrationService orchestrationService,
     IPipelineService pipelineService,
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<SubmitReviewRequest> validator,
+    IBackgroundTaskRunner backgroundTaskRunner,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
@@ -61,11 +63,30 @@ public sealed class ApprovalGateService(
                 ticket.RequestChanges();
                 await unitOfWork.SaveChangesAsync(cancellationToken);
 
-                // Immediately re-run the workflow rather than leaving the ticket sitting In
-                // Progress until someone manually clicks Run Pipeline - RunPipelineAsync is
-                // idempotent/re-entrant by design (see IOrchestrationService), so calling it
-                // again here is safe.
-                await orchestrationService.RunPipelineAsync(ticket.Id, cancellationToken);
+                // Re-run the workflow rather than leaving the ticket sitting In Progress until
+                // someone manually clicks Run Pipeline - RunPipelineAsync is idempotent/
+                // re-entrant by design (see IOrchestrationService), so calling it again here is
+                // safe. It's kicked off detached instead of awaited: a re-run can take minutes
+                // (multiple LLM/Git calls per stage), and the status change above already gives
+                // the caller everything it needs to show the ticket as In Progress immediately.
+                // RunPipelineAsync handles known Git/LLM failures itself (blocking the ticket
+                // with a retryable question); BlockOnBackgroundFailureAsync below is the
+                // backstop for anything else, so an unhandled exception here can't leave the
+                // ticket silently stuck In Progress with no visible indication anything went
+                // wrong.
+                var requestChangesTicketId = ticket.Id;
+                backgroundTaskRunner.Run(async (services, backgroundCancellationToken) =>
+                {
+                    var backgroundOrchestrationService = services.GetRequiredService<IOrchestrationService>();
+                    try
+                    {
+                        await backgroundOrchestrationService.RunPipelineAsync(requestChangesTicketId, backgroundCancellationToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        await BlockOnBackgroundFailureAsync(services, requestChangesTicketId, ex, backgroundCancellationToken);
+                    }
+                });
                 break;
 
             case ReviewDecision.Reject:
@@ -86,6 +107,45 @@ public sealed class ApprovalGateService(
     }
 
     /// <summary>
+    /// Backstop for the detached RequestChanges pipeline re-run: mirrors
+    /// <c>OrchestrationService.BlockOnFailureAsync</c>'s own Git/LLM failure handling, but for
+    /// whatever exception type made it out of <see cref="IOrchestrationService.RunPipelineAsync"/>
+    /// unhandled. Resolves every dependency from the background task's own scoped
+    /// <paramref name="services"/> rather than this instance's fields, since by the time this
+    /// runs the request that started it (and this instance's own scope) is long gone.
+    /// </summary>
+    private static async Task BlockOnBackgroundFailureAsync(IServiceProvider services, Guid ticketId, Exception exception, CancellationToken cancellationToken)
+    {
+        var backgroundLogger = services.GetRequiredService<ILogger<ApprovalGateService>>();
+        backgroundLogger.LogError(exception, "Background pipeline re-run failed for ticket {TicketId}.", ticketId);
+
+        var ticketRepository = services.GetRequiredService<ITicketRepository>();
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null || ticket.Status != TicketStatus.InProgress)
+        {
+            // RunPipelineAsync already left the ticket in a terminal state itself (e.g. Blocked
+            // via its own Git/LLM handling, or Cancelled by a concurrent request) - nothing more
+            // to do here.
+            return;
+        }
+
+        var ticketQuestionRepository = services.GetRequiredService<ITicketQuestionRepository>();
+        var question = TicketQuestion.CreateFailure(ticket.Id, agentId: null, exception.Message);
+        await ticketQuestionRepository.AddAsync(question, cancellationToken);
+
+        ticket.Block();
+
+        var backgroundAuditLogger = services.GetRequiredService<IAuditLogger>();
+        await backgroundAuditLogger.LogActionAsync(
+            AuditEventType.TicketBlocked,
+            $"Ticket '{ticket.Title}' blocked - background pipeline re-run failed: {exception.Message}",
+            cancellationToken);
+
+        var backgroundUnitOfWork = services.GetRequiredService<IUnitOfWork>();
+        await backgroundUnitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Cancels the ticket and, if it has a linked branch, deletes that branch from the remote -
     /// unlike a plain <see cref="TicketService.CancelAsync"/> (which leaves the branch orphaned
     /// for a separate, explicit <c>DeleteBranchAsync</c> call), Reject does both atomically as
@@ -103,15 +163,22 @@ public sealed class ApprovalGateService(
 
             var branchName = ticket.BranchName;
 
-            // Validate before touching Git - UnlinkBranch guards that this is only allowed once
-            // the ticket is Cancelled (already true at this point), matching TicketService's own
-            // DeleteBranchAsync ordering.
-            ticket.UnlinkBranch();
+            await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+            {
+                // Validate before touching Git - UnlinkBranch guards that this is only allowed
+                // once the ticket is Cancelled (already true at this point), matching
+                // TicketService's own DeleteBranchAsync ordering. Unlike TicketService.CancelAsync,
+                // this doesn't need to hold the lock across its own SaveChangesAsync too: Reject
+                // only reaches a ForReview ticket, and nothing writes to a ticket's branch while
+                // it's sitting ForReview (the pipeline only runs In Progress), so there's no
+                // concurrent commit/link this could otherwise race.
+                ticket.UnlinkBranch();
 
-            var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
-            await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
+                var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
+                await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
 
-            await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for rejected ticket '{ticket.Title}'.", cancellationToken);
+                await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for rejected ticket '{ticket.Title}'.", cancellationToken);
+            }
         }
 
         await auditLogger.LogActionAsync(AuditEventType.TicketCancelled, $"Ticket '{ticket.Title}' rejected in review.", cancellationToken);
@@ -149,32 +216,35 @@ public sealed class ApprovalGateService(
         var targetBranch = project.BaseBranch;
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
-        // Fetch first to reduce the odds of merging against a stale local copy of the base
-        // branch (e.g. if someone pushed to it directly, outside TeamPilot).
-        await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            // Fetch first to reduce the odds of merging against a stale local copy of the base
+            // branch (e.g. if someone pushed to it directly, outside TeamPilot).
+            await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
 
-        await unitOfWork.ExecuteInTransactionAsync(
-            async () =>
-            {
-                // The live, authoritative check: even if every known Conflict record says
-                // resolved, the base branch may have moved further since it was last checked, so
-                // this can still find (and reject on) a file with no resolution available - see
-                // IGitService.MergeWithResolutionsAsync.
-                var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
-                if (!mergeResult.Success)
+            await unitOfWork.ExecuteInTransactionAsync(
+                async () =>
                 {
-                    throw new UnresolvedConflictsException(mergeResult.UnresolvedFilePaths);
-                }
+                    // The live, authoritative check: even if every known Conflict record says
+                    // resolved, the base branch may have moved further since it was last checked, so
+                    // this can still find (and reject on) a file with no resolution available - see
+                    // IGitService.MergeWithResolutionsAsync.
+                    var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
+                    if (!mergeResult.Success)
+                    {
+                        throw new UnresolvedConflictsException(mergeResult.UnresolvedFilePaths);
+                    }
 
-                ticket.Approve();
-                await unitOfWork.SaveChangesAsync(cancellationToken);
-            },
-            cancellationToken);
+                    ticket.Approve();
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                },
+                cancellationToken);
 
-        // Pushed after the transaction commits: the local approval already stands even if this
-        // push fails transiently, so a push failure here is surfaced as an error but does not
-        // roll back the approval.
-        await gitService.PushAsync(project.RepositoryPath, targetBranch, accessToken, cancellationToken);
+            // Pushed after the transaction commits: the local approval already stands even if this
+            // push fails transiently, so a push failure here is surfaced as an error but does not
+            // roll back the approval.
+            await gitService.PushAsync(project.RepositoryPath, targetBranch, accessToken, cancellationToken);
+        }
 
         logger.LogInformation(
             "Ticket {TicketId} in project {ProjectId} approved and merged by {ReviewerName}; triggering pipeline run",

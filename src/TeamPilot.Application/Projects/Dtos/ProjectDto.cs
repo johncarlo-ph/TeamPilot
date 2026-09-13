@@ -7,4 +7,5 @@ public sealed record ProjectDto(
     string RemoteUrl,
     string BaseBranch,
     DateTime CreatedAtUtc,
-    DateTime? UpdatedAtUtc);
+    DateTime? UpdatedAtUtc,
+    TicketStatusCountsDto TicketStatusCounts);

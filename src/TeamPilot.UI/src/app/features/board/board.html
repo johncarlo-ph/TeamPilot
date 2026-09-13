@@ -22,11 +22,15 @@
 @if (loading()) {
   <div class="text-body-secondary">Loading board...</div>
 } @else {
-  <div class="row g-3">
-    <div class="col-12 col-lg-4">
-      <app-chat-panel [projectId]="projectId"></app-chat-panel>
+  <div class="row g-3 board-row">
+    <div class="board-chat-col" [class.board-chat-col--collapsed]="chatCollapsed()">
+      <app-chat-panel
+        [projectId]="projectId"
+        [collapsed]="chatCollapsed()"
+        (collapsedChange)="chatCollapsed.set($event)"
+      ></app-chat-panel>
     </div>
-    <div class="col-12 col-lg-8">
+    <div class="board-columns-col">
       <div class="row g-3">
         @for (column of columns; track column.status) {
           <div class="col-12 col-md-6 col-xl">

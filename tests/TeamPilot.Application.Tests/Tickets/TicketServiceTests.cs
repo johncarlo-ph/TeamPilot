@@ -263,6 +263,45 @@ public class TicketServiceTests
     }
 
     [Fact]
+    public async Task CancelAsync_WhenTicketHasLinkedBranch_DeletesBranchAndClearsBranchName()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        ticket.LinkBranch("feature/fix-bug");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.CancelAsync(ticket.Id, new CancelTicketRequest("No longer needed"));
+
+        Assert.Equal(TicketStatus.Cancelled, result.Status);
+        Assert.Null(result.BranchName);
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/fix-bug", _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
+            Times.Once);
+        // Twice: once to persist Cancelled before the branch delete (so a concurrent pipeline
+        // run's fresh status check - see OrchestrationService.RunCodingStageAsync/LinkBranchAsync
+        // - is guaranteed to see it), once after the delete completes.
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task CancelAsync_WhenTicketHasNoLinkedBranch_DoesNotCallGitService()
+    {
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await _sut.CancelAsync(ticket.Id, new CancelTicketRequest(null));
+
+        _gitService.Verify(
+            g => g.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task CancelAsync_WhenTicketIsDone_ThrowsInvalidTicketStateTransitionException()
     {
         var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");

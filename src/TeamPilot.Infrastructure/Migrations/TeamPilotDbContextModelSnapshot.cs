@@ -113,6 +113,9 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("CreatedTicketId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("ProposedTicketDescription")
                         .HasColumnType("nvarchar(max)");
 
@@ -125,10 +128,19 @@ namespace TeamPilot.Infrastructure.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("nvarchar(20)");
 
+                    b.Property<string>("SenderName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("TicketRejected")
+                        .HasColumnType("bit");
+
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CreatedTicketId");
 
                     b.HasIndex("ConversationId", "CreatedAtUtc");
 
@@ -797,6 +809,11 @@ namespace TeamPilot.Infrastructure.Migrations
                         .HasForeignKey("ConversationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedTicketId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("TeamPilot.Domain.Entities.Commit", b =>

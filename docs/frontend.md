@@ -62,6 +62,26 @@ GET endpoints on a short interval (8s / 10s) via `interval(...).pipe(switchMap(.
 the active route with `takeUntilDestroyed()`. Revisit this if/when the backend grows a
 real-time transport — see [docs/cross-cutting-concerns.md](cross-cutting-concerns.md).
 
+Both pages also `merge` a private `Subject<void>` ("refresh trigger") into the polling `interval`
+before the outer `switchMap`, and every local mutation (create ticket, start pipeline, move to
+review, submit a review, etc.) calls it after updating local state. Without this, a poll request
+already in flight when the mutation fires can resolve afterward with pre-mutation data and
+overwrite the optimistic update — the `switchMap` on the merged stream cancels that stale request
+instead, so the next tick is always a fresh, authoritative fetch. `ticket-detail.ts`'s private
+`refresh()` helper is just a call to this trigger.
+
+**Submitting a `RequestChanges` review returns fast, not once the pipeline finishes.**
+`ApprovalGateService` now kicks the pipeline re-run off in the background instead of awaiting it
+(see [docs/application.md](application.md)), so the submit button no longer sits on "Submitting…"
+for however long a full re-run takes — the response comes back as soon as the review and status
+change are persisted, with the ticket already `InProgress`. Both `board.ts`'s `confirmReview` and
+`ticket-detail.ts`'s `submitReview` check `request.decision === 'RequestChanges'` on success and
+show a distinct toast ("Review submitted - the pipeline is now running in the background.")
+instead of the plain "Review submitted." used for every other decision, so it's clear more work
+is still happening after the modal closes. If that background run later fails unexpectedly, the
+ticket lands in the `Blocked` column with a retryable `Failure` question — the same UI (and the
+same Retry button) already used for a mid-pipeline Git/LLM failure, not a separate error surface.
+
 **Drag-and-drop is mapped to the API's actual transition endpoints, not a generic status
 setter.** There is no `PUT /tickets/{id}/status`; a ticket only moves between columns through
 specific actions (`start`, `move-to-review`, submitting a `Review`). The board
@@ -141,13 +161,53 @@ no new layout primitive introduced. `features/board/chat-panel` (`ChatPanel`) ow
 entirely: it takes only `projectId` as input, loads the project's chat history itself via
 `LiveAgentChatService.listMessages` on init (an `effect()` reacting to the `projectId` signal
 input, not a poll - the chat only changes in response to a message this component itself sent),
-and appends the user's message optimistically before the `POST` resolves. An assistant message
-carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with a
-"Create ticket" button right in the chat thread - clicking it calls the ordinary
-`TicketsService.create(...)` (the same one `CreateTicketForm` uses), and the newly created ticket
-simply shows up on the board once the existing 8s ticket poll (above) picks it up - no new
-refresh plumbing was added for this. `ChatPanel` never calls a "confirm draft" endpoint because
-there isn't one; approving a draft and creating a ticket are the same API call.
+and appends the user's message optimistically before the `POST` resolves - stamping the
+optimistic message's `senderName` from `AuthService.currentUser()` itself, since the real value
+only comes back once the `POST` response arrives. Each message bubble renders a small label above
+it with the sender's name (`ChatMessageDto.senderName`, falling back to `'You'` if it's ever
+missing) for a user message, or `'Live Agent'` for an assistant one. An assistant message
+carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with
+**"Create ticket"** and **"Reject"** buttons side by side in the chat thread - clicking either
+calls `LiveAgentChatService.approveTicket(...)`/`rejectTicket(projectId, messageId)`, which
+returns the updated `ChatMessageDto` (now carrying `createdTicketId` or `ticketRejected: true`);
+`ChatPanel` splices that updated message back into its `messages` signal in place, which is what
+swaps the button pair for a "Ticket created" or "Ticket rejected" badge. Because that decision is
+persisted on the message server-side rather than tracked in a local-only signal, the badge (not
+the buttons) is also what renders after a reload, or for a second user viewing the same shared
+conversation - nobody can approve *or* reject the same draft twice, and a single
+`processingTicketMessageIds` signal disables both buttons while either request is in flight so a
+double-click can't fire both actions at once. The newly created ticket simply shows up on the
+board once the existing 8s ticket poll (above) picks it up - no new refresh plumbing was added
+for this.
+
+**The chat panel collapses to a thin strip so the board can reclaim its width, with the resize
+itself animated.** The collapsed flag lives in `Board` (`chatCollapsed`, a plain signal), not in
+`ChatPanel` itself, since it drives the sibling board column's width too - `board.html` puts a
+`board-chat-col`/`board-columns-col` class pair on the two columns instead of Bootstrap's
+`col-12 col-lg-4`/`col-lg-8` utility classes, because swapping discrete Bootstrap col classes on
+collapse can't be transitioned (no shared animatable property across a breakpoint's class swap).
+`styles.scss` gives `.board-chat-col` a fixed width (`22rem` expanded, `4rem` collapsed via
+`.board-chat-col--collapsed`) with a CSS `transition`, and `.board-columns-col` just
+`flex: 1 1 auto` to fill whatever's left - so the board's own width animates for free as the
+chat column's width tweens, with no separate transition needed on it. Below the `lg` breakpoint
+both stay full-width and stacked, same as before. `ChatPanel` takes `collapsed` as an input and
+emits `collapsedChange` on its own header/strip toggle button, the same input/output shape as
+every other parent-owned-state component in this codebase (e.g. `CreateTicketForm`'s
+`open`/`closed`) - it doesn't own the flag, just renders according to it and asks the parent to
+flip it. Collapsed, `ChatPanel` renders a single round icon button (💬 plus a chevron) in place
+of its usual header/body/footer; since this project has no `@angular/animations` dependency
+(see `package.json`), the "show/hide" animation is a plain CSS `@keyframes` fade+slide
+(`chat-panel-fade-in`) on the card, which plays automatically whenever the card enters the DOM -
+i.e. on every collapse/expand, since `@if`/`@else` swaps the whole card rather than hiding a
+persistent one.
+
+**The chat panel stretches to fill the viewport below the navbar/page header, not a fixed
+`65vh`.** `.chat-panel-card` (styles.scss) sets `height: calc(100vh - 11rem)` - `11rem`
+approximates the sticky navbar plus the page's own top padding and header block above the board
+row - instead of the old `max-height: 65vh` on just the message list, which left dead space below
+a short conversation and cut a long one off early regardless of viewport size. `.chat-panel-body`
+keeps `min-height: 0` so the message list (`flex-grow-1 overflow-auto`) actually scrolls within
+that fixed card height instead of growing past it, a common flexbox-scroll-container gotcha.
 
 **The board's project name, column colors/icons, and column set are two different concerns kept
 separate on purpose.** The header shows `project().name` (loaded the same way `ticket-detail`
@@ -168,6 +228,19 @@ the single global `src/styles.scss`, not per-component `styleUrls` - this projec
 scoped component styles (everything else is Bootstrap utility classes in the template), so a new
 per-component stylesheet would be a second, competing styling convention rather than a small
 addition to the existing one.
+
+**The project list's per-status count badges reuse the board's icon/color mapping, computed
+server-side, not fetched per project.** `ProjectDto.ticketStatusCounts` (`TicketStatusCountsDto`
+- one int per board-relevant status, `Cancelled` excluded like `BOARD_COLUMNS`) is populated by
+`ProjectService` from a single grouped `ITicketRepository.GetStatusCountsByProjectAsync` query
+across every listed project, so `features/projects/project-list` renders its badge row straight
+off the existing `ProjectsService.list()` response - no extra per-card request, consistent with
+this codebase's "avoid overfetching" convention (see `TicketRepository` in
+[docs/infrastructure.md](infrastructure.md) and `ProjectService` in
+[docs/application.md](application.md)). `project-list.ts`'s `STATUS_SUMMARIES` constant mirrors
+`BOARD_COLUMNS`' icon per status and `status-badge.ts`'s badge-color mapping, kept as its own
+small array rather than reusing either component directly, since it renders a count badge, not a
+ticket's own status label.
 
 **Branch names are links everywhere except the board card.** There is no backend "branch URL"
 field — `core/utils/git-url.util.ts`'s `buildBranchUrl(remoteUrl, branchName)` strips `.git` and
@@ -195,9 +268,19 @@ overfetching" guideline). Commits and agent-assignment status are shown on the t
 page, which does load the full aggregate.
 
 **Self-built diff renderer, no diff library dependency.** `shared/components/diff-viewer`
-parses the unified-diff text the API already returns (`Commit.DiffContent`, `GitFileDiff.Patch`,
-`Conflict.ConflictingDiffContent`) line-by-line into add/remove/hunk/header/context spans. This
-was small enough to not justify an extra npm dependency.
+parses a single unified-diff blob (`GitFileDiff.Patch`, `Conflict.ConflictingDiffContent`,
+`Conflict.ResolvedContent`) line-by-line into add/remove/hunk/header/context spans. This was
+small enough to not justify an extra npm dependency.
+
+**Per-file, collapsible commit diffs with a before/after view.** A commit's `DiffContent` is
+one `git diff`-style blob that can span multiple files (LibGit2Sharp's `Patch.Content`
+concatenates one `diff --git a/... b/...` block per changed file). `core/utils/diff-parser.util.ts`
+splits that blob into a `FileDiff` per file (path, add/remove counts, new/deleted/renamed flags,
+parsed hunks) and pairs each hunk's removed/added lines into before/after rows for a split view.
+`shared/components/commit-diff-viewer` renders one collapsed-by-default section per file - click
+a file's header to expand it, with a per-file "Unified" / "Before/After" toggle - so a multi-file
+commit isn't one unbroken wall of diff text. Used on the ticket detail page's Commits list;
+`diff-viewer` remains the renderer for the single-file diff blobs above.
 
 **Instruction templates are a global admin page, not project-scoped.** `features/admin/
 instruction-templates/` follows the same shape as `features/admin/users/` (a list + a
@@ -206,14 +289,19 @@ create/edit modal, route gated by `adminGuard`, nav link only shown when
 belongs to no project. The one place it's consumed outside its own admin page is
 `features/agents/instruction-editor/instruction-editor.ts`, which now takes an `agentRole` input
 (the agents list already had this — it just wasn't being looked up and passed down before) and
-fetches templates filtered to that role, one **Template** dropdown per instruction type. The
-dropdown is always rendered and always enabled (never disabled, even with zero matching
-templates) - the placeholder option's label switches between "Populate from template..." and
-"No templates for this role/type yet" so an empty dropdown doesn't read as broken. Selecting a template fills the
-matching textarea (`form.get(type).setValue(...)`) and the `<select>` keeps showing the picked
-option, tracked in a `selectedTemplateIds` signal keyed by instruction type — it's still just a
-content fill, not a persisted association (the selection resets on save/reload); the existing
-"Save & Ingest" flow is what actually commits anything, same as typing the content by hand.
+fetches templates filtered to that role, one **Template** dropdown per instruction type. For
+Guideline and Requirement, the dropdown is always rendered and always enabled (never disabled,
+even with zero matching templates) - the placeholder option's label switches between "Populate
+from template..." and "No templates for this role/type yet" so an empty dropdown doesn't read as
+broken. Selecting a template fills the matching textarea (`form.get(type).setValue(...)`) and the
+`<select>` keeps showing the picked option, tracked in a `selectedTemplateIds` signal keyed by
+instruction type — it's still just a content fill, not a persisted association (the selection
+resets on save/reload); the existing "Save & Ingest" flow is what actually commits anything, same
+as typing the content by hand. The Constitution row is the one exception: for any agent whose
+`agentRole` isn't `'Custom'`, the component disables that `FormControl` (`Agent.AddInstructionVersion`
+rejects the edit server-side regardless, per [docs/domain.md](domain.md#default-agent-instructions))
+and the template renders a "Fixed" badge and explanatory text instead of the dropdown, so there's
+nothing to pick from or submit for that field.
 
 **`features/agents/agents.ts` shows the project's ordered workflow, not a static 4-item list.**
 It reads `WorkflowService.list()` (ordered `WorkflowStageDto[]`, each carrying its `AgentDto`) and
@@ -291,7 +379,7 @@ follow-up work, not fixed as part of this frontend change.
   authenticated shell: navbar + `<router-outlet>` + toast stack — the navbar is `.sticky-top` so
   the Projects/Users/Audit Log links stay reachable on a long scrolled page), `features/*` (one
   folder per page/route), `shared/components` (cross-feature reusable UI: `Modal`, `DiffViewer`,
-  `StatusBadge`).
+  `CommitDiffViewer`, `StatusBadge`).
 - Every HTTP service is a thin, one-method-per-endpoint wrapper (no generic `ApiClient<T>`) —
   mirrors the API's own per-aggregate-repository philosophy
   (see [docs/application.md](application.md)).

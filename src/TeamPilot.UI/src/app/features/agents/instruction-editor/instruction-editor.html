@@ -11,24 +11,36 @@
     @for (type of types; track type) {
       <div class="mb-3">
         <label class="form-label d-flex justify-content-between">
-          <span>{{ type }}</span>
+          <span>
+            {{ type }}
+            @if (type === 'Constitution' && !isCustomAgent()) {
+              <span class="badge text-bg-secondary ms-1" title="Fixed for this agent's role - only a custom agent's Constitution can be edited">Fixed</span>
+            }
+          </span>
           <span class="text-body-secondary small">current: {{ currentVersionLabel(type) }}</span>
         </label>
-        <div class="mb-1">
-          <label class="form-label small text-body-secondary mb-1">Template</label>
-          <select
-            class="form-select form-select-sm"
-            [value]="selectedTemplateIds()[type]"
-            (change)="applyTemplate(type, $any($event.target).value)"
-          >
-            <option value="">
-              {{ templatesByType()[type].length ? 'Populate from template...' : 'No templates for this role/type yet' }}
-            </option>
-            @for (template of templatesByType()[type]; track template.id) {
-              <option [value]="template.id">{{ template.name }}</option>
-            }
-          </select>
-        </div>
+        @if (type === 'Constitution' && !isCustomAgent()) {
+          <p class="small text-body-secondary">
+            This agent's Constitution defines its role in the pipeline and can't be changed - use
+            Guideline or Requirement below to tune how it works.
+          </p>
+        } @else {
+          <div class="mb-1">
+            <label class="form-label small text-body-secondary mb-1">Template</label>
+            <select
+              class="form-select form-select-sm"
+              [value]="selectedTemplateIds()[type]"
+              (change)="applyTemplate(type, $any($event.target).value)"
+            >
+              <option value="">
+                {{ templatesByType()[type].length ? 'Populate from template...' : 'No templates for this role/type yet' }}
+              </option>
+              @for (template of templatesByType()[type]; track template.id) {
+                <option [value]="template.id">{{ template.name }}</option>
+              }
+            </select>
+          </div>
+        }
         <textarea class="form-control" rows="4" [formControlName]="type"></textarea>
         @if (historyByType()[type].length > 1) {
           <details class="small text-body-secondary mt-1">

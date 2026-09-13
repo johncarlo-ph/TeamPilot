@@ -21,6 +21,7 @@ using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Users;
 using TeamPilot.Application.Workflow;
 using TeamPilot.Infrastructure.Auth;
+using TeamPilot.Infrastructure.BackgroundTasks;
 using TeamPilot.Infrastructure.Git;
 using TeamPilot.Infrastructure.Llm;
 using TeamPilot.Infrastructure.Persistence;
@@ -70,6 +71,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IExternalIdentityValidator, ExternalIdentityValidator>();
         services.AddSingleton<IAccessTokenGenerator, AccessTokenGenerator>();
         services.AddSingleton<IRefreshTokenGenerator, RefreshTokenGenerator>();
+
+        services.AddSingleton<IBackgroundTaskRunner, BackgroundTaskRunner>();
 
         return services;
     }

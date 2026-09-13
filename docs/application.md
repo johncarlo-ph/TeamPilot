@@ -87,6 +87,16 @@ job/status-polling for it (see "Future considerations"). `Project.RemoteUrl` is 
 creation (re-pointing it would orphan the existing sandbox clone) — only `Name`/`Description`/
 `BaseBranch` and the access token (via `RotateAccessToken`) can be changed later.
 
+**`ProjectDto` carries each project's per-status ticket counts, not just its own fields.**
+`ProjectService.ListAsync`/`GetByIdAsync`/`UpdateAsync` all call
+`ITicketRepository.GetStatusCountsByProjectAsync` — one grouped query across every project being
+returned, not one query per project — and shape the result into `TicketStatusCountsDto` (`ToDo`/
+`InProgress`/`Blocked`/`ForReview`/`Done`; `Cancelled` excluded, matching the UI's board columns).
+`CreateAsync` skips the query entirely and returns an all-zero `TicketStatusCountsDto`, since a
+brand-new project provably has no tickets yet. This exists so the UI's project list can show a
+per-project status summary (see [docs/frontend.md](frontend.md)) off the same `GET /api/projects`
+call it already makes, rather than fetching each project's tickets separately.
+
 **Every ticket branch is cut from, and merges back into, `Project.BaseBranch`** — not a
 hardcoded `"main"`. `TicketService.LinkBranchAsync` (manual) and `OrchestrationService`'s own
 branch-linking step (automatic, at pipeline start) both fetch the remote, create the branch from
@@ -113,18 +123,21 @@ exists to fail with a clear message before that constraint would ever fire.
 branch name from the ticket's own `Guid`, so a collision with another ticket is not a realistic
 failure mode worth guarding against.
 
-**Deleting a branch is manual, one ticket at a time, and only once that ticket is `Cancelled`.**
-`TicketService.DeleteBranchAsync` is the escape hatch for the "permanent" claim above when a
-branch's commits genuinely don't matter anymore: it deletes the branch from both the remote and
-the local sandbox (`IGitService.DeleteBranchAsync`) and then calls `Ticket.UnlinkBranch()`,
-which is what actually frees the name up for a different ticket to claim - see
-[docs/domain.md](domain.md) for why that method is gated to `Cancelled`. This is deliberately
-**not** an automatic side effect of `CancelAsync`: it's a real, irreversible delete against the
-project's actual connected remote, and every other delete-shaped action in this app is either
-explicitly not implemented or (like this one) requires its own explicit confirmation - see
-[docs/user-guide.md](user-guide.md#good-to-know). Validation happens before the Git call: if the
-ticket isn't `Cancelled`, `UnlinkBranch()` throws before `IGitService.DeleteBranchAsync` is ever
-invoked, so a rejected request never touches the remote.
+**Deleting a branch happens automatically when its ticket is cancelled.** `TicketService.CancelAsync`
+calls `Ticket.Cancel(reason)` and then, if the ticket has a linked branch, deletes it from both the
+remote and the local sandbox (`IGitService.DeleteBranchAsync`) and calls `Ticket.UnlinkBranch()` in
+the same request - which is also what frees the name up for a different ticket to claim - see
+[docs/domain.md](domain.md) for why that method is gated to `Cancelled`. This is deliberate, not
+incidental: a `Cancelled` ticket is filtered off the board (see above) with no other link back to
+its detail page, so a manual "Delete Branch" click would be unreachable once the user navigates
+away - see [docs/user-guide.md](user-guide.md#good-to-know). `TicketService.DeleteBranchAsync`
+still exists as a manual fallback for a ticket that was cancelled before this behavior existed, or
+whose automatic deletion needs retrying (e.g. after a transient Git failure); both paths share the
+same private `DeleteLinkedBranchAsync` helper, which validates before touching Git -
+`UnlinkBranch()` throws before `IGitService.DeleteBranchAsync` is ever invoked if the ticket isn't
+`Cancelled`, so a rejected request never touches the remote. Because the branch deletion happens
+inside the same unit of work as `Cancel()`, a Git failure here rolls the whole cancellation back
+(no `SaveChangesAsync` is reached) rather than leaving the ticket cancelled with a dangling branch.
 
 **Merge-conflict detection always checks against `Project.BaseBranch`, never a hardcoded branch
 name.** `ConflictResolutionService.DetectConflictsAsync` passes `project.BaseBranch` as the
@@ -270,6 +283,11 @@ below.
 `ILlmConnector.SendConversationAsync` tool-use loop before persisting and returning the
 assistant's final text reply:
 
+- **Each persisted user message is stamped with the sender's display name** (`ICurrentUserContext.Name`,
+  read off the caller's JWT — see [docs/api.md](api.md#authentication)) via
+  `Conversation.AddMessage(..., senderName:)`, so the chat UI can show who sent each message
+  (any project member can post to the same single per-project `Conversation`). Assistant messages
+  carry no sender name.
 - **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
   [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction),
   `list_tickets` (wraps `ITicketRepository.ListAsync`, lean id/title/status rows),
@@ -281,14 +299,32 @@ assistant's final text reply:
 - **`propose_ticket` never writes to the database.** It only captures the drafted title/
   description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
   `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks
-  "Create ticket" on that message in the UI, which calls the ordinary
-  `POST /api/projects/{projectId}/tickets` endpoint (`TicketService.CreateAsync`) directly — no
-  separate "approve draft" endpoint exists. There is no "Draft" `TicketStatus`; the approval gate
-  lives entirely in the chat UI, not in ticket state.
+  "Create ticket" on that message in the UI, which calls
+  `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/messages/{messageId}/approve-ticket`)
+  — it creates the ticket via the ordinary `ITicketService.CreateAsync` and, in the same call,
+  stamps the message's `CreatedTicketId` (`ChatMessage.MarkTicketCreated`) so every viewer -
+  including the same user after a reload - sees the draft as already approved and the
+  "Create ticket"/"Reject" pair doesn't reappear. `ApproveTicketAsync` is idempotent: approving
+  an already-approved message just returns its current state instead of creating a duplicate
+  ticket, which also covers a race between two users clicking the same draft. It checks
+  `TicketRejected` *before* calling `ITicketService.CreateAsync` and throws immediately if the
+  draft was already rejected — checking only afterward, inside `MarkTicketCreated`'s own guard,
+  would leave an orphan `Ticket` that no message points at. Rejecting a draft
+  (`LiveAgentChatService.RejectTicketAsync`, `POST .../messages/{messageId}/reject-ticket`) is the
+  mirror image: it calls `ChatMessage.RejectTicket()` to set `TicketRejected`, with the same
+  idempotency and cross-guard (can't reject an already-approved message) as approval, but never
+  touches `ITicketService` since nothing is created. There is no "Draft" `TicketStatus`; the
+  approval/rejection gate lives entirely on the chat message, not in ticket state.
 - **The model is instructed (both in `AgentDefaultInstructions.For(LiveAgent)` and in the
   `propose_ticket` tool's own description) to only draft a ticket when the user explicitly asks
   for one** — enforced through prompting, not code, since nothing stops the model from calling a
   tool it's told not to call in a given turn.
+- **The same two places also instruct the model to describe the problem/desired behavior rather
+  than cite a specific file path or line number in the draft.** A ticket can sit in `ToDo` for a
+  while before its pipeline run reaches Coding, by which point another ticket may have already
+  moved or rewritten the file the Live Agent saw — a stale pointer is worse than none, so the
+  draft is kept implementation-location-agnostic and the pipeline's own Research/Design stages
+  locate the current code themselves.
 - **No write-capable `IGitService` method is ever registered as a tool here** — only
   `ListFilesAsync`/`ReadFileAsync`. The Live Agent has no code path that can create, modify,
   move, or delete anything in the sandbox.
@@ -351,8 +387,9 @@ stateDiagram-v2
     InProgress --> ForReview: TicketService.MoveToReviewAsync
     ForReview --> Done: ApprovalGateService.SubmitReviewAsync(Approve)
     ForReview --> InProgress: ApprovalGateService.SubmitReviewAsync(RequestChanges)
-    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by RequestChanges)
+    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (background re-run, auto-triggered by RequestChanges)
     InProgress --> Blocked: OrchestrationService.RunPipelineAsync (question or Git/LLM failure)
+    InProgress --> Blocked: ApprovalGateService (background RequestChanges re-run threw unexpectedly)
     Blocked --> InProgress: TicketQuestionService.AnswerAsync / RetryAsync
     InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by AnswerAsync/RetryAsync)
     ToDo --> Cancelled: TicketService.CancelAsync
@@ -368,16 +405,32 @@ admin-configurable per project" above. `TicketService.MoveToReviewAsync` remains
 escape hatch for an
 In Progress ticket a human wants to push to review without invoking the pipeline again.
 
-**`RequestChanges` doesn't just flip the status back — it immediately re-runs the pipeline in the
-same call.** Previously a reviewer had to separately click Run Pipeline afterward; now
-`ApprovalGateService.SubmitReviewAsync` calls `OrchestrationService.RunPipelineAsync` itself right
-after `ticket.RequestChanges()` commits, relying on `RunPipelineAsync` being safe to call again on
-an already-In-Progress ticket (see above). `OrchestrationService` also looks up the ticket's most
-recent `RequestChanges` review with non-blank comments and threads that text into every stage's
-prompt for that run (not just the first stage, and not just Coding) - so the re-run actually
-addresses what the reviewer flagged rather than repeating the exact same work. If that re-run
-throws, the review and the status flip to `InProgress` already committed (a separate
-`SaveChangesAsync` beforehand) - the reviewer sees an error, but the ticket isn't left half-updated.
+**`RequestChanges` doesn't just flip the status back — it re-runs the pipeline in the background,
+not the same call.** Previously a reviewer had to separately click Run Pipeline afterward; now
+`ApprovalGateService.SubmitReviewAsync` commits the review and `ticket.RequestChanges()` (a
+`SaveChangesAsync` of its own), then hands `OrchestrationService.RunPipelineAsync` to
+`IBackgroundTaskRunner.Run` instead of awaiting it - the request returns immediately with the
+ticket already showing `InProgress`, rather than blocking for however long the re-run takes
+(potentially minutes: multiple LLM/Git calls per stage). `RunPipelineAsync` is safe to call again
+on an already-In-Progress ticket (see above), and `OrchestrationService` also looks up the
+ticket's most recent `RequestChanges` review with non-blank comments and threads that text into
+every stage's prompt for that run (not just the first stage, and not just Coding) - so the re-run
+actually addresses what the reviewer flagged rather than repeating the exact same work.
+
+`IBackgroundTaskRunner` (`Application/Common/Interfaces/IBackgroundTaskRunner.cs`, implemented by
+`Infrastructure/BackgroundTasks/BackgroundTaskRunner.cs`) runs its delegate on the thread pool
+inside a brand-new DI scope, resolving `IOrchestrationService` and everything else it needs from
+that scope's `IServiceProvider` rather than closing over `ApprovalGateService`'s own
+request-scoped dependencies - by the time the detached work runs, the HTTP request (and its
+scoped `DbContext`) that started it is already gone. `RunPipelineAsync` still handles known Git/LLM
+failures itself by blocking the ticket with a retryable question (see below); if anything else
+escapes it unhandled, `ApprovalGateService.BlockOnBackgroundFailureAsync` is the backstop - it
+re-fetches the ticket, and if it's still `InProgress` (i.e. `RunPipelineAsync` didn't already
+leave it in some other terminal state itself), blocks it with a `Failure`-kind `TicketQuestion`
+carrying the exception message, exactly like a Git/LLM failure would. This is what stops an
+unexpected bug in the background re-run from leaving the ticket silently stuck `InProgress`
+forever with no visible sign anything went wrong - the reviewer sees it land in Blocked with a
+retryable failure entry, same as any other operational failure mid-pipeline.
 
 **Each stage decides for itself whether the reviewer's feedback actually changes anything for its
 part of the work, instead of the re-run blindly redoing every stage from scratch.** This was
@@ -401,10 +454,36 @@ newly added to the workflow) just does normal full-work prompting - there's noth
 **Coding is the one stage where this needs an explicit marker**, because unlike every other stage
 it has a side effect: a "no changes needed" response must not still produce an empty commit. Only
 in this same first-invocation/has-prior-output situation, a Coding stage is also asked to end with
-`CHANGES: NONE` or `CHANGES: MADE`; `RunCodingStageAsync` skips `CommitFileAsync`/`PushAsync`
+`CHANGES: NONE` or `CHANGES: MADE`; `RunCodingStageAsync` skips `CommitFilesAsync`/`PushAsync`
 entirely on a parsed `NONE` (still recording the `StageExecution` and still passing the text
 forward as `previousOutput`), and commits exactly as before in every other case - a missing or
 unparseable marker included, so an ambiguous response can never silently suppress a real change.
+
+**The Coding stage commits real per-file changes onto the ticket's own branch, grounded in that
+branch's actual current files - all within a single Claude API call.** Before building its prompt,
+`RunCodingStageAsync` calls `IGitService.GetRepositorySnapshotAsync` (Infrastructure, plain
+Git/filesystem reads - no LLM involved) to get a bounded, secret-redacted snapshot of the text
+files already in `ticket.BranchName`, and appends it to the prompt as context; `BuildStagePrompt`
+separately requires every Coding response to wrap each created/modified file's **complete new
+content** (not a diff - an LLM-generated unified diff is fragile to apply; overwriting with
+content the model provides directly is not) in `<file path="relative/path">...</file>` blocks, one
+per file. `OrchestrationService.ParseFileChanges` (same private-static-regex pattern as
+`ParseVerdict`/`ParseChanges`/`ParseQuestion`) extracts those blocks, and
+`IGitService.CommitFilesAsync` writes and stages every one before a single `repo.Commit(...)` - so
+`Commit.DiffContent` is a real multi-file `git diff`-style patch whenever more than one file
+changed, which is what the ticket detail page's per-file `CommitDiffViewer` (see
+[docs/frontend.md](frontend.md)) renders. A response with **zero** parseable `<file>` blocks is
+treated exactly like an explicit `CHANGES: NONE` - no commit, no push, but the raw text is still
+recorded as a `StageExecution` and still passed forward as `previousOutput`; a warning is logged
+since, unlike `NONE`, this is an unformatted response rather than a deliberate no-op. Earlier, this
+stage instead wrote its entire raw response verbatim into one file, `tickets/{ticket.Id}.md`,
+authoring blind with no visibility into the branch's real content - that transcript file is gone;
+`StageExecution.Output` already durably persists the same raw text for every invocation. **Known
+limitation, not solved here:** the Coding stage still only has one shot with no ability to read
+back specific files mid-response (`SendPromptAsync` has no tools) - the snapshot is everything it
+gets; giving it interactive read access would mean moving it onto the tool-using
+`SendConversationAsync` path used by the Live Agent chat, at the cost of multiple API calls per
+invocation instead of one.
 
 **`Reject` is the "opposite" of `Approve`: it discards the ticket instead of keeping its work,
 gated to Admin/Developer for the same reason.** `ApprovalGateService.RejectAsync` calls
@@ -417,10 +496,9 @@ was never kept. Unlike `RequestChanges`, there's no path back.
 
 `TicketService.CancelAsync` remains the escape hatch for a ticket whose goal is no longer valid
 for reasons unrelated to a review (e.g. a requirement changed) — reachable from any pre-merge
-status and terminal (`Cancelled` has no outgoing transition), same as `Reject`. Unlike `Reject`,
-a plain cancel never touches Git: the ticket's own feature branch (if any) is simply left
-orphaned on the remote, to be cleaned up later via the separate, explicit `DeleteBranchAsync` if
-desired.
+status and terminal (`Cancelled` has no outgoing transition), same as `Reject`. Like `Reject`, a
+plain cancel also deletes the ticket's linked branch (if any) from Git in the same call, for the
+same reason: see the "Deleting a branch happens automatically" note above.
 
 **Cancelling while the pipeline is actively running for that ticket stops it before its next
 stage, not mid-LLM-call.** `OrchestrationService.RunPipelineAsync` calls
@@ -431,10 +509,49 @@ meantime. This deliberately reads via `ITicketRepository.GetStatusAsync` — a f
 `AsNoTracking()` query — rather than the `Ticket` instance already loaded at the top of the run,
 because a second `GetByIdAsync` call against the *same* `DbContext` would just return that
 already-tracked (and by now stale) instance from the change tracker's identity map instead of
-seeing the other request's committed cancellation. What this can't do is abort an LLM call or
-git push already in flight — cooperative, not preemptive — but it does mean a cancelled ticket
-never gets a stray commit or a `MoveToReview()` added after the fact, since the run stops (and
-never reaches its own `SaveChangesAsync`) as soon as it next checks.
+seeing the other request's committed cancellation. It does mean a cancelled ticket never gets a
+`MoveToReview()` added after the fact, since the run stops (and never reaches its own
+`SaveChangesAsync`) as soon as it next checks — but on its own, this checkpoint can't abort an
+LLM call already in flight; cooperative, not preemptive.
+
+**That LLM-call gap used to mean a cancellation could still be undone by whatever the pipeline
+was doing when it landed — specifically, a Coding stage's commit/push completing right after a
+concurrent `TicketService.CancelAsync` deleted the same branch, resurrecting it.**
+`GitRepositoryLock` (a static, per-repository-path async mutex - see its own doc comment) closes
+this: `RunCodingStageAsync` re-checks the ticket's status fresh, via the same
+`ITicketRepository.GetStatusAsync` read `EnsureNotCancelledAsync` uses, immediately before
+committing - but *while holding the lock for `Project.RepositoryPath`*, the same lock
+`TicketService.CancelAsync` holds across both persisting `Cancelled` and (if there's a branch)
+deleting it. Whichever of the two acquires the lock first now fully completes - status saved and
+branch deleted, or commit and push landed - before the other's critical section can even start,
+so there's no interleaving left for one to undo the other: if the commit/push runs first, the
+delete that follows removes it along with everything else on the branch; if the cancellation runs
+first, the stage's re-check inside the lock sees `Cancelled` and skips its commit/push instead of
+recreating what was just deleted. `OrchestrationService.LinkBranchAsync` (the auto-link at pipeline
+start) applies the same pattern for the same reason, in the one case where cancelling wouldn't
+otherwise touch Git at all: a ticket with no branch yet has nothing to delete, so without this
+re-check a concurrent cancel could complete believing there's nothing to clean up while an
+in-flight first link goes on to create one anyway.
+
+The one interleaving this still can't close is a ticket that has no branch at the moment
+`TicketService.CancelAsync`'s critical section runs (so it persists `Cancelled` and exits without
+ever touching the lock again) followed by `OrchestrationService.LinkBranchAsync` linking a branch
+and only saving `Ticket.BranchName` to the database *after* releasing its own copy of the lock —
+a gap of a few in-process `await` points in a single already-committed background pipeline call,
+not a window a user action could realistically land in twice in a row. Every realistic case this
+was written for — cancelling a ticket whose pipeline already has (or is about to get) a real,
+already-linked branch — is fully closed.
+
+`ApprovalGateService.ApproveAsync`'s fetch/merge/push and `ConflictResolutionService.DetectConflictsAsync`'s
+trial merge acquire the same lock too, and `LiveAgentChatService`'s read-only `list_files`/`read_file`
+tools acquire it per call - not because they race a cancellation, but because
+`LibGit2SharpGitService` opens a fresh `Repository` handle per call with no coordination of its
+own, and every ticket in a project shares that one local sandbox clone
+(`Project.RepositoryPath`), so any two of these running concurrently (even for two different
+tickets) could otherwise corrupt the same working directory or race on the same ref. One
+consequence worth knowing: two tickets in the *same* project now serialize on Git operations
+rather than running fully in parallel - the cost of correctness, given the sandbox is one shared
+clone per project, not per ticket.
 
 Approving a ticket also triggers a `PipelineRun` via `IPipelineService.TriggerAsync` — the
 approval gate and CI/CD status tracking are connected at this one point.

@@ -1,5 +1,6 @@
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
 using Xunit;
 
 namespace TeamPilot.Domain.Tests;
@@ -64,10 +65,101 @@ public class ConversationTests
     }
 
     [Fact]
+    public void AddMessage_UserMessageWithSenderName_CarriesSenderName()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+
+        var message = conversation.AddMessage(ChatMessageRole.User, "What does this project do?", senderName: "Jordan Lee");
+
+        Assert.Equal("Jordan Lee", message.SenderName);
+    }
+
+    [Fact]
     public void AddMessage_EmptyContent_ThrowsArgumentException()
     {
         var conversation = Conversation.Create(ProjectId, AgentId);
 
         Assert.Throws<ArgumentException>(() => conversation.AddMessage(ChatMessageRole.User, "   "));
+    }
+
+    [Fact]
+    public void MarkTicketCreated_MessageWithProposal_SetsCreatedTicketId()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+        var ticketId = Guid.NewGuid();
+
+        message.MarkTicketCreated(ticketId);
+
+        Assert.Equal(ticketId, message.CreatedTicketId);
+    }
+
+    [Fact]
+    public void MarkTicketCreated_AlreadyApproved_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+        message.MarkTicketCreated(Guid.NewGuid());
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void MarkTicketCreated_MessageWithNoProposal_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.User, "What does this project do?");
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void MarkTicketCreated_AlreadyRejected_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+        message.RejectTicket();
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void RejectTicket_MessageWithProposal_SetsTicketRejected()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+
+        message.RejectTicket();
+
+        Assert.True(message.TicketRejected);
+    }
+
+    [Fact]
+    public void RejectTicket_AlreadyRejected_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+        message.RejectTicket();
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.RejectTicket());
+    }
+
+    [Fact]
+    public void RejectTicket_AlreadyApproved_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+        message.MarkTicketCreated(Guid.NewGuid());
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.RejectTicket());
+    }
+
+    [Fact]
+    public void RejectTicket_MessageWithNoProposal_ThrowsChatMessageTicketApprovalException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.User, "What does this project do?");
+
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.RejectTicket());
     }
 }

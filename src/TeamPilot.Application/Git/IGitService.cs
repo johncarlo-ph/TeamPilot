@@ -29,14 +29,28 @@ public interface IGitService
     /// <paramref name="baseBranchName"/> if it doesn't already exist locally.</summary>
     Task EnsureBranchAsync(string repositoryPath, string branchName, string baseBranchName, CancellationToken cancellationToken = default);
 
-    Task<GitCommitResult> CommitFileAsync(
+    /// <summary>
+    /// Writes every entry of <paramref name="fileContentsByRelativePath"/> to <paramref name="branchName"/>'s
+    /// working directory and commits them all together as one commit (so <c>Commit.DiffContent</c> is a real
+    /// multi-file <c>git diff</c>-style patch when more than one file changed).
+    /// </summary>
+    Task<GitCommitResult> CommitFilesAsync(
         string repositoryPath,
         string branchName,
-        string relativeFilePath,
-        string fileContent,
+        IReadOnlyDictionary<string, string> fileContentsByRelativePath,
         string message,
         string authorName,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// A bounded, read-only, secret-redacted snapshot (relative path -&gt; content) of the text files
+    /// currently in <paramref name="branchName"/> - gathered once per Coding-stage invocation so the agent
+    /// edits against real code in its single prompt, instead of authoring blind. Mirrors
+    /// <see cref="ReadFileAsync"/>'s sandboxing/redaction; capped per-file and in total so a large repo
+    /// can't blow out the prompt.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>> GetRepositorySnapshotAsync(
+        string repositoryPath, string branchName, CancellationToken cancellationToken = default);
 
     Task<GitDiffResult> GetDiffAsync(string repositoryPath, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
 

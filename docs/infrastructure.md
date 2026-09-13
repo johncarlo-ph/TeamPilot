@@ -94,25 +94,43 @@ those single-shot callers.
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
 `Project` owns its own sandbox clone, the service holds no per-project state; every method
 (`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
-`CommitFileAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeWithResolutionsAsync`,
-`DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`) opens and disposes its own
-`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
-repository rather than opening an existing one).
+`CommitFilesAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeWithResolutionsAsync`,
+`DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`, `GetRepositorySnapshotAsync`) opens and
+disposes its own `LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it
+creates the repository rather than opening an existing one). It also coordinates nothing between
+calls itself: two calls against the same sandbox running concurrently (every ticket in a project
+shares one clone — see `MergeWithResolutionsAsync` below) could corrupt the working directory or
+race on the same remote ref. `Application.Git.GitRepositoryLock` is the fix, one layer up — every
+Application call site acquires it, keyed by `repositoryPath`, around the git calls (and, where it
+matters, a status re-check) that must not interleave with another such block. See
+[docs/application.md](application.md) for the specific race (a cancelled ticket's branch delete
+racing an in-flight Coding stage's commit/push) this was added to close.
 
-**`ListFilesAsync`/`ReadFileAsync` are read-only and exist solely for the Live Agent chat's
-sandboxed file tools.** Every other `IGitService` method either writes or talks to the remote;
-these two only ever read off `repo.Info.WorkingDirectory`. Both resolve the caller's relative
-path against that working directory via `Path.GetFullPath` and reject the call
-(`GitOperationException`) if the resolved path doesn't stay under it — the only defense against a
-path-traversal attempt (e.g. `../../`) reaching outside the sandbox. `ReadFileAsync` additionally
-refuses well-known secret-bearing paths outright (`.git/**`, `.env*`, `id_rsa*`/`id_ed25519*`,
-`*.pfx`/`*.pem`/`*.key`/`*.p12`), runs the remaining content through `SecretRedactor`'s
-best-effort regex redaction (AWS-style keys, private-key blocks, JWTs, common
-`password=`/`api_key=`-shaped assignments), and truncates past 20,000 characters. None of this is
-a guarantee against leaking a secret shaped differently than these patterns — it's defense in
-depth, not a substitute for keeping real secrets out of a project's repository. `ListFilesAsync`
-returns a shallow (non-recursive), capped-at-200-entries listing of one directory, so the model
-only sees what it explicitly asked for rather than an implicit full tree.
+**`ListFilesAsync`/`ReadFileAsync`/`GetRepositorySnapshotAsync` are read-only.** Every other
+`IGitService` method either writes or talks to the remote; these three only ever read off
+`repo.Info.WorkingDirectory`. All three resolve the caller's relative path against that working
+directory via `Path.GetFullPath` and reject the call (`GitOperationException`) if the resolved
+path doesn't stay under it — the only defense against a path-traversal attempt (e.g. `../../`)
+reaching outside the sandbox. `ReadFileAsync` and `GetRepositorySnapshotAsync` additionally refuse
+well-known secret-bearing paths outright (`.git/**`, `.env*`, `id_rsa*`/`id_ed25519*`,
+`*.pfx`/`*.pem`/`*.key`/`*.p12`), run the remaining content through `SecretRedactor`'s best-effort
+regex redaction (AWS-style keys, private-key blocks, JWTs, common `password=`/`api_key=`-shaped
+assignments), and truncate past 20,000 characters per file. None of this is a guarantee against
+leaking a secret shaped differently than these patterns — it's defense in depth, not a substitute
+for keeping real secrets out of a project's repository. `ListFilesAsync` returns a shallow
+(non-recursive), capped-at-200-entries listing of one directory, used solely by the Live Agent
+chat's sandboxed file tools, so the model only sees what it explicitly asked for rather than an
+implicit full tree.
+
+**`GetRepositorySnapshotAsync` exists solely to ground the Coding pipeline stage's single prompt
+in the ticket branch's real current files** (see
+[docs/application.md](application.md#workflow-integration)) — unlike `ListFilesAsync`, it recursively walks
+the whole working directory (skipping `.git` plus dependency/build-output noise:
+`node_modules`, `bin`, `obj`, `dist`, `.angular`) and reads every remaining file up front, since
+the Coding stage gets no chance to ask for a specific path mid-response. Two independent caps
+bound the result so a large repository degrades to a partial snapshot instead of an unbounded
+prompt: `MaxSnapshotFiles` (100) and `MaxSnapshotTotalChars` (60,000, checked across the whole
+snapshot in addition to each file's own 20,000-character cap).
 
 **`MergeWithResolutionsAsync` finishes a conflicted merge as a real two-parent commit by resuming
 LibGit2Sharp's own merge-in-progress state, not by re-merging after the fact.** It runs the same
@@ -165,6 +183,19 @@ just before passing it to `IGitService`. **Caveat:** Data Protection's default k
 persisted per-machine — if the API is ever scaled out to multiple instances/containers, the key
 ring must be persisted somewhere shared (e.g. a file share or blob store), or a token encrypted
 on one instance won't decrypt on another.
+
+**`IBackgroundTaskRunner` (`Infrastructure/BackgroundTasks/BackgroundTaskRunner.cs`) is the
+codebase's first fire-and-forget mechanism** — registered `AddSingleton` since it only wraps
+`IServiceScopeFactory` (itself effectively a singleton), unlike everything else in this file's DI
+registration, which is `AddScoped` because `TeamPilotDbContext` is. `Run(work)` fires `work` on
+the thread pool inside a fresh `IServiceScopeFactory.CreateScope()`, passing that scope's own
+`IServiceProvider` in rather than anything from the caller's scope, and catches/logs any
+exception `work` doesn't handle itself as a last-resort safety net. Currently used by
+`ApprovalGateService` for the `RequestChanges` pipeline re-run (see
+[docs/application.md](application.md)) — the caller resolves its own dependencies
+(`IOrchestrationService`, `ITicketRepository`, etc.) from the given `IServiceProvider` inside the
+delegate, never from fields injected into the caller itself, since the caller's own scope (and
+scoped `DbContext`) is disposed once its request returns, before the detached work runs.
 
 ## Code style notes
 
@@ -256,12 +287,17 @@ deliberate product decision so admins can recognize accounts directly in the `Us
 ## Example
 
 ```csharp
-// LibGit2SharpGitService.CommitFileAsync — opens a fresh Repository handle per call
+// LibGit2SharpGitService.CommitFilesAsync — opens a fresh Repository handle per call
 using var repo = OpenRepository(repositoryPath);
 var branch = GetOrCreateBranch(repo, branchName);
 Commands.Checkout(repo, branch);
-File.WriteAllText(Path.Combine(repo.Info.WorkingDirectory, relativeFilePath), fileContent);
-Commands.Stage(repo, relativeFilePath);
+// Every path is resolved (and validated as staying inside the sandbox) before any file is
+// written, so a bad path can't leave a half-written working directory behind.
+foreach (var (relativeFilePath, fileContent) in fileContentsByRelativePath)
+{
+    File.WriteAllText(fullPathsByRelativePath[relativeFilePath], fileContent);
+    Commands.Stage(repo, relativeFilePath);
+}
 var commit = repo.Commit(message, signature, signature);
 ```
 

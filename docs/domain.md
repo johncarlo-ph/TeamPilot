@@ -60,7 +60,10 @@ there to be anything to pause) and `Unblock` only from `Blocked` back to `InProg
 `QUESTION: ...` marker or when a known operational failure occurs
 (`GitOperationException`/`LlmOperationException`) - either way a `TicketQuestion` is created
 recording what happened, which is what a human answers or retries against
-(`TicketQuestionService`) to call `Unblock()` and resume.
+(`TicketQuestionService`) to call `Unblock()` and resume. `ApprovalGateService` also calls
+`Block()` from its own backstop around the detached `RequestChanges` pipeline re-run (see
+[docs/application.md](application.md)), for the same reason and with the same `Failure`-kind
+`TicketQuestion` - any exception type `OrchestrationService` doesn't already handle itself.
 
 **Domain exceptions signal invariant violations, not application errors.** Every domain
 exception derives from `DomainException` ([`Exceptions/DomainException.cs`](../src/TeamPilot.Domain/Exceptions/DomainException.cs)),
@@ -74,8 +77,10 @@ name for reuse.** The `(ProjectId, BranchName)` uniqueness enforced in Infrastru
 [docs/infrastructure.md](infrastructure.md)) is otherwise permanent - a branch stays claimed by
 whichever ticket linked it first, even after that ticket is `Done` or `Cancelled`, because the
 branch may still carry commits nobody's accounted for. `UnlinkBranch` is the explicit exception:
-it's only called after the branch has actually been deleted from Git (`TicketService.DeleteBranchAsync`),
-at which point there's nothing left to protect against, so clearing `BranchName` is safe. It
+it's only called after the branch has actually been deleted from Git — automatically as part of
+`TicketService.CancelAsync`/`ApprovalGateService.RejectAsync`, or manually via
+`TicketService.DeleteBranchAsync` as a fallback — at which point there's nothing left to protect
+against, so clearing `BranchName` is safe. It
 throws `InvalidTicketStateTransitionException` from any other status - deleting an active
 ticket's branch out from under it would leave `Ticket.BranchName` pointing at nothing.
 
@@ -106,7 +111,7 @@ automatic branch delete.
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
 | `TicketQuestion` | A record of why a ticket was blocked - a clarifying question or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateFailure`, `Answer`, `MarkConsumed` |
 | `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
-| `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)* |
+| `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)*, `MarkTicketCreated`, `RejectTicket` |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
 | `Review` | A human approval-gate decision | *(immutable once created)* |
@@ -134,8 +139,15 @@ to, and explicitly constrain it to read-only repository access and to only *draf
 those constraints are enforced. An admin edits any agent's instructions the same way: calling
 `Agent.AddInstructionVersion` for a type that already has a default adds a new version that
 supersedes it, rather than replacing it in place — the default is never mutated, only
-superseded. The 5 default/standing agents (Research/Design/Coding/Testing/LiveAgent) are still
-never created or deleted through the API; the one exception is an admin-created `AgentRole.Custom`
+superseded. The one exception is `InstructionType.Constitution` on a default/standing role
+(anything but `AgentRole.Custom`): once its version-1 Constitution is seeded by `Create`,
+`AddInstructionVersion` throws `Exceptions.ConstitutionEditNotAllowedException` for any further
+attempt to add a Constitution version on that agent, so its role-defining identity can never
+drift out from under the orchestration pipeline's assumptions about what each stage is. Guideline
+and Requirement have no such restriction on any role, and a `Custom` agent's Constitution has no
+restriction either, since it starts with no seeded identity of its own to protect. The 5
+default/standing agents (Research/Design/Coding/Testing/LiveAgent) are still never created or
+deleted through the API; the one exception is an admin-created `AgentRole.Custom`
 agent (`WorkflowService.CreateCustomAgentAsync`, see [docs/application.md](application.md)),
 which starts with **no** seeded instructions at all (`AgentDefaultInstructions.For(AgentRole.Custom)`
 returns an empty list) — an admin must add all three types before
@@ -155,10 +167,23 @@ that's ever actually run - stays permanent.
 (`Conversation` has a unique index on `ProjectId` — see
 [`Entities/Conversation.cs`](../src/TeamPilot.Domain/Entities/Conversation.cs)). Each turn is a
 `ChatMessage` appended via `Conversation.AddMessage(role, content, proposedTicketTitle?,
-proposedTicketDescription?)` — an assistant message that drafted a ticket carries those two
-optional fields so the "create ticket" approval card in the UI re-renders correctly after a
-reload. Nothing about creating a `ChatMessage` creates a real `Ticket`; that only happens if/when
-the user approves the draft (see [docs/application.md](application.md)).
+proposedTicketDescription?, senderName?)` — an assistant message that drafted a ticket carries
+those two optional ticket fields so the "create ticket" approval card in the UI re-renders
+correctly after a reload. A user message additionally carries `SenderName`, the display name of
+the user who sent it captured at send time (so the chat history keeps showing who said what even
+if the user is later renamed or removed) — it's always null for an assistant message. Nothing
+about creating a `ChatMessage` creates a real `Ticket`; that only happens if/when the user
+approves the draft (see [docs/application.md](application.md)). Approval calls
+`ChatMessage.MarkTicketCreated(ticketId)`, which sets `CreatedTicketId`; dismissing a draft
+instead calls `ChatMessage.RejectTicket()`, which sets `TicketRejected`. Both throw
+`ChatMessageTicketApprovalException` (a `DomainException`, mapped to 409) if the message has no
+`ProposedTicketTitle`, if the *other* decision was already made (you can't reject an approved
+draft or approve a rejected one), or if that same decision was already made — the latter guards
+the entity itself, though the application-layer caller checks `CreatedTicketId`/`TicketRejected`
+first and treats a repeat of the same decision as an idempotent no-op rather than ever reaching
+that throw in normal use. `CreatedTicketId` being non-null or `TicketRejected` being true is what
+the UI uses to keep the "Create ticket"/"Reject" pair from reappearing, including after a reload
+or for a different user viewing the same shared conversation.
 
 ## Code style notes
 

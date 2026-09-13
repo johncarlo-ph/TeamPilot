@@ -8,7 +8,18 @@
   <div class="d-flex align-items-start justify-content-between mt-2 mb-4">
     <div>
       <h1 class="h3 mb-1">{{ ticket.title }}</h1>
-      <p class="text-body-secondary mb-0">{{ ticket.description || 'No description.' }}</p>
+      <p class="ticket-description text-body-secondary mb-0">
+        {{ descriptionPreview() || 'No description.' }}
+      </p>
+      @if (isDescriptionLong()) {
+        <button
+          type="button"
+          class="btn btn-link btn-sm ps-0"
+          (click)="toggleDescription()"
+        >
+          {{ descriptionExpanded() ? 'See less' : 'See more' }}
+        </button>
+      }
       <app-status-badge [value]="ticket.status"></app-status-badge>
       @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
         <p class="small text-body-secondary fst-italic mb-0 mt-1">
@@ -69,7 +80,7 @@
                   }
                   &middot; {{ commit.createdAtUtc | date: 'short' }}
                 </p>
-                <app-diff-viewer [content]="commit.diffContent"></app-diff-viewer>
+                <app-commit-diff-viewer [content]="commit.diffContent"></app-commit-diff-viewer>
               </div>
             }
           }
@@ -102,7 +113,7 @@
             <p class="text-body-secondary mb-0">No reviews yet.</p>
           } @else {
             <ul class="list-group list-group-flush">
-              @for (review of ticket.reviews; track review.id) {
+              @for (review of sortedReviews(); track review.id) {
                 <li class="list-group-item px-0">
                   <div class="d-flex align-items-center justify-content-between">
                     <span class="fw-semibold">{{ review.reviewerName }}</span>

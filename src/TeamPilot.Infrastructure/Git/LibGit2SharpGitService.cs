@@ -130,11 +130,15 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
             },
             cancellationToken);
 
-    public Task<GitCommitResult> CommitFileAsync(
+    /// <summary>
+    /// Resolves and validates every path up front (via <see cref="ResolveSandboxedPath"/>) before writing
+    /// anything, so a bad path from a hallucinated file block can't leave a half-written sandbox on disk if
+    /// a later entry fails validation.
+    /// </summary>
+    public Task<GitCommitResult> CommitFilesAsync(
         string repositoryPath,
         string branchName,
-        string relativeFilePath,
-        string fileContent,
+        IReadOnlyDictionary<string, string> fileContentsByRelativePath,
         string message,
         string authorName,
         CancellationToken cancellationToken = default) =>
@@ -145,11 +149,17 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 var branch = GetOrCreateBranch(repo, branchName);
                 Commands.Checkout(repo, branch);
 
-                var fullPath = Path.Combine(repo.Info.WorkingDirectory, relativeFilePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-                File.WriteAllText(fullPath, fileContent);
+                var fullPathsByRelativePath = fileContentsByRelativePath.Keys.ToDictionary(
+                    relativeFilePath => relativeFilePath,
+                    relativeFilePath => ResolveSandboxedPath(repo.Info.WorkingDirectory, relativeFilePath));
 
-                Commands.Stage(repo, relativeFilePath);
+                foreach (var (relativeFilePath, fileContent) in fileContentsByRelativePath)
+                {
+                    var fullPath = fullPathsByRelativePath[relativeFilePath];
+                    Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+                    File.WriteAllText(fullPath, fileContent);
+                    Commands.Stage(repo, relativeFilePath);
+                }
 
                 var signature = new Signature(authorName, _options.DefaultAuthorEmail, DateTimeOffset.UtcNow);
                 var commit = repo.Commit(message, signature, signature);
@@ -335,8 +345,23 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
 
     private const int MaxListEntries = 200;
     private const int MaxFileReadChars = 20_000;
+    private const int MaxSnapshotFiles = 100;
+    private const int MaxSnapshotTotalChars = 60_000;
 
     private static readonly string[] BlockedExtensions = [".pfx", ".pem", ".key", ".p12"];
+
+    /// <summary>Directories never worth spending the snapshot's budget on - dependency/build
+    /// output, not source the Coding stage would ever need to read or rewrite.</summary>
+    private static readonly string[] SnapshotIgnoredDirectories = [".git", "node_modules", "bin", "obj", "dist", ".angular"];
+
+    /// <summary>Extensions skipped outright rather than read as text - <c>File.ReadAllText</c>
+    /// doesn't throw on binary content, it just returns mojibake, which would waste the
+    /// snapshot's character budget on noise instead of throwing something worth catching.</summary>
+    private static readonly string[] SnapshotBinaryExtensions =
+    [
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".svg",
+        ".pdf", ".zip", ".dll", ".exe", ".woff", ".woff2", ".ttf", ".eot",
+    ];
 
     public Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, CancellationToken cancellationToken = default) =>
         Task.Run(
@@ -398,6 +423,86 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 return new GitFileReadResult(true, truncated ? content[..MaxFileReadChars] : content, truncated);
             },
             cancellationToken);
+
+    /// <summary>
+    /// Checks out <paramref name="branchName"/> and walks its working directory for a bounded, redacted
+    /// text snapshot - stops adding files once <see cref="MaxSnapshotFiles"/> or
+    /// <see cref="MaxSnapshotTotalChars"/> is hit, so a large repo degrades to a partial snapshot instead
+    /// of an unbounded prompt. Skips the same blocked/secret-bearing paths as <see cref="ReadFileAsync"/>
+    /// plus <see cref="SnapshotIgnoredDirectories"/> (dependency/build output never worth the budget).
+    /// </summary>
+    public Task<IReadOnlyDictionary<string, string>> GetRepositorySnapshotAsync(
+        string repositoryPath, string branchName, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                var branch = GetOrCreateBranch(repo, branchName);
+                Commands.Checkout(repo, branch);
+
+                var workingDirectory = repo.Info.WorkingDirectory;
+                var snapshot = new Dictionary<string, string>();
+                var totalChars = 0;
+
+                foreach (var fullPath in EnumerateSnapshotFiles(workingDirectory))
+                {
+                    if (snapshot.Count >= MaxSnapshotFiles || totalChars >= MaxSnapshotTotalChars)
+                    {
+                        break;
+                    }
+
+                    var relativeFilePath = Path.GetRelativePath(workingDirectory, fullPath).Replace('\\', '/');
+                    if (IsBlockedPath(relativeFilePath) || SnapshotBinaryExtensions.Contains(Path.GetExtension(fullPath), StringComparer.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string content;
+                    try
+                    {
+                        content = SecretRedactor.Redact(File.ReadAllText(fullPath));
+                    }
+                    catch (IOException)
+                    {
+                        // Unreadable for some other reason (locked, race with a concurrent write) -
+                        // skip rather than fail the whole snapshot.
+                        continue;
+                    }
+
+                    if (content.Length > MaxFileReadChars)
+                    {
+                        content = content[..MaxFileReadChars];
+                    }
+
+                    snapshot[relativeFilePath] = content;
+                    totalChars += content.Length;
+                }
+
+                return (IReadOnlyDictionary<string, string>)snapshot;
+            },
+            cancellationToken);
+
+    private static IEnumerable<string> EnumerateSnapshotFiles(string directory)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+        {
+            yield return file;
+        }
+
+        foreach (var subdirectory in Directory.EnumerateDirectories(directory).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            var name = Path.GetFileName(subdirectory);
+            if (SnapshotIgnoredDirectories.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var file in EnumerateSnapshotFiles(subdirectory))
+            {
+                yield return file;
+            }
+        }
+    }
 
     /// <summary>Resolves <paramref name="relativePath"/> against the repository's working
     /// directory and rejects it (via <see cref="GitOperationException"/>) if the resolved path

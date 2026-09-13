@@ -55,7 +55,19 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
+
+// HttpContext is only ever null here when this resolves outside a live HTTP request - i.e. a
+// detached background scope (IBackgroundTaskRunner) - never during normal request handling,
+// since IHttpContextAccessor's ambient HttpContext is set for the whole pipeline. See
+// SystemCurrentUserContext for why that case needs a distinct identity rather than just falling
+// through as "unauthenticated" from HttpContextCurrentUserContext itself.
+builder.Services.AddScoped<ICurrentUserContext>(sp =>
+{
+    var httpContextAccessor = sp.GetRequiredService<IHttpContextAccessor>();
+    return httpContextAccessor.HttpContext is not null
+        ? new HttpContextCurrentUserContext(httpContextAccessor)
+        : new SystemCurrentUserContext();
+});
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 

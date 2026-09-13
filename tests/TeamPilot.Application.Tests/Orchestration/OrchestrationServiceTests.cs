@@ -77,8 +77,12 @@ public class OrchestrationServiceTests
             .ReturnsAsync((TicketQuestion?)null);
 
         _gitService
-            .Setup(g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
+            .Setup(g => g.CommitFilesAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommitResult("abc123", "diff content"));
+
+        _gitService
+            .Setup(g => g.GetRepositorySnapshotAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, string>());
 
         _sut = new OrchestrationService(
             _ticketRepository.Object,
@@ -106,6 +110,12 @@ public class OrchestrationServiceTests
 
     private static bool IsPromptFor(LlmRequest request, Agent agent) => request.Prompt.Contains($"You are {agent.Name} (");
 
+    /// <summary>A Coding-stage response with a parseable &lt;file&gt; block - since a commit now
+    /// only happens when at least one such block parses (see OrchestrationService.ParseFileChanges),
+    /// tests that assert a commit occurred use this instead of a plain narrative string.</summary>
+    private static string CodingOutputWithFileChange(string narrative = "Implemented the change.") =>
+        $"{narrative}\n<file path=\"src/App.tsx\">\nexport const App = () => <div>Hi</div>;\n</file>";
+
     [Fact]
     public async Task RunPipelineAsync_HappyPath_AssignsAllFourAgentsLinksBranchAndMovesToReview()
     {
@@ -116,7 +126,9 @@ public class OrchestrationServiceTests
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
                 IsPromptFor(req, _testingAgent)
                     ? new LlmResponse("All checks passed.\nRESULT: PASS", "claude-test", 10, 20)
-                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
 
         var result = await _sut.RunPipelineAsync(ticket.Id);
 
@@ -153,6 +165,7 @@ public class OrchestrationServiceTests
                 if (IsPromptFor(req, _codingAgent))
                 {
                     codingPrompts.Add(req.Prompt);
+                    return Task.FromResult(new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20));
                 }
 
                 return Task.FromResult(new LlmResponse("Some output", "claude-test", 10, 20));
@@ -166,7 +179,7 @@ public class OrchestrationServiceTests
         Assert.Equal(2, codingPrompts.Count);
         Assert.Contains("Found a bug", codingPrompts[1]);
         _gitService.Verify(
-            g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()),
             Times.Exactly(2));
     }
 
@@ -180,7 +193,9 @@ public class OrchestrationServiceTests
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
                 IsPromptFor(req, _testingAgent)
                     ? new LlmResponse("Still broken.\nRESULT: FAIL", "claude-test", 10, 20)
-                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
 
         var result = await _sut.RunPipelineAsync(ticket.Id);
 
@@ -208,10 +223,10 @@ public class OrchestrationServiceTests
         var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var codingConstitution = _codingAgent.AddInstructionVersion(InstructionType.Constitution, "Always write tests first.", "Admin");
+        var codingGuideline = _codingAgent.AddInstructionVersion(InstructionType.Guideline, "Always write tests first.", "Admin");
         _instructionRepository
-            .Setup(r => r.GetCurrentAsync(_codingAgent.Id, InstructionType.Constitution, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(codingConstitution);
+            .Setup(r => r.GetCurrentAsync(_codingAgent.Id, InstructionType.Guideline, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(codingGuideline);
 
         var codingPrompts = new List<string>();
         _llmConnector
@@ -326,6 +341,45 @@ public class OrchestrationServiceTests
     }
 
     [Fact]
+    public async Task RunPipelineAsync_WhenTicketIsCancelledDuringCodingsOwnLlmCall_SkipsTheCommit()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var cancelled = false;
+        _ticketRepository
+            .Setup(r => r.GetStatusAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => cancelled ? TicketStatus.Cancelled : TicketStatus.InProgress);
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _codingAgent))
+                {
+                    // Unlike the Design-stage scenario above, this simulates a concurrent
+                    // cancellation landing while Coding's OWN LLM call is in flight - the one
+                    // gap RunCodingStageAsync can't preempt. Its own fresh status re-check,
+                    // taken right before committing (under the same GitRepositoryLock a
+                    // concurrent TicketService.CancelAsync uses for its branch delete), should
+                    // still catch this and skip the commit rather than let it land - and
+                    // possibly resurrect a branch that cancellation already deleted.
+                    cancelled = true;
+                    return Task.FromResult(new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20));
+                }
+
+                return Task.FromResult(new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await Assert.ThrowsAsync<InvalidTicketStateTransitionException>(() => _sut.RunPipelineAsync(ticket.Id));
+
+        Assert.Empty(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task RunPipelineAsync_WithReorderedStages_ExecutesInConfiguredOrderNotDefaultRoleOrder()
     {
         // Swap Research and Design's positions - the workflow should run Design before Research,
@@ -380,13 +434,15 @@ public class OrchestrationServiceTests
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
                 IsPromptFor(req, _testingAgent)
                     ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
-                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
 
         await _sut.RunPipelineAsync(ticket.Id);
 
         Assert.Single(ticket.Commits);
         _gitService.Verify(
-            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), customAgent.Name, It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), customAgent.Name, It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -591,7 +647,7 @@ public class OrchestrationServiceTests
 
         Assert.Empty(ticket.Commits);
         _gitService.Verify(
-            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _stageExecutionRepository.Verify(
             r => r.AddAsync(It.Is<StageExecution>(e => e.AgentId == _codingAgent.Id && e.Output.Contains("No change is needed")), It.IsAny<CancellationToken>()),
@@ -615,7 +671,7 @@ public class OrchestrationServiceTests
             .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
             .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
                 IsPromptFor(req, _codingAgent)
-                    ? new LlmResponse("Fixed the bug.\nCHANGES: MADE", "claude-test", 10, 20)
+                    ? new LlmResponse(CodingOutputWithFileChange("Fixed the bug.\nCHANGES: MADE"), "claude-test", 10, 20)
                     : IsPromptFor(req, _testingAgent)
                         ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
                         : new LlmResponse("Some output", "claude-test", 10, 20)));
@@ -624,7 +680,67 @@ public class OrchestrationServiceTests
 
         Assert.Single(ticket.Commits);
         _gitService.Verify(
-            g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingOutputsMultipleFileBlocks_CommitsAllOfThemTogether()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        const string codingOutput =
+            "I'll update two files.\n" +
+            "<file path=\"src/App.tsx\">\nexport const App = () => <div>Hi</div>;\n</file>\n" +
+            "<file path=\"src/App.css\">\n.app { color: red; }\n</file>";
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(codingOutput, "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Single(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFilesAsync(
+                _project.RepositoryPath,
+                It.IsAny<string>(),
+                It.Is<IReadOnlyDictionary<string, string>>(files =>
+                    files.Count == 2 &&
+                    files["src/App.tsx"] == "export const App = () => <div>Hi</div>;" &&
+                    files["src/App.css"] == ".app { color: red; }"),
+                It.IsAny<string>(),
+                _codingAgent.Name,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingOutputsNoParseableFileBlocks_SkipsTheCommitButStillRecordsAStageExecution()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Empty(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _stageExecutionRepository.Verify(
+            r => r.AddAsync(It.Is<StageExecution>(e => e.AgentId == _codingAgent.Id && e.Output == "Some output"), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -696,7 +812,7 @@ public class OrchestrationServiceTests
         Assert.True(result.Blocked);
         Assert.Empty(ticket.Commits);
         _gitService.Verify(
-            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

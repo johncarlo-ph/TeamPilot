@@ -40,7 +40,11 @@ public sealed class ConflictResolutionService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        var mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, project.BaseBranch, cancellationToken);
+        GitMergeConflictResult mergeCheck;
+        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        {
+            mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, project.BaseBranch, cancellationToken);
+        }
 
         var conflicts = mergeCheck.ConflictingFiles
             .Select(file => Conflict.Create(ticket.Id, file.FilePath, file.ConflictContent))

@@ -1,5 +1,6 @@
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
+using TeamPilot.Domain.Exceptions;
 using Xunit;
 
 namespace TeamPilot.Domain.Tests;
@@ -81,6 +82,36 @@ public class AgentTests
         agent.AddInstructionVersion(InstructionType.Guideline, "Stay in scope, revised.", "admin");
 
         Assert.True(agent.HasCompleteInstructions);
+    }
+
+    [Theory]
+    [InlineData(AgentRole.Research)]
+    [InlineData(AgentRole.Design)]
+    [InlineData(AgentRole.Coding)]
+    [InlineData(AgentRole.Testing)]
+    [InlineData(AgentRole.LiveAgent)]
+    public void AddInstructionVersion_ConstitutionOnDefaultRole_ThrowsConstitutionEditNotAllowedException(AgentRole role)
+    {
+        var agent = Agent.Create(ProjectId, "Agent", role);
+
+        var ex = Assert.Throws<ConstitutionEditNotAllowedException>(
+            () => agent.AddInstructionVersion(InstructionType.Constitution, "New identity", "admin"));
+
+        Assert.Equal(role, ex.Role);
+        var seeded = Assert.Single(agent.Instructions, i => i.Type == InstructionType.Constitution);
+        Assert.Equal(1, seeded.Version);
+        Assert.True(seeded.IsCurrent);
+    }
+
+    [Fact]
+    public void AddInstructionVersion_ConstitutionOnCustomAgent_Succeeds()
+    {
+        var agent = Agent.Create(ProjectId, "Custom Agent", AgentRole.Custom);
+
+        var instruction = agent.AddInstructionVersion(InstructionType.Constitution, "Be helpful.", "admin");
+
+        Assert.True(instruction.IsCurrent);
+        Assert.Equal(1, instruction.Version);
     }
 
     [Fact]

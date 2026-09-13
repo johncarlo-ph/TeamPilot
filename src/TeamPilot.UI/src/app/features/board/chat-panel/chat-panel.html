@@ -1,7 +1,34 @@
-<div class="card h-100 d-flex flex-column">
-  <div class="card-header"><span aria-hidden="true">💬</span> Live Agent</div>
+@if (collapsed()) {
+  <div class="card chat-panel-card chat-panel-card--collapsed d-flex align-items-center justify-content-center">
+    <button
+      type="button"
+      class="chat-toggle-btn chat-toggle-btn--collapsed"
+      title="Expand Live Agent chat"
+      aria-label="Expand Live Agent chat"
+      aria-expanded="false"
+      (click)="toggleCollapsed()"
+    >
+      <span class="chat-toggle-icon-main" aria-hidden="true">💬</span>
+      <span class="chat-toggle-chevron" aria-hidden="true">›</span>
+    </button>
+  </div>
+} @else {
+  <div class="card chat-panel-card d-flex flex-column">
+    <div class="card-header d-flex align-items-center justify-content-between">
+      <span><span aria-hidden="true">💬</span> Live Agent</span>
+      <button
+        type="button"
+        class="chat-toggle-btn"
+        title="Collapse Live Agent chat"
+        aria-label="Collapse Live Agent chat"
+        aria-expanded="true"
+        (click)="toggleCollapsed()"
+      >
+        <span class="chat-toggle-icon" aria-hidden="true">‹</span>
+      </button>
+    </div>
 
-  <div class="card-body flex-grow-1 overflow-auto" style="min-height: 20rem; max-height: 65vh">
+    <div class="card-body flex-grow-1 overflow-auto chat-panel-body">
     @if (loading()) {
       <div class="text-body-secondary">Loading conversation...</div>
     } @else if (!messages().length) {
@@ -11,7 +38,10 @@
       </p>
     } @else {
       @for (message of messages(); track message.id) {
-        <div class="d-flex mb-3" [class.justify-content-end]="message.role === 'User'">
+        <div class="d-flex flex-column mb-3" [class.align-items-end]="message.role === 'User'">
+          <div class="small text-body-secondary mb-1 px-1">
+            {{ message.role === 'User' ? (message.senderName ?? 'You') : 'Live Agent' }}
+          </div>
           <div
             class="p-2 rounded"
             [class.bg-secondary]="message.role === 'User'"
@@ -34,15 +64,27 @@
                   }
                   @if (isTicketCreated(message)) {
                     <span class="badge text-bg-success mt-2">Ticket created</span>
+                  } @else if (isTicketRejected(message)) {
+                    <span class="badge text-bg-secondary mt-2">Ticket rejected</span>
                   } @else {
-                    <button
-                      type="button"
-                      class="btn btn-sm btn-success mt-2"
-                      [disabled]="isCreatingTicket(message)"
-                      (click)="approveTicket(message)"
-                    >
-                      {{ isCreatingTicket(message) ? 'Creating...' : 'Create ticket' }}
-                    </button>
+                    <div class="d-flex gap-2 mt-2">
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-success"
+                        [disabled]="isProcessingTicket(message)"
+                        (click)="approveTicket(message)"
+                      >
+                        {{ isProcessingTicket(message) ? 'Creating...' : 'Create ticket' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-outline-secondary"
+                        [disabled]="isProcessingTicket(message)"
+                        (click)="rejectTicket(message)"
+                      >
+                        Reject
+                      </button>
+                    </div>
                   }
                 </div>
               </div>
@@ -68,4 +110,5 @@
       <button type="submit" class="btn btn-outline-primary" [disabled]="sending()">Send</button>
     </form>
   </div>
-</div>
+  </div>
+}

@@ -24,6 +24,17 @@
             <p class="small text-body-secondary mb-3">
               <code>{{ project.remoteUrl }}</code>
             </p>
+            <div class="d-flex flex-wrap gap-1 mb-3">
+              @for (summary of statusSummaries(project); track summary.status) {
+                <span
+                  class="badge rounded-pill status-badge badge-outline"
+                  [class]="summary.badgeClass"
+                  [title]="summary.title + ': ' + summary.count"
+                >
+                  <span aria-hidden="true">{{ summary.icon }}</span> {{ summary.count }}
+                </span>
+              }
+            </div>
             <div class="d-flex gap-2">
               <a
                 class="btn btn-outline-primary btn-sm flex-grow-1"

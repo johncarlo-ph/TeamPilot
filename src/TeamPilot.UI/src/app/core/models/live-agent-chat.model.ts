@@ -6,6 +6,9 @@ export interface ChatMessageDto {
   content: string;
   proposedTicketTitle: string | null;
   proposedTicketDescription: string | null;
+  createdTicketId: string | null;
+  ticketRejected: boolean;
+  senderName: string | null;
   createdAtUtc: string;
 }
 

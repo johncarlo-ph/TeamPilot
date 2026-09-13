@@ -46,7 +46,21 @@ invocation - every stage, every pipeline run, every loop-back retry - so a long-
 accumulate far more of them than commits or reviews ever would. It's created directly via
 `StageExecution.Create` and queried standalone through its own repository (the same pattern
 `WorkflowStage` already uses), so nothing pays the cost of loading that growing history just to
-load a `Ticket`.
+load a `Ticket`. **`TicketQuestion` follows this exact same pattern** - a ticket can be blocked
+and resumed any number of times over its life (a clarifying question, or a Git/LLM operational
+failure - see [docs/application.md](application.md)), so it's queried standalone through
+`ITicketQuestionRepository` rather than being another eagerly-loaded `Ticket` collection.
+
+**`Ticket.Block()`/`Unblock()` model a pipeline pausing mid-run, not a terminal state.** Unlike
+`Cancel`, `Block` only transitions from `InProgress` (the pipeline has to actually be running for
+there to be anything to pause) and `Unblock` only from `Blocked` back to `InProgress` - there's no
+`Blocked -> ForReview` shortcut, so a paused ticket always goes through the pipeline again
+(`OrchestrationService.RunPipelineAsync`) to reach review, same as any other run.
+`OrchestrationService` calls `Block()` itself, either when a stage's response contains a
+`QUESTION: ...` marker or when a known operational failure occurs
+(`GitOperationException`/`LlmOperationException`) - either way a `TicketQuestion` is created
+recording what happened, which is what a human answers or retries against
+(`TicketQuestionService`) to call `Unblock()` and resume.
 
 **Domain exceptions signal invariant violations, not application errors.** Every domain
 exception derives from `DomainException` ([`Exceptions/DomainException.cs`](../src/TeamPilot.Domain/Exceptions/DomainException.cs)),
@@ -66,9 +80,10 @@ throws `InvalidTicketStateTransitionException` from any other status - deleting 
 ticket's branch out from under it would leave `Ticket.BranchName` pointing at nothing.
 
 **`Ticket.Cancel` is a terminal abandon, reachable from any pre-merge status.** Unlike `Approve`
-(only from `ForReview`), `Cancel` accepts `ToDo`, `InProgress`, or `ForReview` — a ticket can be
-abandoned at any point before it's merged, since nothing about abandoning it depends on how far
-the pipeline got. It's not allowed from `Done`: the work is already merged, so there's nothing
+(only from `ForReview`), `Cancel` accepts `ToDo`, `InProgress`, `ForReview`, or `Blocked` — a
+ticket can be abandoned at any point before it's merged, including while paused waiting on a
+clarifying question or a failure retry, since nothing about abandoning it depends on how far the
+pipeline got. It's not allowed from `Done`: the work is already merged, so there's nothing
 left to cancel, and once `Cancelled` there's no path back (no "reopen") in this pass. The
 optional reason is trimmed and stored as `CancellationReason` rather than discarded, since
 that's the whole point of the feature — capturing *why* (e.g., a requirement changed) is more
@@ -84,11 +99,12 @@ automatic branch delete.
 | Entity | Represents | Key behavior methods |
 |---|---|---|
 | `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
-| `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Cancel` |
+| `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
+| `TicketQuestion` | A record of why a ticket was blocked - a clarifying question or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateFailure`, `Answer`, `MarkConsumed` |
 | `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)* |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
@@ -196,8 +212,8 @@ ticket.Approve();                             // ForReview -> Done
 ## Error handling
 
 Invariant violations throw a `DomainException` subtype (e.g.
-`InvalidTicketStateTransitionException`, `InvalidConflictStateTransitionException`). These are
-allowed to propagate all the way to the
+`InvalidTicketStateTransitionException`, `InvalidConflictStateTransitionException`,
+`InvalidTicketQuestionStateException`). These are allowed to propagate all the way to the
 API's `GlobalExceptionHandler`, which maps any `DomainException` to HTTP 409 — the Domain layer
 does not catch or wrap its own exceptions.
 

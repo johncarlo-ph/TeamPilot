@@ -37,7 +37,10 @@ merges — with role-based access so people only see and act on the projects the
   agent workflow (4 system-provisioned pipeline agents by default - Research/Design/Coding/Testing
   - plus one standing **Live Agent**), ticket board, and CI/CD pipeline run history.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the project's configured
-  agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate.
+  agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate. An
+  `InProgress` ticket can also detour to `Blocked` if a pipeline agent asks a clarifying question
+  or a known Git/LLM failure occurs mid-run - a human answers the question (or retries the
+  failure) on the ticket detail page to resume the pipeline.
 - Live Agent: a per-project chat you can ask about the project - questions, code explanations,
   business rules - with bounded, read-only access to the project's repository and its own
   tickets. It can draft a new ticket for you to review, but never creates one without your

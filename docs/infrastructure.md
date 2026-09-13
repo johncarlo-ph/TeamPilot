@@ -204,6 +204,13 @@ on one instance won't decrypt on another.
   ticket's total execution count is small enough that this isn't a real cost. The
   `AddStageExecutions` migration has no backfill, unlike `AddWorkflowStages` - this is new data
   collected going forward only, with nothing pre-existing to reconstruct.
+- `TicketQuestionConfiguration` follows the same shape as `StageExecutionConfiguration` - cascade
+  on `TicketId`, restrict on `AgentId` - except `AgentId` is nullable (a failure isn't always tied
+  to a specific stage, e.g. the initial branch-link call), an optional relationship EF Core
+  handles automatically for a nullable FK. `Kind`/`Status` are stored as strings, same convention
+  as `Ticket.Status`/`Review.Decision`. The `AddTicketBlockedStatusAndQuestions` migration only
+  adds the new table - `TicketStatus.Blocked` needed no schema change since `Ticket.Status` was
+  already a `nvarchar(20)` string column.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.
@@ -273,9 +280,15 @@ bubble to 500/409, since those failures point at a server-side bug rather than b
 that's an expected, common outcome it reports back via its return value (`GitMergeResolutionResult`),
 not an exception; `ApprovalGateService` is the one that turns that into a client-facing
 `UnresolvedConflictsException` (→ 409).
-An unhandled Claude API failure (e.g. `HttpRequestException`, or an `HttpRequestException`/
-`TimeoutRejectedException` surfaced after the resilience pipeline below exhausts its retries)
-still bubbles to `GlobalExceptionHandler` and maps to 500.
+A Claude API failure that survives the resilience pipeline below (an `HttpRequestException` or
+`TimeoutRejectedException`, or a non-success status via `EnsureSuccessStatusCode`) is now wrapped
+by `ClaudeLlmConnector` as the Application's own `LlmOperationException` (→ 422) - the same
+"client-facing, actionable error instead of a generic 500" treatment `GitOperationException`
+already gets, and for the same reason: an LLM provider outage or rate limit is an external-system
+failure, not a server bug. `OrchestrationService` specifically catches this (alongside
+`GitOperationException`) to block the ticket rather than let it propagate at all - see
+[docs/application.md](application.md); everywhere else that calls `ILlmConnector` (e.g.
+`LiveAgentChatService`) still just lets it bubble to `GlobalExceptionHandler`'s 422 mapping.
 
 ## Resiliency
 

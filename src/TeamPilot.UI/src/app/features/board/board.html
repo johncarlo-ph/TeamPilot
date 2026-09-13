@@ -29,7 +29,7 @@
     <div class="col-12 col-lg-8">
       <div class="row g-3">
         @for (column of columns; track column.status) {
-          <div class="col-12 col-md-6 col-xl-3">
+          <div class="col-12 col-md-6 col-xl">
             <div class="board-column p-2 h-100" [class]="column.accentClass">
               <h2 class="board-column-title px-1 mb-2">
                 <span aria-hidden="true">{{ column.icon }}</span> {{ column.title }}
@@ -40,7 +40,7 @@
               <div
                 cdkDropList
                 [id]="columnIdFor(column.status)"
-                [cdkDropListConnectedTo]="columnIds"
+                [cdkDropListConnectedTo]="connectedIdsFor(column.status)"
                 [cdkDropListData]="ticketsByStatus()[column.status]"
                 (cdkDropListDropped)="onDrop($event, column.status)"
                 class="d-flex flex-column"

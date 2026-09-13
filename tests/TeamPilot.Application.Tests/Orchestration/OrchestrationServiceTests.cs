@@ -2,12 +2,14 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Agents;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Instructions;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Workflow;
 using TeamPilot.Domain.Entities;
@@ -29,6 +31,7 @@ public class OrchestrationServiceTests
     private readonly Mock<ILlmConnector> _llmConnector = new();
     private readonly Mock<IInstructionRepository> _instructionRepository = new();
     private readonly Mock<IStageExecutionRepository> _stageExecutionRepository = new();
+    private readonly Mock<ITicketQuestionRepository> _ticketQuestionRepository = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
@@ -69,6 +72,10 @@ public class OrchestrationServiceTests
             .Setup(r => r.GetLatestByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<Guid, StageExecution>());
 
+        _ticketQuestionRepository
+            .Setup(r => r.GetMostRecentUnconsumedAnsweredAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((TicketQuestion?)null);
+
         _gitService
             .Setup(g => g.CommitFileAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommitResult("abc123", "diff content"));
@@ -84,6 +91,7 @@ public class OrchestrationServiceTests
             _llmConnector.Object,
             _instructionRepository.Object,
             _stageExecutionRepository.Object,
+            _ticketQuestionRepository.Object,
             _projectAccessGuard.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
@@ -636,5 +644,152 @@ public class OrchestrationServiceTests
 
         // Research, Design, Coding, Testing - one invocation each on a clean happy-path run.
         _stageExecutionRepository.Verify(r => r.AddAsync(It.IsAny<StageExecution>(), It.IsAny<CancellationToken>()), Times.Exactly(4));
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAStageAsksAQuestion_BlocksTheTicketWithoutRunningLaterStages()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var designCalled = false;
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _designAgent))
+                {
+                    designCalled = true;
+                }
+
+                return Task.FromResult(IsPromptFor(req, _researchAgent)
+                    ? new LlmResponse("QUESTION: Which auth provider should this use?", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        Assert.True(result.Blocked);
+        Assert.NotNull(result.BlockingQuestionId);
+        Assert.False(designCalled);
+        _ticketQuestionRepository.Verify(
+            r => r.AddAsync(It.Is<TicketQuestion>(q => q.Kind == TicketQuestionKind.Question && q.AgentId == _researchAgent.Id && q.Prompt == "Which auth provider should this use?"), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenCodingAsksAQuestion_BlocksWithoutCommitting()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _codingAgent)
+                    ? new LlmResponse("QUESTION: Should I use Redis or in-memory caching?", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        Assert.True(result.Blocked);
+        Assert.Empty(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAGitOperationExceptionOccurs_BlocksTheTicketInsteadOfThrowing()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.AssignAgent(_researchAgent);
+        ticket.LinkBranch("existing-branch");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new GitOperationException("Push failed: authentication rejected."));
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        Assert.True(result.Blocked);
+        _ticketQuestionRepository.Verify(
+            r => r.AddAsync(It.Is<TicketQuestion>(q => q.Kind == TicketQuestionKind.Failure && q.AgentId == _researchAgent.Id), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAnLlmOperationExceptionOccurs_BlocksTheTicketInsteadOfThrowing()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.AssignAgent(_researchAgent);
+        ticket.LinkBranch("existing-branch");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new LlmOperationException("Claude API call failed."));
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        Assert.True(result.Blocked);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenAnUnexpectedExceptionOccurs_StillPropagates()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.AssignAgent(_researchAgent);
+        ticket.LinkBranch("existing-branch");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Something genuinely unexpected."));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.RunPipelineAsync(ticket.Id));
+        Assert.NotEqual(TicketStatus.Blocked, ticket.Status);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_WhenResumingWithAnAnsweredQuestion_ThreadsItIntoOnlyTheMatchingStageAndMarksItConsumed()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var answeredQuestion = TicketQuestion.CreateQuestion(ticket.Id, _researchAgent.Id, "Which auth provider?");
+        answeredQuestion.Answer("Use Google OAuth.", "Alice");
+        _ticketQuestionRepository
+            .Setup(r => r.GetMostRecentUnconsumedAnsweredAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(answeredQuestion);
+
+        var researchPrompts = new List<string>();
+        var designPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                if (IsPromptFor(req, _designAgent))
+                {
+                    designPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Contains("Which auth provider?", researchPrompts[0]);
+        Assert.Contains("Use Google OAuth.", researchPrompts[0]);
+        Assert.DoesNotContain("Which auth provider?", designPrompts[0]);
+        Assert.True(answeredQuestion.Consumed);
     }
 }

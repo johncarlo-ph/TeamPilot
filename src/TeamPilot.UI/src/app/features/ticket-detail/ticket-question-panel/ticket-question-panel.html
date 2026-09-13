@@ -1,0 +1,63 @@
+@if (questions().length) {
+  <div class="card mb-3">
+    <div class="card-header">
+      <span aria-hidden="true">🚫</span> Blocked - Questions &amp; Failures
+    </div>
+    <div class="card-body overflow-auto" style="max-height: 30rem">
+      @for (question of questions(); track question.id) {
+        <div class="mb-3">
+          <div class="d-flex align-items-center justify-content-between mb-1">
+            <app-status-badge [value]="question.kind"></app-status-badge>
+            <span class="small text-body-secondary">{{ question.createdAtUtc | date: 'short' }}</span>
+          </div>
+          <div class="p-2 rounded bg-white border" style="white-space: pre-wrap">
+            {{ question.prompt }}
+          </div>
+          @if (question.status === 'Answered') {
+            <div class="d-flex justify-content-end mt-2">
+              <div class="p-2 rounded bg-secondary text-white" style="max-width: 85%; white-space: pre-wrap">
+                {{ question.answerText }}
+                <div class="small mt-1 opacity-75">
+                  {{ question.answeredBy }} &middot; {{ question.answeredAtUtc | date: 'short' }}
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    </div>
+    @if (pendingQuestion(); as pending) {
+      <div class="card-footer">
+        @if (pending.kind === 'Question') {
+          <div class="d-flex gap-2">
+            <textarea
+              class="form-control"
+              rows="2"
+              placeholder="Type your answer..."
+              [ngModel]="answerText()"
+              (ngModelChange)="answerText.set($event)"
+              [attr.disabled]="submitting() ? true : null"
+            ></textarea>
+            <button
+              type="button"
+              class="btn btn-outline-primary"
+              [disabled]="submitting() || !answerText().trim()"
+              (click)="submitAnswer()"
+            >
+              {{ submitting() ? 'Sending...' : 'Send' }}
+            </button>
+          </div>
+        } @else {
+          <button
+            type="button"
+            class="btn btn-outline-primary"
+            [disabled]="submitting()"
+            (click)="retry()"
+          >
+            {{ submitting() ? 'Retrying...' : 'Retry Pipeline' }}
+          </button>
+        }
+      </div>
+    }
+  </div>
+}

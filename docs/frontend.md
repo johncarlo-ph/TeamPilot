@@ -79,14 +79,45 @@ doesn't exist. `features/ticket-detail` renders the same "start"-triggering butt
 after a review's `RequestChanges` sent the ticket back to In Progress.
 
 **Cancelling a ticket is a detail-page button, not a board drop target.** `Cancelled` is a real
-`TicketStatus` value but deliberately isn't one of the 4 `BOARD_COLUMNS` — "give up on this
+`TicketStatus` value but deliberately isn't one of the `BOARD_COLUMNS` — "give up on this
 ticket" doesn't fit the drag-a-card-between-columns metaphor the way `start`/`move-to-review`/
-`review` do, and adding a 5th column would clutter the fixed Research→Design→Coding→Testing
-view. Instead, `features/ticket-detail` shows a **Cancel Ticket** button (for `ToDo`/
-`InProgress`/`ForReview` tickets) that uses the same `confirm()`/`prompt()` pattern as deleting an
-instruction template — a plain browser confirm, then an optional reason — rather than a dedicated
-modal. `board.ts`'s `ticketsByStatus` grouping filters `Cancelled` tickets out entirely, so a
-cancelled ticket simply disappears from the board; it's still reachable directly by URL.
+`review` do. Instead, `features/ticket-detail` shows a **Cancel Ticket** button (for `ToDo`/
+`InProgress`/`ForReview`/`Blocked` tickets) that uses the same `confirm()`/`prompt()` pattern as
+deleting an instruction template — a plain browser confirm, then an optional reason — rather than
+a dedicated modal. `board.ts`'s `ticketsByStatus` grouping filters `Cancelled` tickets out
+entirely, so a cancelled ticket simply disappears from the board; it's still reachable directly
+by URL.
+
+**`Blocked` *is* a board column, unlike `Cancelled` - the difference is that a blocked ticket
+needs a human to notice and act on it, so it stays visible in the normal kanban flow rather than
+disappearing.** `BOARD_COLUMNS` (`board.ts`) has 5 entries now (To Do/In Progress/Blocked/For
+Review/Done); the column grid switched from a fixed `col-xl-3` (which only divided evenly for 4
+columns) to Bootstrap's auto-sizing `col-xl` so any number of columns stays evenly split without
+a per-column-count class. Blocked is a drag-and-drop dead end in both directions - entered only
+by `OrchestrationService` (a stage's clarifying question or a Git/LLM failure, see
+[docs/application.md](application.md)) and left only via the ticket detail page's answer/retry
+actions, never a manual drag. Concretely, `board.ts`'s `connectedIdsFor(status)` returns `[]` for
+the Blocked column (so nothing can be dropped into or out of it) and the normal shared
+`connectedIdsFor` array for every other column - simpler than adding a new per-card
+`cdkDragDisabled` binding, since an unconnected `cdkDropList` already can't accept a drop and a
+picked-up card with nowhere valid to land just no-ops back into place. Clicking through to ticket
+detail is the only way to see *why* a ticket is blocked and to do anything about it - see
+`TicketQuestionPanel` below.
+
+**`TicketQuestionPanel` (`features/ticket-detail/ticket-question-panel`) is the ticket-detail
+counterpart to the board's `ChatPanel` - same message-thread shape, different data source and
+purpose.** It renders every `TicketQuestionDto` for the ticket as a thread entry (the question or
+failure text, plus the human's answer once one exists, styled the same left/right message-bubble
+way `ChatPanel` styles Assistant/User turns) and, only for the ticket's current `Pending`
+question, a footer action: an answer textarea for a `Question`-kind entry, or a **Retry** button
+for a `Failure`-kind one (there's nothing to type for a failure - see
+`TicketQuestionsService.retry`). Unlike `ChatPanel`, it can't rely on "only changes in response to
+what this component itself sent," since a pipeline agent can post a new blocking question
+asynchronously - so `ticket-detail.ts`'s existing 10s poll was broadened from fetching just the
+ticket to `forkJoin({ ticket, questions })`, fetching both every tick instead of adding a second,
+separately-timed poll. The panel renders whenever the ticket has at least one question in its
+history, not only while currently `Blocked` - like the Reviews card, past questions stay visible
+as a record even after the ticket moves on.
 
 **Linking a branch confirms before acting, because the same button means two different things.**
 `features/ticket-detail/branch-panel` calls `GET /api/git/branches/exists` when "Link Branch" is
@@ -122,19 +153,21 @@ there isn't one; approving a draft and creating a ticket are the same API call.
 separate on purpose.** The header shows `project().name` (loaded the same way `ticket-detail`
 loads its project — a separate subscription alongside the tickets poll) so a board reached from a
 bookmark or a shared link is unambiguous about which project it belongs to; `BOARD_COLUMNS` in
-`board.ts` carries a per-status `icon` and `accentClass` (⏳/🔧/👀/✅, one accent color each) purely
-for visual scannability of the 4 fixed pipeline stages. `status-badge.ts`'s ticket-status badge
-colors (`ToDo`/`InProgress`/`ForReview`/`Done`, used in ticket detail, reviews, etc.) intentionally
-reuse this same accent palette — `text-bg-primary`/`text-bg-warning`/`text-bg-success` are the
-same colors as `$board-todo-color`/`$board-inprogress-color`/`$board-done-color` because those
-Bootstrap variables are literally aliased to `$primary`/`$warning`/`$success`; `ForReview`'s purple
-has no built-in Bootstrap variant, so it gets its own `.text-bg-forreview` class in
-`styles.scss` set to `$board-forreview-color`. So a ticket's badge always matches the column it
-sits in, wherever that badge is shown. The custom CSS for both (`.board-column--*`, `.board-column-title`,
-`.text-bg-forreview`, `.ticket-card` hover) lives in the single global `src/styles.scss`, not per-component
-`styleUrls` - this project has never used scoped component styles (everything else is Bootstrap
-utility classes in the template), so a new per-component stylesheet would be a second, competing
-styling convention rather than a small addition to the existing one.
+`board.ts` carries a per-status `icon` and `accentClass` (⏳/🔧/🚫/👀/✅, one accent color each)
+purely for visual scannability of the 5 pipeline stages/states. `status-badge.ts`'s ticket-status
+badge colors (`ToDo`/`InProgress`/`Blocked`/`ForReview`/`Done`, used in ticket detail, reviews,
+etc.) intentionally reuse this same accent palette — `text-bg-primary`/`text-bg-warning`/
+`text-bg-danger`/`text-bg-success` are the same colors as `$board-todo-color`/
+`$board-inprogress-color`/`$board-blocked-color`/`$board-done-color`, all aliased to Bootstrap's
+own `$primary`/`$warning`/`$danger`/`$success` (so `Blocked` needed no new custom badge class,
+unlike `ForReview`'s purple, which has no built-in Bootstrap variant and gets its own
+`.text-bg-forreview` class in `styles.scss` set to `$board-forreview-color`). So a ticket's badge
+always matches the column it sits in, wherever that badge is shown. The custom CSS for both
+(`.board-column--*`, `.board-column-title`, `.text-bg-forreview`, `.ticket-card` hover) lives in
+the single global `src/styles.scss`, not per-component `styleUrls` - this project has never used
+scoped component styles (everything else is Bootstrap utility classes in the template), so a new
+per-component stylesheet would be a second, competing styling convention rather than a small
+addition to the existing one.
 
 **Branch names are links everywhere except the board card.** There is no backend "branch URL"
 field — `core/utils/git-url.util.ts`'s `buildBranchUrl(remoteUrl, branchName)` strips `.git` and

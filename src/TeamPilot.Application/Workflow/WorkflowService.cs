@@ -286,9 +286,11 @@ public sealed class WorkflowService(
     private async Task EnsureNotLockedAsync(Guid projectId, CancellationToken cancellationToken)
     {
         var inProgressCount = await ticketRepository.CountByStatusAsync(projectId, TicketStatus.InProgress, cancellationToken);
-        if (inProgressCount > 0)
+        var blockedCount = await ticketRepository.CountByStatusAsync(projectId, TicketStatus.Blocked, cancellationToken);
+        var lockingCount = inProgressCount + blockedCount;
+        if (lockingCount > 0)
         {
-            throw new WorkflowLockedException(inProgressCount);
+            throw new WorkflowLockedException(lockingCount);
         }
     }
 

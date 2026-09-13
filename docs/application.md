@@ -26,7 +26,8 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
 | [`Workflow/`](../src/TeamPilot.Application/Workflow) | Admin-configurable per-project agent workflow: add a blank custom agent, place/remove/reorder stages, and set/clear a stage's loop-back - see "The agent workflow is admin-configurable per project" below |
-| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure |
+| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure, and blocking the ticket when a stage asks a clarifying question or a known Git/LLM failure occurs |
+| [`TicketQuestions/`](../src/TeamPilot.Application/TicketQuestions) | Answering a blocked ticket's clarifying question, or retrying after a blocking failure - either way, unblocks the ticket and re-invokes `Orchestration/` |
 | [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
@@ -185,9 +186,10 @@ its place in the sequence - the `Agent` row and its instruction history are unto
 the existing "deactivate, never delete" rule), reorder the whole sequence, and set or clear a
 stage's loop-back (jump back to an earlier stage on failure, bounded by that stage's own
 `MaxLoopIterations`). All five of those structural changes are blocked
-(`WorkflowLockedException`, 409) while the project has any `InProgress` ticket - editing an
-already-scheduled agent's *instructions* stays unrestricted, since that live-edit behavior
-(below) is intentional and unrelated to the pipeline's shape.
+(`WorkflowLockedException`, 409) while the project has any `InProgress` **or `Blocked`** ticket -
+a blocked ticket's pipeline is only paused, not finished, so it counts the same as one actively
+running. Editing an already-scheduled agent's *instructions* stays unrestricted, since that
+live-edit behavior (below) is intentional and unrelated to the pipeline's shape.
 
 **`WorkflowService.DeleteCustomAgentAsync` is the one place an `Agent` really is deleted, not just
 deactivated.** It's deliberately narrow: the target must be `AgentRole.Custom` (never one of the 4
@@ -211,6 +213,37 @@ agent) is prompt-only. Runs synchronously within one call, same as before (no ba
 infra, matching `ProjectService.CreateAsync`'s synchronous clone), and always ends by moving the
 ticket to `ForReview` once the sequence runs out, whether or not its last loop-bounded stage ever
 passed - the retried commits and final verdict are the visible trail for a human reviewer.
+
+**Two things short-circuit a run before it reaches `ForReview`, blocking the ticket instead.**
+Every stage's prompt is told: end the response with a `QUESTION: <text>` marker line if it needs
+human clarification before it can continue (parsed the same way as the existing `RESULT:
+PASS/FAIL` and `CHANGES: NONE/MADE` markers). When a stage's output contains one,
+`RunPipelineAsync` stops immediately - for a Coding stage this is checked *inside*
+`RunCodingStageAsync`, before its commit/push, since that method otherwise runs to completion
+unconditionally - persists a `TicketQuestion` (`TicketQuestion.CreateQuestion`), and calls
+`ticket.Block()`. Separately, the whole run (the initial branch-link plus the entire stage loop)
+is wrapped in a single `try/catch` for exactly two exception types: `GitOperationException` and
+`LlmOperationException` (a new exception, mirroring `GitOperationException`'s shape, that
+`ClaudeLlmConnector` throws when a Claude API call fails after the existing resilience pipeline's
+retries are exhausted - see [docs/infrastructure.md](infrastructure.md)). Catching either
+persists a `TicketQuestion.CreateFailure` instead and blocks the ticket the same way. This is a
+deliberately narrow safety net - **only** these two known "external system failed" categories
+block the ticket; any other exception (a genuine bug) still propagates to a 500 exactly as
+before, so it stays loud instead of quietly turning into a parked ticket. Either way,
+`RunPipelineAsync` returns early with `TicketPipelineResultDto.Blocked = true` and
+`BlockingQuestionId` set, instead of throwing or reaching `ticket.MoveToReview()`.
+
+**Resuming a blocked ticket reuses the review-feedback threading mechanism above, generalized.**
+`TicketQuestionService.AnswerAsync` (answering a clarifying question) and `RetryAsync` (retrying
+after a failure - the most recent `TicketQuestion` must be `Kind == Failure`, since there's
+nothing to "answer") both just call `ticket.Unblock()` and re-invoke `RunPipelineAsync`, same as
+`ApprovalGateService`'s `RequestChanges` branch does. `RunPipelineAsync` looks up the most
+recently *answered but not yet consumed* question (`ITicketQuestionRepository.GetMostRecentUnconsumedAnsweredAsync`
+- `Consumed` exists specifically because, unlike a `Review`, nothing else naturally supersedes an
+old answer) and, unlike `reviewFeedback` (threaded into every stage), threads it only into the
+one stage whose agent asked it - marking it consumed the moment it's actually used in that
+stage's prompt, not gated on the rest of the run succeeding. A failure carries no such context to
+thread; retrying just re-runs the pipeline and lets the same stage attempt its work again.
 
 **An agent needs a current Constitution, Guideline, and Requirement instruction before it can be
 placed into a project's workflow.** `Agent.HasCompleteInstructions` (Domain) checks this; a
@@ -319,9 +352,13 @@ stateDiagram-v2
     ForReview --> Done: ApprovalGateService.SubmitReviewAsync(Approve)
     ForReview --> InProgress: ApprovalGateService.SubmitReviewAsync(RequestChanges)
     InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by RequestChanges)
+    InProgress --> Blocked: OrchestrationService.RunPipelineAsync (question or Git/LLM failure)
+    Blocked --> InProgress: TicketQuestionService.AnswerAsync / RetryAsync
+    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by AnswerAsync/RetryAsync)
     ToDo --> Cancelled: TicketService.CancelAsync
     InProgress --> Cancelled: TicketService.CancelAsync
     ForReview --> Cancelled: TicketService.CancelAsync
+    Blocked --> Cancelled: TicketService.CancelAsync
     ForReview --> Cancelled: ApprovalGateService.SubmitReviewAsync(Reject)
 ```
 
@@ -453,8 +490,9 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.NotFoundException` | Referenced entity doesn't exist | Any `GetByIdAsync` call site |
 | `Common.Exceptions.ForbiddenException` | Wrong role or no project access | `IProjectAccessGuard`, role checks |
 | `Common.Exceptions.AuthenticationFailedException` | Bad/expired/reused token, disabled account | `AuthService` |
-| `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host) | `IGitService` implementation (Infrastructure), propagated through `ProjectService`/`TicketService`/`OrchestrationService`/`ApprovalGateService` |
-| `Common.Exceptions.WorkflowLockedException` | A structural pipeline change was attempted while the project has an `InProgress` ticket | `WorkflowService` |
+| `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host) | `IGitService` implementation (Infrastructure), propagated through `ProjectService`/`TicketService`/`ApprovalGateService`; caught and turned into a blocked ticket by `OrchestrationService` specifically |
+| `Common.Exceptions.LlmOperationException` | A Claude API call failed after the resilience pipeline's retries were exhausted | `ClaudeLlmConnector` (Infrastructure); caught and turned into a blocked ticket by `OrchestrationService`, otherwise propagates (e.g. from `LiveAgentChatService`) |
+| `Common.Exceptions.WorkflowLockedException` | A structural pipeline change was attempted while the project has an `InProgress` or `Blocked` ticket | `WorkflowService` |
 | `Common.Exceptions.AgentInstructionsIncompleteException` | An agent without a current Constitution/Guideline/Requirement instruction was placed into a workflow | `WorkflowService.AddExistingAgentAsync` |
 | `Common.Exceptions.InvalidWorkflowOperationException` | A workflow change is invalid given the rest of the project's stage sequence (removing a loop-back target, reordering past one, a malformed reorder request) | `WorkflowService` |
 | `Common.Exceptions.UnresolvedConflictsException` | Approving a ticket while a conflict is still unresolved by its own status, or the live merge attempt finds a conflicting file with no resolution available | `ApprovalGateService.ApproveAsync` |

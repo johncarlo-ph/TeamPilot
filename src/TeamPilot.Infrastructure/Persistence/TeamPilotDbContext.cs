@@ -18,6 +18,8 @@ public class TeamPilotDbContext(DbContextOptions<TeamPilotDbContext> options) : 
 
     public DbSet<StageExecution> StageExecutions => Set<StageExecution>();
 
+    public DbSet<TicketQuestion> TicketQuestions => Set<TicketQuestion>();
+
     public DbSet<Instruction> Instructions => Set<Instruction>();
 
     public DbSet<Conversation> Conversations => Set<Conversation>();

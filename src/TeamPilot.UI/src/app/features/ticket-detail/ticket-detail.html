@@ -28,7 +28,10 @@
         </button>
       }
       @if (
-        ticket.status === 'ToDo' || ticket.status === 'InProgress' || ticket.status === 'ForReview'
+        ticket.status === 'ToDo' ||
+        ticket.status === 'InProgress' ||
+        ticket.status === 'ForReview' ||
+        ticket.status === 'Blocked'
       ) {
         <button
           type="button"
@@ -117,6 +120,13 @@
           }
         </div>
       </div>
+
+      <app-ticket-question-panel
+        [ticketId]="ticket.id"
+        [ticketStatus]="ticket.status"
+        [questions]="questions()"
+        (changed)="onQuestionsChanged()"
+      ></app-ticket-question-panel>
 
       <app-conflicts-panel
         [ticketId]="ticket.id"

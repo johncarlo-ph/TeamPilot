@@ -148,6 +148,39 @@ public class Ticket : Entity
         MarkUpdated();
     }
 
+    /// <summary>
+    /// Pauses the ticket mid-pipeline because an agent stage asked a clarifying question or a
+    /// known operational failure (Git/LLM) occurred - see <see cref="TicketQuestion"/> for the
+    /// record of what actually happened. Only reachable while the pipeline is actually running.
+    /// </summary>
+    public void Block()
+    {
+        if (Status != TicketStatus.InProgress)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "block the ticket");
+        }
+
+        Status = TicketStatus.Blocked;
+        MarkUpdated();
+    }
+
+    /// <summary>
+    /// Resumes a blocked ticket - called once the blocking question has been answered, or a
+    /// blocking failure is being retried, immediately before re-invoking the pipeline. There is
+    /// no direct <see cref="Blocked"/> -&gt; <see cref="TicketStatus.ForReview"/> shortcut: a
+    /// blocked ticket must go through the pipeline again to reach review.
+    /// </summary>
+    public void Unblock()
+    {
+        if (Status != TicketStatus.Blocked)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "unblock the ticket");
+        }
+
+        Status = TicketStatus.InProgress;
+        MarkUpdated();
+    }
+
     public void RecordReview(Review review)
     {
         ArgumentNullException.ThrowIfNull(review);
@@ -182,7 +215,7 @@ public class Ticket : Entity
     /// </summary>
     public void Cancel(string? reason)
     {
-        if (Status is not (TicketStatus.ToDo or TicketStatus.InProgress or TicketStatus.ForReview))
+        if (Status is not (TicketStatus.ToDo or TicketStatus.InProgress or TicketStatus.ForReview or TicketStatus.Blocked))
         {
             throw new InvalidTicketStateTransitionException(Status, "cancel");
         }

@@ -59,6 +59,7 @@ $board-todo-color: $primary;
 $board-inprogress-color: $warning;
 $board-forreview-color: #8e44ad;
 $board-done-color: $success;
+$board-blocked-color: $danger;
 
 .board-column {
   border-radius: $border-radius;
@@ -83,6 +84,11 @@ $board-done-color: $success;
 .board-column--done {
   background-color: rgba($board-done-color, 0.08);
   border-top-color: $board-done-color;
+}
+
+.board-column--blocked {
+  background-color: rgba($board-blocked-color, 0.08);
+  border-top-color: $board-blocked-color;
 }
 
 // Bootstrap has no built-in theme color for the ForReview purple, so the status badge needs its

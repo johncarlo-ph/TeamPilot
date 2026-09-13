@@ -10,6 +10,7 @@ using TeamPilot.Application.Instructions;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Application.Workflow;
@@ -31,6 +32,15 @@ namespace TeamPilot.Application.Orchestration;
 /// output for this ticket (see <see cref="IStageExecutionRepository"/>) is handed back to it, so
 /// it can decide for itself whether the feedback actually changes anything for its part of the
 /// work, rather than blindly redoing it.
+///
+/// Two things can pause a run instead of letting it finish: a stage can end its response with a
+/// <c>QUESTION: ...</c> marker asking for human clarification, or a known operational failure
+/// (<see cref="GitOperationException"/>/<see cref="LlmOperationException"/>) can occur. Either
+/// way the ticket is <see cref="Ticket.Block"/>-ed, a <see cref="TicketQuestion"/> records what
+/// happened, and the run returns early instead of reaching <c>ForReview</c>. Resuming (answering
+/// the question, or retrying a failure - see <c>TicketQuestionService</c>) unblocks the ticket
+/// and calls this method again, which threads the human's answer into the one stage that asked,
+/// via the same "hand the stage its own prior output" mechanism used for review feedback.
 /// </summary>
 public sealed class OrchestrationService(
     ITicketRepository ticketRepository,
@@ -43,6 +53,7 @@ public sealed class OrchestrationService(
     ILlmConnector llmConnector,
     IInstructionRepository instructionRepository,
     IStageExecutionRepository stageExecutionRepository,
+    ITicketQuestionRepository ticketQuestionRepository,
     IProjectAccessGuard projectAccessGuard,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
@@ -53,6 +64,9 @@ public sealed class OrchestrationService(
 
     private static readonly Regex ChangesPattern =
         new(@"CHANGES:\s*(NONE|MADE)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex QuestionPattern =
+        new(@"QUESTION:\s*(.+)", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
     public async Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default)
     {
@@ -79,129 +93,207 @@ public sealed class OrchestrationService(
             ticket.AssignAgent(agentsById[agentId]);
         }
 
-        if (string.IsNullOrWhiteSpace(ticket.BranchName))
-        {
-            await LinkBranchAsync(ticket, project, cancellationToken);
-        }
-
-        await auditLogger.LogActionAsync(AuditEventType.TicketPipelineStarted, $"Pipeline started for ticket '{ticket.Title}'.", cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-
-        // The most recent RequestChanges review's comments, if any - threaded into every stage's
-        // prompt for this run (see BuildStagePrompt) so a re-run after a reviewer sends a ticket
-        // back actually addresses what they flagged, rather than just repeating the same work.
-        var reviewFeedback = ticket.Reviews
-            .Where(r => r.Decision == ReviewDecision.RequestChanges && !string.IsNullOrWhiteSpace(r.Comments))
-            .OrderByDescending(r => r.CreatedAtUtc)
-            .FirstOrDefault()
-            ?.Comments;
-
-        // A snapshot of "what every agent said last time," taken once before this run adds any
-        // new StageExecution rows - only fetched when there's feedback to react to at all.
-        var priorOutputsByAgentId = reviewFeedback is not null
-            ? await stageExecutionRepository.GetLatestByTicketAsync(ticket.Id, cancellationToken)
-            : new Dictionary<Guid, StageExecution>();
-
         var steps = new List<AgentWorkResultDto>();
-        var stageRunCounts = new Dictionary<Guid, int>();
-        string? previousOutput = null;
 
-        // The final verdict reported on TicketPipelineResultDto - whichever loop-bounded stage
-        // ran last (Testing, for the default workflow). A workflow with no loop-back stage at
-        // all reports the "nothing to retry" default of passed/zero-attempts.
-        var finalVerdictPassed = true;
-        var finalVerdictAttempts = 0;
+        // Tracked across the loop below so a caught failure (see the catch clause) can attribute
+        // itself to whichever stage's agent was in flight - null if the failure happened before
+        // any stage ran (e.g. linking the ticket's branch).
+        Guid? currentAgentId = null;
 
-        // A loop-back can only ever target a strictly earlier Order (enforced when the loop-back
-        // is configured - see WorkflowService.SetLoopBackAsync), and each stage's own
-        // MaxLoopIterations bounds how many times *that* stage may run in total. Total stage
-        // executions per run are therefore bounded by stages.Count + sum(MaxLoopIterations),
-        // guaranteeing termination without an extra hard cap here.
-        var stageIndex = 0;
-        while (stageIndex < stages.Count)
+        try
         {
-            var stage = stages[stageIndex];
-            var agent = agentsById[stage.AgentId];
-
-            await EnsureNotCancelledAsync(ticket.Id, cancellationToken);
-
-            stageRunCounts.TryGetValue(stage.Id, out var previousRuns);
-            var attempt = previousRuns + 1;
-            stageRunCounts[stage.Id] = attempt;
-
-            // Only on a stage's first invocation this run, and only when this run was itself
-            // triggered by review feedback - a stage revisited via an intra-run loop-back
-            // (attempt > 1) keeps using the rolling previousOutput instead, so the two feedback
-            // sources are never mixed. A stage with no prior execution (new to this ticket, or
-            // newly added to the pipeline) has nothing to reaffirm against, so it just does
-            // normal full-work prompting.
-            string? priorOwnOutput = attempt == 1 && reviewFeedback is not null && priorOutputsByAgentId.TryGetValue(agent.Id, out var priorExecution)
-                ? priorExecution.Output
-                : null;
-
-            var instructions = await GetInstructionsBlockAsync(agent.Id, cancellationToken);
-            var requiresVerdict = stage.LoopBackToStageId is not null;
-            var prompt = BuildStagePrompt(ticket, agent, previousOutput, instructions, requiresVerdict, reviewFeedback, priorOwnOutput);
-
-            string output;
-            if (agent.Role == AgentRole.Coding)
+            if (string.IsNullOrWhiteSpace(ticket.BranchName))
             {
-                var (codingOutput, commit) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, checkForNoChanges: priorOwnOutput is not null, cancellationToken);
-                output = codingOutput;
-                steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, commit));
-            }
-            else
-            {
-                var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
-                output = response.Content;
-                steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, null));
-
-                logger.LogInformation(
-                    "Agent {AgentId} ({Role}) produced output for ticket {TicketId} in project {ProjectId}: {Output}",
-                    agent.Id,
-                    agent.Role,
-                    ticket.Id,
-                    ticket.ProjectId,
-                    output);
+                await LinkBranchAsync(ticket, project, cancellationToken);
             }
 
-            // Persisted so a later review-triggered re-run can hand this stage's agent its own
-            // prior output back (see priorOwnOutput above) - saved together with whatever this
-            // iteration already changed (e.g. a new Commit), so it survives even if a later
-            // stage in this same run throws.
-            await stageExecutionRepository.AddAsync(StageExecution.Create(ticket.Id, agent.Id, output), cancellationToken);
+            await auditLogger.LogActionAsync(AuditEventType.TicketPipelineStarted, $"Pipeline started for ticket '{ticket.Title}'.", cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            previousOutput = output;
+            // The most recent RequestChanges review's comments, if any - threaded into every stage's
+            // prompt for this run (see BuildStagePrompt) so a re-run after a reviewer sends a ticket
+            // back actually addresses what they flagged, rather than just repeating the same work.
+            var reviewFeedback = ticket.Reviews
+                .Where(r => r.Decision == ReviewDecision.RequestChanges && !string.IsNullOrWhiteSpace(r.Comments))
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .FirstOrDefault()
+                ?.Comments;
 
-            if (requiresVerdict)
+            // The most recently answered-but-not-yet-threaded question, if any - threaded only
+            // into the one stage whose agent asked it (see BuildStagePrompt/questionContext
+            // below), unlike reviewFeedback which goes into every stage's prompt.
+            var answeredQuestion = await ticketQuestionRepository.GetMostRecentUnconsumedAnsweredAsync(ticket.Id, cancellationToken);
+
+            // A snapshot of "what every agent said last time," taken once before this run adds any
+            // new StageExecution rows - only fetched when there's feedback to react to at all.
+            var priorOutputsByAgentId = reviewFeedback is not null || answeredQuestion is not null
+                ? await stageExecutionRepository.GetLatestByTicketAsync(ticket.Id, cancellationToken)
+                : new Dictionary<Guid, StageExecution>();
+
+            var stageRunCounts = new Dictionary<Guid, int>();
+            string? previousOutput = null;
+
+            // The final verdict reported on TicketPipelineResultDto - whichever loop-bounded stage
+            // ran last (Testing, for the default workflow). A workflow with no loop-back stage at
+            // all reports the "nothing to retry" default of passed/zero-attempts.
+            var finalVerdictPassed = true;
+            var finalVerdictAttempts = 0;
+
+            // A loop-back can only ever target a strictly earlier Order (enforced when the loop-back
+            // is configured - see WorkflowService.SetLoopBackAsync), and each stage's own
+            // MaxLoopIterations bounds how many times *that* stage may run in total. Total stage
+            // executions per run are therefore bounded by stages.Count + sum(MaxLoopIterations),
+            // guaranteeing termination without an extra hard cap here.
+            var stageIndex = 0;
+            while (stageIndex < stages.Count)
             {
-                var passed = ParseVerdict(output);
-                finalVerdictPassed = passed;
-                finalVerdictAttempts = attempt;
+                var stage = stages[stageIndex];
+                var agent = agentsById[stage.AgentId];
+                currentAgentId = agent.Id;
 
-                logger.LogInformation(
-                    "Agent {AgentId} ({Role}) verdict for ticket {TicketId}, attempt {Attempt}: {Verdict}",
-                    agent.Id,
-                    agent.Role,
-                    ticket.Id,
-                    attempt,
-                    passed ? "PASS" : "FAIL");
+                await EnsureNotCancelledAsync(ticket.Id, cancellationToken);
 
-                if (!passed && attempt < stage.MaxLoopIterations!.Value)
+                stageRunCounts.TryGetValue(stage.Id, out var previousRuns);
+                var attempt = previousRuns + 1;
+                stageRunCounts[stage.Id] = attempt;
+
+                // Only on a stage's first invocation this run, and only when this run was itself
+                // triggered by review feedback or an answered question - a stage revisited via an
+                // intra-run loop-back (attempt > 1) keeps using the rolling previousOutput instead,
+                // so the feedback sources are never mixed. A stage with no prior execution (new to
+                // this ticket, or newly added to the pipeline) has nothing to reaffirm against, so
+                // it just does normal full-work prompting.
+                string? priorOwnOutput = attempt == 1 && (reviewFeedback is not null || answeredQuestion is not null)
+                    && priorOutputsByAgentId.TryGetValue(agent.Id, out var priorExecution)
+                        ? priorExecution.Output
+                        : null;
+
+                // Unlike reviewFeedback (threaded into every stage), a question is specific to the
+                // one stage/agent that asked it. Marked consumed the moment it's actually used in a
+                // prompt, not gated on the rest of this run succeeding, since nothing else would
+                // ever supersede it otherwise.
+                string? questionContext = attempt == 1 && answeredQuestion is not null && answeredQuestion.AgentId == agent.Id
+                    ? $"You previously asked \"{answeredQuestion.Prompt}\" and paused; the human answered: \"{answeredQuestion.AnswerText}\". Continue using this answer."
+                    : null;
+
+                if (questionContext is not null)
                 {
-                    stageIndex = IndexOfStage(stages, stage.LoopBackToStageId!.Value);
-                    continue;
+                    answeredQuestion!.MarkConsumed();
                 }
+
+                var instructions = await GetInstructionsBlockAsync(agent.Id, cancellationToken);
+                var requiresVerdict = stage.LoopBackToStageId is not null;
+                var prompt = BuildStagePrompt(ticket, agent, previousOutput, instructions, requiresVerdict, reviewFeedback, priorOwnOutput, questionContext);
+
+                string output;
+                if (agent.Role == AgentRole.Coding)
+                {
+                    var (codingOutput, commit) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, checkForNoChanges: priorOwnOutput is not null, cancellationToken);
+                    output = codingOutput;
+                    steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, commit));
+                }
+                else
+                {
+                    var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
+                    output = response.Content;
+                    steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, null));
+
+                    logger.LogInformation(
+                        "Agent {AgentId} ({Role}) produced output for ticket {TicketId} in project {ProjectId}: {Output}",
+                        agent.Id,
+                        agent.Role,
+                        ticket.Id,
+                        ticket.ProjectId,
+                        output);
+                }
+
+                var question = ParseQuestion(output);
+                if (question is not null)
+                {
+                    return await BlockOnQuestionAsync(ticket, agent.Id, question, steps, cancellationToken);
+                }
+
+                // Persisted so a later review-triggered re-run can hand this stage's agent its own
+                // prior output back (see priorOwnOutput above) - saved together with whatever this
+                // iteration already changed (e.g. a new Commit), so it survives even if a later
+                // stage in this same run throws.
+                await stageExecutionRepository.AddAsync(StageExecution.Create(ticket.Id, agent.Id, output), cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+
+                previousOutput = output;
+
+                if (requiresVerdict)
+                {
+                    var passed = ParseVerdict(output);
+                    finalVerdictPassed = passed;
+                    finalVerdictAttempts = attempt;
+
+                    logger.LogInformation(
+                        "Agent {AgentId} ({Role}) verdict for ticket {TicketId}, attempt {Attempt}: {Verdict}",
+                        agent.Id,
+                        agent.Role,
+                        ticket.Id,
+                        attempt,
+                        passed ? "PASS" : "FAIL");
+
+                    if (!passed && attempt < stage.MaxLoopIterations!.Value)
+                    {
+                        stageIndex = IndexOfStage(stages, stage.LoopBackToStageId!.Value);
+                        continue;
+                    }
+                }
+
+                stageIndex++;
             }
 
-            stageIndex++;
-        }
+            ticket.MoveToReview();
+            await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        ticket.MoveToReview();
+            return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, finalVerdictPassed, finalVerdictAttempts);
+        }
+        catch (Exception ex) when (ex is GitOperationException or LlmOperationException)
+        {
+            return await BlockOnFailureAsync(ticket, currentAgentId, steps, ex, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Persists the clarifying question a stage asked, blocks the ticket, and returns an
+    /// early-exit result instead of reaching <c>ForReview</c>.
+    /// </summary>
+    private async Task<TicketPipelineResultDto> BlockOnQuestionAsync(Ticket ticket, Guid agentId, string questionText, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
+    {
+        var question = TicketQuestion.CreateQuestion(ticket.Id, agentId, questionText);
+        await ticketQuestionRepository.AddAsync(question, cancellationToken);
+
+        ticket.Block();
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - an agent asked a clarifying question.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, finalVerdictPassed, finalVerdictAttempts);
+        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
+    }
+
+    /// <summary>
+    /// Persists a known operational failure (Git/LLM), blocks the ticket, and returns an
+    /// early-exit result instead of letting the exception propagate to a raw 500 - see the
+    /// user-facing "block only known operational failures" scope in
+    /// <see cref="GitOperationException"/>/<see cref="LlmOperationException"/>'s doc comments;
+    /// any other exception type still bubbles up unchanged.
+    /// </summary>
+    private async Task<TicketPipelineResultDto> BlockOnFailureAsync(Ticket ticket, Guid? agentId, List<AgentWorkResultDto> steps, Exception exception, CancellationToken cancellationToken)
+    {
+        logger.LogWarning(exception, "Ticket {TicketId} blocked by an operational failure mid-pipeline.", ticket.Id);
+
+        var question = TicketQuestion.CreateFailure(ticket.Id, agentId, exception.Message);
+        await ticketQuestionRepository.AddAsync(question, cancellationToken);
+
+        ticket.Block();
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - {exception.Message}", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }
 
     /// <summary>
@@ -234,6 +326,14 @@ public sealed class OrchestrationService(
         CancellationToken cancellationToken)
     {
         var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
+
+        // A clarifying question pre-empts everything else - no commit/push, regardless of
+        // whether this is a reaffirm-style invocation. The outer loop's own ParseQuestion check
+        // (on this same response.Content) is what actually blocks the ticket.
+        if (ParseQuestion(response.Content) is not null)
+        {
+            return (response.Content, null);
+        }
 
         // Only asked of - and only honored for - a Coding stage reaffirming its own prior output
         // (see priorOwnOutput/BuildStagePrompt): a "no changes needed" response must not still
@@ -296,13 +396,19 @@ public sealed class OrchestrationService(
         string? instructions,
         bool requiresVerdict,
         string? reviewFeedback,
-        string? priorOwnOutput)
+        string? priorOwnOutput,
+        string? questionContext)
     {
         var prompt = AgentInstructionsFormatter.FormatInstructions(instructions);
 
         if (!string.IsNullOrWhiteSpace(reviewFeedback))
         {
             prompt += $"A human reviewer sent this ticket back with the following feedback - address it:\n{reviewFeedback}\n\n";
+        }
+
+        if (!string.IsNullOrWhiteSpace(questionContext))
+        {
+            prompt += $"{questionContext}\n\n";
         }
 
         prompt += $"You are {agent.Name} ({agent.Role}) working on ticket '{ticket.Title}'. Description: {ticket.Description}\n\n";
@@ -331,6 +437,8 @@ public sealed class OrchestrationService(
         {
             prompt += " Also end your response with a line reading exactly 'CHANGES: NONE' if you made no code changes, or 'CHANGES: MADE' if you did.";
         }
+
+        prompt += " If you need clarification from a human before you can continue, respond with ONLY a single line reading 'QUESTION: <your question>' and nothing else.";
 
         return prompt;
     }
@@ -374,5 +482,16 @@ public sealed class OrchestrationService(
         }
 
         return !string.Equals(matches[^1].Groups[1].Value, "NONE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Parses a 'QUESTION: &lt;text&gt;' marker - everything after the marker (to the end of the
+    /// output) is taken as the question, since unlike RESULT/CHANGES it's free text rather than a
+    /// fixed set of words. <see langword="null"/> when no such marker is present.
+    /// </summary>
+    private static string? ParseQuestion(string output)
+    {
+        var match = QuestionPattern.Match(output);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 }

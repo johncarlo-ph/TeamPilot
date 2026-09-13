@@ -2,6 +2,8 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
+using Polly.Timeout;
+using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Llm;
 
 namespace TeamPilot.Infrastructure.Llm;
@@ -41,8 +43,7 @@ public class ClaudeLlmConnector : ILlmConnector
             messages = new[] { new { role = "user", content = request.Prompt } },
         });
 
-        using var httpResponse = await _httpClient.SendAsync(httpRequest, cancellationToken);
-        httpResponse.EnsureSuccessStatusCode();
+        using var httpResponse = await SendAsync(httpRequest, cancellationToken);
 
         var body = await httpResponse.Content.ReadFromJsonAsync<ClaudeMessageResponse>(cancellationToken)
             ?? throw new InvalidOperationException("Claude API returned an empty response.");
@@ -99,8 +100,7 @@ public class ClaudeLlmConnector : ILlmConnector
         httpRequest.Headers.Add("anthropic-version", AnthropicVersion);
         httpRequest.Content = JsonContent.Create(body);
 
-        using var httpResponse = await _httpClient.SendAsync(httpRequest, cancellationToken);
-        httpResponse.EnsureSuccessStatusCode();
+        using var httpResponse = await SendAsync(httpRequest, cancellationToken);
 
         var json = await httpResponse.Content.ReadFromJsonAsync<JsonObject>(cancellationToken)
             ?? throw new InvalidOperationException("Claude API returned an empty response.");
@@ -127,6 +127,28 @@ public class ClaudeLlmConnector : ILlmConnector
         var outputTokens = usage["output_tokens"]!.GetValue<int>();
 
         return new LlmConversationResponse(contentBlocks, stopReason, model, inputTokens, outputTokens);
+    }
+
+    /// <summary>
+    /// Sends the request and ensures a success status, wrapping any failure that survives the
+    /// resilience pipeline's retries (see <c>InfrastructureServiceCollectionExtensions.AddLlmConnector</c>)
+    /// as <see cref="LlmOperationException"/> - mirrors how <c>LibGit2SharpGitService</c> wraps
+    /// <c>LibGit2SharpException</c> as <see cref="GitOperationException"/>, so a client-facing,
+    /// actionable error reaches the caller (and, for <c>OrchestrationService</c>, blocks the
+    /// ticket) instead of a raw <see cref="HttpRequestException"/>/<see cref="TimeoutRejectedException"/>.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage httpRequest, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var httpResponse = await _httpClient.SendAsync(httpRequest, cancellationToken);
+            httpResponse.EnsureSuccessStatusCode();
+            return httpResponse;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TimeoutRejectedException)
+        {
+            throw new LlmOperationException("Claude API call failed.", ex);
+        }
     }
 
     private static JsonObject ToAnthropicBlock(LlmContentBlock block) => block switch

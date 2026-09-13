@@ -16,6 +16,7 @@ using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
+using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Users;
 using TeamPilot.Application.Workflow;
@@ -42,6 +43,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAgentRepository, AgentRepository>();
         services.AddScoped<IWorkflowStageRepository, WorkflowStageRepository>();
         services.AddScoped<IStageExecutionRepository, StageExecutionRepository>();
+        services.AddScoped<ITicketQuestionRepository, TicketQuestionRepository>();
         services.AddScoped<IInstructionRepository, InstructionRepository>();
         services.AddScoped<IConversationRepository, ConversationRepository>();
         services.AddScoped<IInstructionTemplateRepository, InstructionTemplateRepository>();

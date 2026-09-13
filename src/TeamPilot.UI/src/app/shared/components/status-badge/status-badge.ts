@@ -8,6 +8,12 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   ForReview: 'text-bg-forreview',
   Done: 'text-bg-success',
   Cancelled: 'text-bg-dark',
+  Blocked: 'text-bg-danger',
+  // Ticket question kind/status
+  Question: 'text-bg-warning',
+  Failure: 'text-bg-danger',
+  Pending: 'text-bg-warning',
+  Answered: 'text-bg-success',
   // Agent / user status
   Active: 'text-bg-success',
   Inactive: 'text-bg-secondary',

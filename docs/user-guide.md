@@ -77,8 +77,8 @@ request can take a few seconds and fails if the URL or token is wrong.
 
 Opening a project shows its name at the top (so it's never ambiguous which project you're
 looking at) above a two-panel view: the [Live Agent chat](#live-agent-chat) on the left, and the
-board itself on the right — four color-coded columns — ⏳ **To Do**, 🔧 **In Progress**,
-👀 **For Review**, ✅ **Done** — holding cards for that project's tickets (title, linked branch
+board itself on the right — five color-coded columns — ⏳ **To Do**, 🔧 **In Progress**,
+🚫 **Blocked**, 👀 **For Review**, ✅ **Done** — holding cards for that project's tickets (title, linked branch
 once it has one, last updated). Clicking anywhere on a card, including its branch-name line,
 opens that ticket's detail page — the branch name itself is plain text here; it only becomes a
 clickable link to the remote once you're on the [ticket detail](#ticket-detail) page. The board
@@ -122,6 +122,10 @@ client-side with an explanation.
 
 A review can also be opened directly from the ticket's own page — see [Reviews](#reviews).
 
+**Blocked isn't a drop target.** A ticket lands there on its own — an agent asked a clarifying
+question, or a Git/LLM call failed — and can only leave by answering or retrying on its own
+detail page (see "Blocked tickets" below), never by dragging.
+
 ### The agent pipeline
 
 Every new project starts with one Research, one Design, one Coding, and one Testing agent, in
@@ -138,6 +142,34 @@ automatically, up to 3 attempts total — before the ticket lands in For Review 
 always ready for a human to look at. There's no per-agent "Execute" step to click through, and no
 agent picker: whatever the project's pipeline is configured to run, runs every time.
 
+If any stage needs something only a human can provide before it can continue — or a Git/LLM call
+fails outright — the ticket moves to **Blocked** instead of continuing on to the next stage. See
+"Blocked tickets" below.
+
+### Blocked tickets
+
+A ticket becomes Blocked in exactly two situations, both handled the same way on its detail page:
+
+- **An agent asked a clarifying question.** A stage can end its work with a question instead of a
+  finished result when something is genuinely ambiguous — which library to use, which of two
+  valid approaches to take, and so on. The **Blocked** panel on the ticket's page shows the
+  question; type your answer and send it. The ticket unblocks and the whole pipeline runs again
+  immediately, with that stage using your answer to continue (earlier, already-settled stages
+  just briefly reaffirm their prior conclusion rather than redoing their work).
+- **A known Git or LLM failure occurred** — a push was rejected, the LLM provider's API failed
+  after retrying. The same panel shows the failure message and a **Retry Pipeline** button
+  instead of an answer box, since there's nothing to type - retrying just runs the pipeline again
+  from the start.
+
+Every question and failure the ticket has ever hit stays listed here as a running history, even
+after you've answered or retried past it — the panel doesn't disappear once the ticket moves on.
+A Blocked ticket can also be **Cancel**led like any other pre-merge ticket, if it's not worth
+resolving.
+
+Not every failure blocks the ticket this way — only the two categories above (a stage asking a
+question, or a known Git/LLM failure). A genuinely unexpected error still surfaces as a plain
+error message with nothing to retry from the board.
+
 ## Ticket detail
 
 Clicking a card opens its full page: title, description, and status badge at the top, then four
@@ -152,14 +184,14 @@ diff) — a retried Coding attempt shows up as an additional commit, unless it's
 *Request Changes* re-run and Coding itself decides no code change is actually needed for your
 feedback, in which case no new commit is added.
 
-**Cancel Ticket** — shown next to the status badge for any To Do, In Progress, or For Review
-ticket (e.g. its goal no longer applies because a requirement changed). Asks for confirmation,
-then an optional reason, and sets the ticket to **Cancelled** — permanent, with no way back.
-Since a ticket's work only ever lives on its own feature branch until a human approves it, and
-Cancel is only available before that approval, cancelling never touches the project's base branch
-or remote history — it just stops tracking the ticket as active work. Cancelled tickets drop off
-the board entirely (they're not a 5th column) but stay reachable from wherever their link was
-shared, showing the reason if one was given.
+**Cancel Ticket** — shown next to the status badge for any To Do, In Progress, For Review, or
+Blocked ticket (e.g. its goal no longer applies because a requirement changed). Asks for
+confirmation, then an optional reason, and sets the ticket to **Cancelled** — permanent, with no
+way back. Since a ticket's work only ever lives on its own feature branch until a human approves
+it, and Cancel is only available before that approval, cancelling never touches the project's
+base branch or remote history — it just stops tracking the ticket as active work. Cancelled
+tickets drop off the board entirely (they're not a column, unlike Blocked) but stay reachable
+from wherever their link was shared, showing the reason if one was given.
 
 ### Git
 
@@ -277,9 +309,9 @@ default pipeline's Testing stage already does this (loops back to Coding, up to 
 Admin can add the same behavior to any other stage, or change the target/attempt count, via
 **+ Add loop-back** on a stage that doesn't have one yet, or **Clear** on one that does.
 
-**The pipeline locks while any ticket is In Progress** — a banner explains this, and reordering,
-adding, removing, and loop-back changes are all disabled (with a clear error if attempted
-directly) until every ticket in the project has moved past In Progress. Editing an
+**The pipeline locks while any ticket is In Progress or Blocked** — a banner explains this, and
+reordering, adding, removing, and loop-back changes are all disabled (with a clear error if
+attempted directly) until every ticket in the project has moved past those two states. Editing an
 already-scheduled agent's instructions is unaffected by this lock.
 
 **Editing instructions** — each agent has three instruction fields: **Constitution**,

@@ -25,6 +25,7 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
             InvalidWorkflowOperationException => (StatusCodes.Status409Conflict, "Invalid pipeline operation"),
             UnresolvedConflictsException => (StatusCodes.Status409Conflict, "Unresolved conflicts"),
             GitOperationException => (StatusCodes.Status422UnprocessableEntity, "Git operation failed"),
+            LlmOperationException => (StatusCodes.Status422UnprocessableEntity, "LLM operation failed"),
             DomainException => (StatusCodes.Status409Conflict, "Invalid operation for the current state"),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred"),
         };

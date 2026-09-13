@@ -7,6 +7,7 @@ export * from './instruction.model';
 export * from './instruction-template.model';
 export * from './commit.model';
 export * from './review.model';
+export * from './ticket-question.model';
 export * from './conflict.model';
 export * from './pipeline-run.model';
 export * from './user.model';

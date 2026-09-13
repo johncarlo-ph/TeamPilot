@@ -1,9 +1,13 @@
 // String-literal unions mirroring the API's C# enums exactly (JsonStringEnumConverter
 // serializes every enum as its member name, never a raw integer).
 
-export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done' | 'Cancelled';
+export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done' | 'Cancelled' | 'Blocked';
 
-export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done', 'Cancelled'];
+export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done', 'Cancelled', 'Blocked'];
+
+export type TicketQuestionKind = 'Question' | 'Failure';
+
+export type TicketQuestionStatus = 'Pending' | 'Answered';
 
 export type AgentRole = 'Research' | 'Design' | 'Coding' | 'Testing' | 'LiveAgent' | 'Custom';
 
@@ -35,6 +39,9 @@ export type AuditEventType =
   | 'TicketCreated'
   | 'TicketPipelineStarted'
   | 'TicketMovedToReview'
+  | 'TicketBlocked'
+  | 'TicketQuestionAnswered'
+  | 'TicketRetried'
   | 'ReviewSubmitted'
   | 'ConflictsDetected'
   | 'ConflictResolutionSuggested'

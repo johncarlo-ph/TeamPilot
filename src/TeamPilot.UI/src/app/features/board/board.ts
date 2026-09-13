@@ -20,6 +20,7 @@ type BoardStatus = Exclude<TicketStatus, 'Cancelled'>;
 export const BOARD_COLUMNS: { status: BoardStatus; title: string; icon: string; accentClass: string }[] = [
   { status: 'ToDo', title: 'To Do', icon: '⏳', accentClass: 'board-column--todo' },
   { status: 'InProgress', title: 'In Progress', icon: '🔧', accentClass: 'board-column--inprogress' },
+  { status: 'Blocked', title: 'Blocked', icon: '🚫', accentClass: 'board-column--blocked' },
   { status: 'ForReview', title: 'For Review', icon: '👀', accentClass: 'board-column--forreview' },
   { status: 'Done', title: 'Done', icon: '✅', accentClass: 'board-column--done' },
 ];
@@ -39,6 +40,13 @@ export class Board {
   readonly columns = BOARD_COLUMNS;
   readonly columnIds = BOARD_COLUMNS.map((c) => `col-${c.status}`);
 
+  // Blocked is a dead end for drag-and-drop: entered by the pipeline (a clarifying question or
+  // an operational failure), and only ever left via the ticket detail page's answer/retry
+  // actions - never by a manual drag. Every other column stays connected to every other.
+  private readonly draggableColumnIds = BOARD_COLUMNS.filter((c) => c.status !== 'Blocked').map(
+    (c) => `col-${c.status}`
+  );
+
   readonly tickets = signal<TicketDto[]>([]);
   readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
@@ -53,6 +61,7 @@ export class Board {
     const grouped: Record<BoardStatus, TicketDto[]> = {
       ToDo: [],
       InProgress: [],
+      Blocked: [],
       ForReview: [],
       Done: [],
     };
@@ -103,6 +112,10 @@ export class Board {
 
   columnIdFor(status: TicketStatus): string {
     return `col-${status}`;
+  }
+
+  connectedIdsFor(status: BoardStatus): string[] {
+    return status === 'Blocked' ? [] : this.draggableColumnIds;
   }
 
   createTicket(request: { title: string; description: string | null }): void {

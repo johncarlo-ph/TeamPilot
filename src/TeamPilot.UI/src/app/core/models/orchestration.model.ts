@@ -15,4 +15,6 @@ export interface TicketPipelineResultDto {
   steps: AgentWorkResultDto[];
   testingPassed: boolean;
   testingAttempts: number;
+  blocked: boolean;
+  blockingQuestionId: string | null;
 }

@@ -210,4 +210,76 @@ public class TicketTests
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.UnlinkBranch());
     }
+
+    [Fact]
+    public void Block_WhenStatusIsInProgress_SetsStatusToBlocked()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+
+        ticket.Block();
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+    }
+
+    [Theory]
+    [InlineData(nameof(TicketStatus.ToDo))]
+    [InlineData(nameof(TicketStatus.ForReview))]
+    [InlineData(nameof(TicketStatus.Done))]
+    [InlineData(nameof(TicketStatus.Cancelled))]
+    public void Block_WhenNotInProgress_ThrowsInvalidTicketStateTransitionException(string statusName)
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+
+        switch (Enum.Parse<TicketStatus>(statusName))
+        {
+            case TicketStatus.ForReview:
+                ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+                ticket.MoveToReview();
+                break;
+            case TicketStatus.Done:
+                ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+                ticket.MoveToReview();
+                ticket.Approve();
+                break;
+            case TicketStatus.Cancelled:
+                ticket.Cancel(null);
+                break;
+        }
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Block());
+    }
+
+    [Fact]
+    public void Unblock_WhenStatusIsBlocked_SetsStatusToInProgress()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+        ticket.Block();
+
+        ticket.Unblock();
+
+        Assert.Equal(TicketStatus.InProgress, ticket.Status);
+    }
+
+    [Fact]
+    public void Unblock_WhenNotBlocked_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Unblock());
+    }
+
+    [Fact]
+    public void Cancel_WhenStatusIsBlocked_SetsStatusToCancelled()
+    {
+        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+        ticket.Block();
+
+        ticket.Cancel("Giving up");
+
+        Assert.Equal(TicketStatus.Cancelled, ticket.Status);
+    }
 }

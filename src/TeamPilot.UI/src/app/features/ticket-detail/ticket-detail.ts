@@ -2,34 +2,53 @@ import { DatePipe } from '@angular/common';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { distinctUntilChanged, interval, map, startWith, switchMap } from 'rxjs';
+import { distinctUntilChanged, forkJoin, interval, map, startWith, switchMap } from 'rxjs';
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
+import { TicketQuestionsService } from '../../core/services/ticket-questions.service';
 import { ProjectsService } from '../../core/services/projects.service';
 import { NotificationService } from '../../core/notification/notification.service';
-import { ProjectDto, ReviewDecision, SubmitReviewRequest, TicketDetailDto } from '../../core/models';
+import {
+  ProjectDto,
+  ReviewDecision,
+  SubmitReviewRequest,
+  TicketDetailDto,
+  TicketQuestionDto,
+} from '../../core/models';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
 import { DiffViewer } from '../../shared/components/diff-viewer/diff-viewer';
 import { BranchPanel } from './branch-panel/branch-panel';
 import { ConflictsPanel } from './conflicts-panel/conflicts-panel';
 import { ReviewForm } from './review-form/review-form';
+import { TicketQuestionPanel } from './ticket-question-panel/ticket-question-panel';
 import { buildBranchUrl } from '../../core/utils/git-url.util';
 
 const POLL_INTERVAL_MS = 10000;
 
 @Component({
   selector: 'app-ticket-detail',
-  imports: [RouterLink, DatePipe, StatusBadge, DiffViewer, BranchPanel, ConflictsPanel, ReviewForm],
+  imports: [
+    RouterLink,
+    DatePipe,
+    StatusBadge,
+    DiffViewer,
+    BranchPanel,
+    ConflictsPanel,
+    ReviewForm,
+    TicketQuestionPanel,
+  ],
   templateUrl: './ticket-detail.html',
 })
 export class TicketDetail {
   private readonly route = inject(ActivatedRoute);
   private readonly ticketsService = inject(TicketsService);
   private readonly reviewsService = inject(ReviewsService);
+  private readonly ticketQuestionsService = inject(TicketQuestionsService);
   private readonly projectsService = inject(ProjectsService);
   private readonly notifications = inject(NotificationService);
 
   readonly ticket = signal<TicketDetailDto | null>(null);
+  readonly questions = signal<TicketQuestionDto[]>([]);
   readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
   readonly reviewFormOpen = signal(false);
@@ -47,15 +66,21 @@ export class TicketDetail {
         switchMap((id) =>
           interval(POLL_INTERVAL_MS).pipe(
             startWith(0),
-            switchMap(() => this.ticketsService.getById(id))
+            switchMap(() =>
+              forkJoin({
+                ticket: this.ticketsService.getById(id),
+                questions: this.ticketQuestionsService.listForTicket(id),
+              })
+            )
           )
         ),
         takeUntilDestroyed()
       )
       .subscribe({
-        next: (ticket) => {
+        next: ({ ticket, questions }) => {
           const isFirstLoad = this.ticket() === null;
           this.ticket.set(ticket);
+          this.questions.set(questions);
           this.loading.set(false);
           if (isFirstLoad) {
             this.loadProject(ticket.projectId);
@@ -135,8 +160,15 @@ export class TicketDetail {
     this.refresh();
   }
 
+  onQuestionsChanged(): void {
+    this.refresh();
+  }
+
   private refresh(): void {
     this.ticketsService.getById(this.ticketId()).subscribe((ticket) => this.ticket.set(ticket));
+    this.ticketQuestionsService
+      .listForTicket(this.ticketId())
+      .subscribe((questions) => this.questions.set(questions));
   }
 
   private loadProject(projectId: string): void {

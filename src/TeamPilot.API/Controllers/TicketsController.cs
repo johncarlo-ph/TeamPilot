@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Orchestration.Dtos;
+using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Enums;
@@ -8,7 +9,7 @@ using TeamPilot.Domain.Enums;
 namespace TeamPilot.API.Controllers;
 
 [ApiController]
-public class TicketsController(ITicketService ticketService, IOrchestrationService orchestrationService) : ControllerBase
+public class TicketsController(ITicketService ticketService, IOrchestrationService orchestrationService, ITicketQuestionService ticketQuestionService) : ControllerBase
 {
     [HttpPost("api/projects/{projectId:guid}/tickets")]
     public async Task<ActionResult<TicketDto>> Create(Guid projectId, [FromBody] CreateTicketRequest request, CancellationToken cancellationToken)
@@ -50,5 +51,12 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
     {
         var ticket = await ticketService.CancelAsync(id, request, cancellationToken);
         return Ok(ticket);
+    }
+
+    [HttpPost("api/tickets/{id:guid}/retry")]
+    public async Task<ActionResult<TicketPipelineResultDto>> Retry(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await ticketQuestionService.RetryAsync(id, cancellationToken);
+        return Ok(result);
     }
 }

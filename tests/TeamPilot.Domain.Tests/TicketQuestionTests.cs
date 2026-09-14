@@ -81,6 +81,36 @@ public class TicketQuestionTests
     }
 
     [Fact]
+    public void CreateDecision_WithEmptyQuestionText_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => TicketQuestion.CreateDecision(TicketId, AgentId, "   "));
+    }
+
+    [Fact]
+    public void CreateDecision_WithValidArguments_SetsFieldsAndPendingStatus()
+    {
+        var question = TicketQuestion.CreateDecision(TicketId, AgentId, "Should this proceed given the conflicting ticket?");
+
+        Assert.Equal(TicketId, question.TicketId);
+        Assert.Equal(AgentId, question.AgentId);
+        Assert.Equal(TicketQuestionKind.Decision, question.Kind);
+        Assert.Equal("Should this proceed given the conflicting ticket?", question.Prompt);
+        Assert.Equal(TicketQuestionStatus.Pending, question.Status);
+    }
+
+    [Fact]
+    public void Answer_OnADecision_SetsAnswerAndStatus()
+    {
+        var question = TicketQuestion.CreateDecision(TicketId, AgentId, "Should this proceed given the conflicting ticket?");
+
+        question.Answer("Cancel it.", "Alice");
+
+        Assert.Equal(TicketQuestionStatus.Answered, question.Status);
+        Assert.Equal("Cancel it.", question.AnswerText);
+        Assert.Equal("Alice", question.AnsweredBy);
+    }
+
+    [Fact]
     public void MarkConsumed_SetsConsumedTrue()
     {
         var question = TicketQuestion.CreateQuestion(TicketId, AgentId, "What timeout should I use?");

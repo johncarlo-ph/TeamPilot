@@ -144,4 +144,72 @@ describe('ChatPanel', () => {
 
     expect(chatService.sendMessage).toHaveBeenCalledWith('project-1', 'conv-1', { content: 'What does this project do?' });
   });
+
+  it('approveTicket_NotEditing_SendsTheProposedTitleAndDescriptionAsIs', () => {
+    const conv = conversation({ id: 'conv-1' });
+    const proposal = message({
+      id: 'msg-1',
+      proposedTicketTitle: 'Fix login bug',
+      proposedTicketDescription: "Users can't sign in.",
+    });
+    setUp([conv], { 'conv-1': [proposal] });
+    chatService.approveTicket.mockReturnValue(of({ ...proposal, createdTicketId: 'ticket-1' }));
+
+    fixture.componentInstance.approveTicket(proposal);
+
+    expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
+      title: 'Fix login bug',
+      description: "Users can't sign in.",
+    });
+  });
+
+  it('startEditTicket_ThenApprove_SendsTheEditedTitleAndDescription', () => {
+    const conv = conversation({ id: 'conv-1' });
+    const proposal = message({
+      id: 'msg-1',
+      proposedTicketTitle: 'Fix login bug',
+      proposedTicketDescription: "Users can't sign in.",
+    });
+    setUp([conv], { 'conv-1': [proposal] });
+    chatService.approveTicket.mockReturnValue(of({ ...proposal, createdTicketId: 'ticket-1' }));
+
+    fixture.componentInstance.startEditTicket(proposal);
+    fixture.componentInstance.ticketEditForm.setValue({
+      title: 'Fix Google login bug',
+      description: 'Edited description',
+    });
+    fixture.componentInstance.approveTicket(proposal);
+
+    expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
+      title: 'Fix Google login bug',
+      description: 'Edited description',
+    });
+  });
+
+  it('startEditTicket_DecidedMessage_DoesNothing', () => {
+    const conv = conversation({ id: 'conv-1' });
+    const decided = message({
+      id: 'msg-1',
+      proposedTicketTitle: 'Fix login bug',
+      createdTicketId: 'ticket-1',
+    });
+    setUp([conv], { 'conv-1': [decided] });
+
+    fixture.componentInstance.startEditTicket(decided);
+
+    expect(fixture.componentInstance.isEditingTicket(decided)).toBe(false);
+  });
+
+  it('cancelEditTicket_StopsEditing', () => {
+    const conv = conversation({ id: 'conv-1' });
+    const proposal = message({ id: 'msg-1', proposedTicketTitle: 'Fix login bug' });
+    setUp([conv], { 'conv-1': [proposal] });
+
+    fixture.componentInstance.startEditTicket(proposal);
+    expect(fixture.componentInstance.isEditingTicket(proposal)).toBe(true);
+
+    fixture.componentInstance.cancelEditTicket();
+
+    expect(fixture.componentInstance.isEditingTicket(proposal)).toBe(false);
+  });
 });

@@ -15,17 +15,29 @@ public sealed class BackgroundTaskRunner(IServiceScopeFactory scopeFactory, ILog
 {
     public void Run(Func<IServiceProvider, CancellationToken, Task> work)
     {
-        _ = Task.Run(async () =>
+        // ExecutionContext.SuppressFlow() stops Task.Run from capturing the calling request's
+        // ExecutionContext - without it, the AsyncLocal backing IHttpContextAccessor.HttpContext
+        // flows into this "detached" task anyway, so Program.cs's ICurrentUserContext factory
+        // sees a non-null HttpContext and wrongly resolves HttpContextCurrentUserContext instead
+        // of SystemCurrentUserContext here. That HttpContext instance can then get pooled and
+        // reused by an unrelated later request (ASP.NET Core pools DefaultHttpContext once
+        // IHttpContextAccessor is registered) before this delegate's first await point returns,
+        // so IProjectAccessGuard ends up checking against whichever request currently owns that
+        // recycled object - not the user who actually triggered this run.
+        using (ExecutionContext.SuppressFlow())
         {
-            using var scope = scopeFactory.CreateScope();
-            try
+            _ = Task.Run(async () =>
             {
-                await work(scope.ServiceProvider, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Unhandled exception in a detached background task.");
-            }
-        });
+                using var scope = scopeFactory.CreateScope();
+                try
+                {
+                    await work(scope.ServiceProvider, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Unhandled exception in a detached background task.");
+                }
+            });
+        }
     }
 }

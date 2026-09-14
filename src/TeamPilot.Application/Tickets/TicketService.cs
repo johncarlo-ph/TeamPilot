@@ -19,6 +19,7 @@ public sealed class TicketService(
     IProjectAccessGuard projectAccessGuard,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
+    IPipelineRunTracker pipelineRunTracker,
     IValidator<CreateTicketRequest> createValidator,
     IValidator<CreateBranchRequest> createBranchValidator,
     IValidator<CancelTicketRequest> cancelValidator) : ITicketService
@@ -37,7 +38,7 @@ public sealed class TicketService(
         await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<TicketDetailDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -47,7 +48,7 @@ public sealed class TicketService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
-        return TicketMappings.ToDetailDto(ticket);
+        return TicketMappings.ToDetailDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<IReadOnlyList<TicketDto>> ListAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default)
@@ -55,7 +56,7 @@ public sealed class TicketService(
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
         var tickets = await ticketRepository.ListAsync(projectId, status, cancellationToken);
-        return tickets.Select(TicketMappings.ToDto).ToList();
+        return tickets.Select(t => TicketMappings.ToDto(t, pipelineRunTracker.IsRunning(t.Id))).ToList();
     }
 
     public async Task<TicketDto> MoveToReviewAsync(Guid id, CancellationToken cancellationToken = default)
@@ -70,7 +71,7 @@ public sealed class TicketService(
         await auditLogger.LogActionAsync(AuditEventType.TicketMovedToReview, $"Ticket '{ticket.Title}' moved to review.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<TicketDto> CancelAsync(Guid id, CancelTicketRequest request, CancellationToken cancellationToken = default)
@@ -109,7 +110,7 @@ public sealed class TicketService(
             }
         }
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<TicketDto> DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)
@@ -135,7 +136,7 @@ public sealed class TicketService(
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     // Validate before touching Git - UnlinkBranch guards that this is only allowed once the
@@ -186,7 +187,7 @@ public sealed class TicketService(
         await auditLogger.LogActionAsync(AuditEventType.GitBranchCreated, $"Branch '{branchName}' created for ticket '{ticket.Title}'.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<bool> BranchExistsAsync(Guid ticketId, string branchName, CancellationToken cancellationToken = default)

@@ -20,6 +20,7 @@ public sealed class TicketQuestionService(
     ICurrentUserContext currentUser,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
+    IPipelineRunTracker pipelineRunTracker,
     IValidator<AnswerTicketQuestionRequest> answerValidator) : ITicketQuestionService
 {
     public async Task<TicketDto> AnswerAsync(Guid ticketId, Guid questionId, AnswerTicketQuestionRequest request, CancellationToken cancellationToken = default)
@@ -53,7 +54,7 @@ public sealed class TicketQuestionService(
         // refresh) can no longer abort the run mid-flight.
         orchestrationService.RunPipelineDetached(ticket.Id);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<TicketDto> RetryAsync(Guid ticketId, CancellationToken cancellationToken = default)
@@ -76,6 +77,6 @@ public sealed class TicketQuestionService(
 
         orchestrationService.RunPipelineDetached(ticket.Id);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 }

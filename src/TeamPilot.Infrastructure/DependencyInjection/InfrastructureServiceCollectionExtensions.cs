@@ -73,6 +73,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IRefreshTokenGenerator, RefreshTokenGenerator>();
 
         services.AddSingleton<IBackgroundTaskRunner, BackgroundTaskRunner>();
+        services.AddSingleton<IPipelineRunTracker, PipelineRunTracker>();
 
         return services;
     }

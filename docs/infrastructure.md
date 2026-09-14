@@ -78,59 +78,77 @@ the matching connector; an unsupported value throws `NotSupportedException`. Add
 Mistral later means adding a new `case` and a new connector class — no changes to any caller.
 
 **`ILlmConnector` has two methods: single-shot and multi-turn/tool-use, kept deliberately
-separate.** `SendPromptAsync(LlmRequest)` is the original single flat prompt/response shape used
-by the fixed pipeline stages (`OrchestrationService`, `ConflictResolutionService`) — untouched by
-the addition below. `SendConversationAsync(LlmConversationRequest)` is a second method added for
-the Live Agent chat: it carries a `Messages` history, an optional `System` prompt, and optional
-`Tools` (JSON-Schema tool definitions), and returns an `LlmConversationResponse` whose `Content`
-is a list of typed blocks (`LlmTextBlock`/`LlmToolUseBlock`/`LlmToolResultBlock`) plus a
-`StopReason` ("tool_use" vs. "end_turn"). `ClaudeLlmConnector.SendConversationAsync` builds the
-real Anthropic Messages API `system`/`messages`/`tools` JSON via `System.Text.Json.Nodes` (block
-shapes vary by type, which doesn't fit a single anonymous-object shape) and parses the response
-blocks back. Folding this into `LlmRequest`/`SendPromptAsync` instead was deliberately avoided —
-it would have meant touching every pipeline call site and every existing test for no benefit to
-those single-shot callers.
+separate.** `SendPromptAsync(LlmRequest)` is the original single flat prompt/response shape,
+still used by `ConflictResolutionService` and by any pipeline stage role that needs no repo
+access (e.g. Testing, or a custom admin-added agent). `SendConversationAsync(LlmConversationRequest)`
+carries a `Messages` history, an optional `System` prompt, and optional `Tools` (JSON-Schema tool
+definitions), and returns an `LlmConversationResponse` whose `Content` is a list of typed blocks
+(`LlmTextBlock`/`LlmToolUseBlock`/`LlmToolResultBlock`) plus a `StopReason` ("tool_use" vs.
+"end_turn"). Originally added only for the Live Agent chat, it's now also used by the Research/
+Design/Coding pipeline stages (via `Application/Llm/ToolLoopRunner` — see
+[docs/application.md](application.md#workflow-integration)) so they can read specific files
+on demand instead of relying on a size-capped snapshot gathered up front.
+`ClaudeLlmConnector.SendConversationAsync` builds the real Anthropic Messages API
+`system`/`messages`/`tools` JSON via `System.Text.Json.Nodes` (block shapes vary by type, which
+doesn't fit a single anonymous-object shape) and parses the response blocks back. Folding this
+into `LlmRequest`/`SendPromptAsync` instead was deliberately avoided — it would have meant
+touching every single-shot call site and every existing test for no benefit to those callers.
 
 **`IGitService` takes a `repositoryPath` per call, not a single configured path.** Since each
 `Project` owns its own sandbox clone, the service holds no per-project state; every method
 (`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
 `CommitFilesAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeWithResolutionsAsync`,
-`DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`, `GetRepositorySnapshotAsync`) opens and
-disposes its own `LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it
-creates the repository rather than opening an existing one). It also coordinates nothing between
-calls itself: two calls against the same sandbox running concurrently (every ticket in a project
-shares one clone — see `MergeWithResolutionsAsync` below) could corrupt the working directory or
-race on the same remote ref. `Application.Git.GitRepositoryLock` is the fix, one layer up — every
+`DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`) opens and disposes its own
+`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
+repository rather than opening an existing one). It also coordinates nothing between calls
+itself: two calls against the same sandbox running concurrently (every ticket in a project shares
+one clone — see `MergeWithResolutionsAsync` below) could corrupt the working directory or race on
+the same remote ref. `Application.Git.GitRepositoryLock` is the fix, one layer up — every
 Application call site acquires it, keyed by `repositoryPath`, around the git calls (and, where it
 matters, a status re-check) that must not interleave with another such block. See
 [docs/application.md](application.md) for the specific race (a cancelled ticket's branch delete
 racing an in-flight Coding stage's commit/push) this was added to close.
 
-**`ListFilesAsync`/`ReadFileAsync`/`GetRepositorySnapshotAsync` are read-only.** Every other
-`IGitService` method either writes or talks to the remote; these three only ever read off
-`repo.Info.WorkingDirectory`. All three resolve the caller's relative path against that working
+**`ListFilesAsync`/`ReadFileAsync` are read-only, and both take an optional `branchName`.** Every
+other `IGitService` method either writes or talks to the remote; these two only ever read off
+`repo.Info.WorkingDirectory`. Both resolve the caller's relative path against that working
 directory via `Path.GetFullPath` and reject the call (`GitOperationException`) if the resolved
 path doesn't stay under it — the only defense against a path-traversal attempt (e.g. `../../`)
-reaching outside the sandbox. `ReadFileAsync` and `GetRepositorySnapshotAsync` additionally refuse
-well-known secret-bearing paths outright (`.git/**`, `.env*`, `id_rsa*`/`id_ed25519*`,
-`*.pfx`/`*.pem`/`*.key`/`*.p12`), run the remaining content through `SecretRedactor`'s best-effort
-regex redaction (AWS-style keys, private-key blocks, JWTs, common `password=`/`api_key=`-shaped
-assignments), and truncate past 20,000 characters per file. None of this is a guarantee against
-leaking a secret shaped differently than these patterns — it's defense in depth, not a substitute
-for keeping real secrets out of a project's repository. `ListFilesAsync` returns a shallow
-(non-recursive), capped-at-200-entries listing of one directory, used solely by the Live Agent
-chat's sandboxed file tools, so the model only sees what it explicitly asked for rather than an
-implicit full tree.
+reaching outside the sandbox. When `branchName` is given, that branch is checked out first (the
+same `GetOrCreateBranch`+`Commands.Checkout` pattern `CommitFilesAsync` uses) so the read reflects
+that branch's tip rather than whatever happens to already be checked out; passing `null` (the
+Live Agent chat's usage — it isn't tied to any one ticket) preserves the original behavior
+unchanged. `ReadFileAsync` additionally refuses well-known secret-bearing paths outright
+(`.git/**`, `.env*`, `id_rsa*`/`id_ed25519*`, `*.pfx`/`*.pem`/`*.key`/`*.p12`), runs the remaining
+content through `SecretRedactor`'s best-effort regex redaction (AWS-style keys, private-key
+blocks, JWTs, common `password=`/`api_key=`-shaped assignments), and truncates past 20,000
+characters. None of this is a guarantee against leaking a secret shaped differently than these
+patterns — it's defense in depth, not a substitute for keeping real secrets out of a project's
+repository. `ListFilesAsync` recursively walks the given path (skipping `.git`, `node_modules`,
+`bin`, `obj`, `dist`, `.angular`) and returns every file's path relative to it, capped at 200
+entries with a `"... truncated"` note appended when the cap is hit (prompting the caller to retry
+with a narrower path) — so one call shows a whole subtree instead of just one directory level.
+It used to list only the one directory the caller asked for (subdirectories shown as bare names
+with a trailing `/`, requiring a fresh call per level to go deeper); that was changed after a
+real, reproduced incident where a Research-stage tool-use loop burned most of its round budget
+navigating six directory levels one `list_files` call at a time before ever reading a file,
+exhausting the loop before it could produce an answer.
 
-**`GetRepositorySnapshotAsync` exists solely to ground the Coding pipeline stage's single prompt
-in the ticket branch's real current files** (see
-[docs/application.md](application.md#workflow-integration)) — unlike `ListFilesAsync`, it recursively walks
-the whole working directory (skipping `.git` plus dependency/build-output noise:
-`node_modules`, `bin`, `obj`, `dist`, `.angular`) and reads every remaining file up front, since
-the Coding stage gets no chance to ask for a specific path mid-response. Two independent caps
-bound the result so a large repository degrades to a partial snapshot instead of an unbounded
-prompt: `MaxSnapshotFiles` (100) and `MaxSnapshotTotalChars` (60,000, checked across the whole
-snapshot in addition to each file's own 20,000-character cap).
+**Both are called by two different tool-use loops, not just the Live Agent chat.**
+`Application/Git/GitReadOnlyTools` defines the `list_files`/`read_file` tool schema and dispatch
+once and is shared by `LiveAgentChatService` (passing `branchName: null`) and by the
+Research/Design/Coding pipeline stages via `OrchestrationService.RunStagePromptAsync` (passing
+the ticket's own `BranchName` on every call — see
+[docs/application.md](application.md#workflow-integration)). Each call is independently wrapped in
+its own brief `GitRepositoryLock` scope rather than one held for an entire tool-use loop, so
+passing a specific branch on every call is what lets a ticket-branch-specific caller safely share
+one project's sandbox clone with everything else touching it, without ever holding the lock
+across LLM latency. There used to be a third method here, `GetRepositorySnapshotAsync`, which
+recursively read every file in a branch up front (capped at 100 files / 60,000 characters total)
+so the Coding/Research/Design stages' single prompt could be grounded without any ability to ask
+for a specific path mid-response; it's been removed now that those stages call `read_file`
+themselves on demand, which removes the caps (and the risk of a large repo's alphabetical file
+ordering silently dropping a file a stage actually needed) entirely.
 
 **`MergeWithResolutionsAsync` finishes a conflicted merge as a real two-parent commit by resuming
 LibGit2Sharp's own merge-in-progress state, not by re-merging after the fact.** It runs the same
@@ -190,7 +208,17 @@ codebase's first fire-and-forget mechanism** — registered `AddSingleton` since
 registration, which is `AddScoped` because `TeamPilotDbContext` is. `Run(work)` fires `work` on
 the thread pool inside a fresh `IServiceScopeFactory.CreateScope()`, passing that scope's own
 `IServiceProvider` in rather than anything from the caller's scope, and catches/logs any
-exception `work` doesn't handle itself as a last-resort safety net. Currently used by
+exception `work` doesn't handle itself as a last-resort safety net. **Wraps its `Task.Run` in
+`ExecutionContext.SuppressFlow()`** - without it, `Task.Run` captures and flows the calling
+request's `ExecutionContext`, which carries `IHttpContextAccessor`'s `AsyncLocal` `HttpContext`
+along with it; `TeamPilot.API/Program.cs`'s `ICurrentUserContext` factory would then see a
+non-null `HttpContext` inside this "detached" task and wrongly resolve
+`HttpContextCurrentUserContext` instead of `SystemCurrentUserContext` - and since
+`AddHttpContextAccessor()` makes ASP.NET Core pool and reuse `HttpContext` instances, that stale
+reference can already belong to an unrelated later request (e.g. the board's own poll) by the
+time the delegate's first `await` returns, so `IProjectAccessGuard` ends up checking against
+whoever currently owns that recycled object instead of the user who actually triggered the run.
+Currently used by
 `OrchestrationService.RunPipelineDetached`, the single point every pipeline-(re-)starting entry
 point (`TicketsController.Start`, `ApprovalGateService`'s `RequestChanges` branch,
 `TicketQuestionService.AnswerAsync`/`RetryAsync`) goes through instead of awaiting
@@ -199,6 +227,17 @@ own dependencies (`IOrchestrationService`, `ITicketRepository`, etc.) from the g
 `IServiceProvider`, never from fields injected into the caller itself, since the caller's own
 scope (and scoped `DbContext`, and its request's `CancellationToken`) is disposed/cancelled once
 its request returns, before the detached work runs.
+
+**`IPipelineRunTracker` (`Infrastructure/BackgroundTasks/PipelineRunTracker.cs`) is the second
+fire-and-forget-adjacent singleton, also `AddSingleton`** — a plain in-memory
+`ConcurrentDictionary<Guid, int>` reference-counting how many runs are currently in flight per
+ticket (`MarkRunning`/`MarkFinished`/`IsRunning`), not a persisted flag, so an app restart can
+never leave it stuck reporting a run that no longer exists (the actual work died with the process
+too). `RunPipelineDetached` calls it directly off its own injected field rather than resolving it
+fresh from the background scope's `IServiceProvider` like everything else in that delegate - safe
+specifically because it's a true singleton with no scope of its own to outlive, unlike the scoped
+dependencies (`ITicketRepository` etc.) the delegate must still resolve fresh. See
+[docs/application.md](application.md) for how `TicketDto.PipelineRunning` surfaces this to callers.
 
 ## Code style notes
 

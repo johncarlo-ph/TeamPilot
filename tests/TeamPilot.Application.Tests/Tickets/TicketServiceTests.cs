@@ -23,6 +23,7 @@ public class TicketServiceTests
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly TicketService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
@@ -39,6 +40,7 @@ public class TicketServiceTests
             _projectAccessGuard.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
+            _pipelineRunTracker.Object,
             new CreateTicketRequestValidator(),
             new CreateBranchRequestValidator(),
             new CancelTicketRequestValidator());

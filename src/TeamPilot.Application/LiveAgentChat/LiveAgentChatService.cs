@@ -39,11 +39,9 @@ public sealed class LiveAgentChatService(
     IUnitOfWork unitOfWork,
     IValidator<SendChatMessageRequest> sendValidator,
     IValidator<CreateConversationRequest> createConversationValidator,
-    IValidator<RenameConversationRequest> renameConversationValidator) : ILiveAgentChatService
+    IValidator<RenameConversationRequest> renameConversationValidator,
+    IValidator<ApproveTicketRequest> approveTicketValidator) : ILiveAgentChatService
 {
-    private const int MaxToolRoundtrips = 6;
-    private const int MaxToolResultChars = 8000;
-
     public async Task<IReadOnlyList<ConversationDto>> ListConversationsAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
@@ -88,8 +86,9 @@ public sealed class LiveAgentChatService(
         return conversation.Messages.Select(ToDto).ToList();
     }
 
-    public async Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken = default)
+    public async Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid conversationId, Guid messageId, ApproveTicketRequest request, CancellationToken cancellationToken = default)
     {
+        await approveTicketValidator.EnsureValidAsync(request, cancellationToken);
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
         var message = await GetMessageOrThrowAsync(projectId, conversationId, messageId, cancellationToken);
@@ -110,12 +109,14 @@ public sealed class LiveAgentChatService(
             throw new ChatMessageTicketApprovalException("This message's proposed ticket was already rejected.");
         }
 
+        // The user may have edited the draft in the chat UI before approving, so the request's
+        // title/description (not the message's originally-proposed ones) are what get created.
         var ticket = await ticketService.CreateAsync(
             projectId,
-            new CreateTicketRequest(message.ProposedTicketTitle ?? string.Empty, message.ProposedTicketDescription),
+            new CreateTicketRequest(request.Title, request.Description),
             cancellationToken);
 
-        message.MarkTicketCreated(ticket.Id);
+        message.MarkTicketCreated(ticket.Id, request.Title, request.Description);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(message);
@@ -185,36 +186,25 @@ public sealed class LiveAgentChatService(
 
         string? proposedTitle = null;
         string? proposedDescription = null;
-        var finalText = "I couldn't finish that within my available steps - could you narrow down the question?";
 
-        for (var round = 0; round < MaxToolRoundtrips; round++)
-        {
-            var response = await llmConnector.SendConversationAsync(
-                new LlmConversationRequest(messages, System: system, Tools: tools),
-                cancellationToken);
-
-            if (response.StopReason != "tool_use")
+        var finalText = await ToolLoopRunner.RunAsync(
+            llmConnector,
+            messages,
+            system,
+            tools,
+            maxTokens: 1024,
+            async (toolUse, ct) =>
             {
-                finalText = response.TextContent;
-                break;
-            }
-
-            messages.Add(new LlmMessage("assistant", response.Content));
-
-            var toolResults = new List<LlmContentBlock>();
-            foreach (var toolUse in response.Content.OfType<LlmToolUseBlock>())
-            {
-                var (resultText, isError, proposal) = await ExecuteToolAsync(toolUse, project, projectId, cancellationToken);
+                var (resultText, isError, proposal) = await ExecuteToolAsync(toolUse, project, projectId, ct);
                 if (proposal is not null)
                 {
                     (proposedTitle, proposedDescription) = proposal.Value;
                 }
 
-                toolResults.Add(new LlmToolResultBlock(toolUse.Id, Truncate(resultText), isError));
-            }
-
-            messages.Add(new LlmMessage("user", toolResults));
-        }
+                return (resultText, isError);
+            },
+            cancellationToken,
+            fallbackText: "I couldn't finish that within my available steps - could you narrow down the question?");
 
         conversation.AddMessage(ChatMessageRole.Assistant, finalText, proposedTitle, proposedDescription);
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -228,6 +218,12 @@ public sealed class LiveAgentChatService(
         Guid projectId,
         CancellationToken cancellationToken)
     {
+        var gitResult = await GitReadOnlyTools.TryExecuteAsync(gitService, project.RepositoryPath, branchName: null, toolUse, cancellationToken);
+        if (gitResult is not null)
+        {
+            return (gitResult.Value.ResultText, gitResult.Value.IsError, null);
+        }
+
         JsonDocument input;
         try
         {
@@ -240,103 +236,66 @@ public sealed class LiveAgentChatService(
 
         using (input)
         {
-            try
+            switch (toolUse.Name)
             {
-                switch (toolUse.Name)
+                case "list_tickets":
                 {
-                    case "list_files":
+                    TicketStatus? status = null;
+                    var statusText = TryGetString(input, "status");
+                    if (statusText is not null && Enum.TryParse<TicketStatus>(statusText, ignoreCase: true, out var parsed))
                     {
-                        var path = TryGetString(input, "path");
-                        IReadOnlyList<string> entries;
-                        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
-                        {
-                            entries = await gitService.ListFilesAsync(project.RepositoryPath, path, cancellationToken);
-                        }
-
-                        return (entries.Count == 0 ? "(empty)" : string.Join("\n", entries), false, null);
+                        status = parsed;
                     }
 
-                    case "read_file":
-                    {
-                        var path = TryGetString(input, "path") ?? string.Empty;
-                        GitFileReadResult result;
-                        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
-                        {
-                            result = await gitService.ReadFileAsync(project.RepositoryPath, path, cancellationToken);
-                        }
-
-                        if (!result.Found)
-                        {
-                            return ("File not found or not accessible.", true, null);
-                        }
-
-                        var text = result.Truncated ? $"{result.Content}\n\n[truncated]" : result.Content!;
-                        return (text, false, null);
-                    }
-
-                    case "list_tickets":
-                    {
-                        TicketStatus? status = null;
-                        var statusText = TryGetString(input, "status");
-                        if (statusText is not null && Enum.TryParse<TicketStatus>(statusText, ignoreCase: true, out var parsed))
-                        {
-                            status = parsed;
-                        }
-
-                        var tickets = await ticketRepository.ListAsync(projectId, status, cancellationToken);
-                        var text = tickets.Count == 0
-                            ? "(no tickets)"
-                            : string.Join("\n", tickets.Select(t => $"{t.Id} | {t.Title} | {t.Status}"));
-                        return (text, false, null);
-                    }
-
-                    case "get_ticket":
-                    {
-                        var idText = TryGetString(input, "id");
-                        if (!Guid.TryParse(idText, out var ticketId))
-                        {
-                            return ("A valid ticket id is required.", true, null);
-                        }
-
-                        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
-                        if (ticket is null || ticket.ProjectId != projectId)
-                        {
-                            return ("Ticket not found.", true, null);
-                        }
-
-                        var details = $"Title: {ticket.Title}\nStatus: {ticket.Status}\nDescription: {ticket.Description}";
-                        if (!string.IsNullOrWhiteSpace(ticket.BranchName))
-                        {
-                            details += $"\nBranch: {ticket.BranchName}";
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(ticket.CancellationReason))
-                        {
-                            details += $"\nCancellation reason: {ticket.CancellationReason}";
-                        }
-
-                        return (details, false, null);
-                    }
-
-                    case "propose_ticket":
-                    {
-                        var title = TryGetString(input, "title");
-                        var description = TryGetString(input, "description") ?? string.Empty;
-                        if (string.IsNullOrWhiteSpace(title))
-                        {
-                            return ("A ticket title is required.", true, null);
-                        }
-
-                        return ("Drafted for the user to review and approve in the chat.", false, (title, description));
-                    }
-
-                    default:
-                        return ($"Unknown tool '{toolUse.Name}'.", true, null);
+                    var tickets = await ticketRepository.ListAsync(projectId, status, cancellationToken);
+                    var text = tickets.Count == 0
+                        ? "(no tickets)"
+                        : string.Join("\n", tickets.Select(t => $"{t.Id} | {t.Title} | {t.Status}"));
+                    return (text, false, null);
                 }
-            }
-            catch (GitOperationException ex)
-            {
-                return (ex.Message, true, null);
+
+                case "get_ticket":
+                {
+                    var idText = TryGetString(input, "id");
+                    if (!Guid.TryParse(idText, out var ticketId))
+                    {
+                        return ("A valid ticket id is required.", true, null);
+                    }
+
+                    var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+                    if (ticket is null || ticket.ProjectId != projectId)
+                    {
+                        return ("Ticket not found.", true, null);
+                    }
+
+                    var details = $"Title: {ticket.Title}\nStatus: {ticket.Status}\nDescription: {ticket.Description}";
+                    if (!string.IsNullOrWhiteSpace(ticket.BranchName))
+                    {
+                        details += $"\nBranch: {ticket.BranchName}";
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(ticket.CancellationReason))
+                    {
+                        details += $"\nCancellation reason: {ticket.CancellationReason}";
+                    }
+
+                    return (details, false, null);
+                }
+
+                case "propose_ticket":
+                {
+                    var title = TryGetString(input, "title");
+                    var description = TryGetString(input, "description") ?? string.Empty;
+                    if (string.IsNullOrWhiteSpace(title))
+                    {
+                        return ("A ticket title is required.", true, null);
+                    }
+
+                    return ("Drafted for the user to review and approve in the chat.", false, (title, description));
+                }
+
+                default:
+                    return ($"Unknown tool '{toolUse.Name}'.", true, null);
             }
         }
     }
@@ -346,21 +305,9 @@ public sealed class LiveAgentChatService(
             ? value.GetString()
             : null;
 
-    private static string Truncate(string text) =>
-        text.Length > MaxToolResultChars ? text[..MaxToolResultChars] + "\n\n[truncated]" : text;
-
     private static IReadOnlyList<LlmToolDefinition> BuildTools() =>
     [
-        new LlmToolDefinition(
-            "list_files",
-            "List files and folders directly inside a path within this project's repository (read-only, sandboxed). " +
-            "Only call this for a path relevant to the user's current question - do not explore unrelated parts of the repo.",
-            """{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path within the repository. Omit or leave empty to list the repository root."}}}"""),
-        new LlmToolDefinition(
-            "read_file",
-            "Read the contents of one file within this project's repository (read-only, sandboxed). " +
-            "Only read files that are directly relevant to answering the user's current question.",
-            """{"type":"object","properties":{"path":{"type":"string","description":"Relative file path within the repository to read."}},"required":["path"]}"""),
+        .. GitReadOnlyTools.Definitions,
         new LlmToolDefinition(
             "list_tickets",
             "List this project's tickets (id, title, status only), optionally filtered by status, to see what exists " +

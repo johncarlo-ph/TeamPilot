@@ -7,6 +7,9 @@
 
   <div class="d-flex align-items-start justify-content-between mt-2 mb-4">
     <div>
+      <div class="mb-1">
+        <app-status-badge [value]="ticket.status"></app-status-badge>
+      </div>
       <h1 class="h3 mb-1">{{ ticket.title }}</h1>
       <p class="ticket-description text-body-secondary mb-0">
         {{ descriptionPreview() || 'No description.' }}
@@ -20,7 +23,6 @@
           {{ descriptionExpanded() ? 'See less' : 'See more' }}
         </button>
       }
-      <app-status-badge [value]="ticket.status"></app-status-badge>
       @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
         <p class="small text-body-secondary fst-italic mb-0 mt-1">
           Reason: {{ ticket.cancellationReason }}
@@ -29,14 +31,18 @@
     </div>
     <div class="d-flex align-items-center gap-2">
       @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
-        <button
-          type="button"
-          class="btn btn-sm btn-primary"
-          [disabled]="starting()"
-          (click)="startPipeline()"
-        >
-          {{ starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline' }}
-        </button>
+        @if (ticket.pipelineRunning) {
+          <span class="small text-body-secondary fst-italic">Pipeline running&hellip;</span>
+        } @else {
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            [disabled]="starting()"
+            (click)="startPipeline()"
+          >
+            {{ starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline' }}
+          </button>
+        }
       }
       @if (
         ticket.status === 'ToDo' ||

@@ -43,9 +43,9 @@ public class LiveAgentChatController(ILiveAgentChatService chatService) : Contro
     }
 
     [HttpPost("api/projects/{projectId:guid}/live-agent/conversations/{conversationId:guid}/messages/{messageId:guid}/approve-ticket")]
-    public async Task<ActionResult<ChatMessageDto>> ApproveTicket(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken)
+    public async Task<ActionResult<ChatMessageDto>> ApproveTicket(Guid projectId, Guid conversationId, Guid messageId, [FromBody] ApproveTicketRequest request, CancellationToken cancellationToken)
     {
-        var message = await chatService.ApproveTicketAsync(projectId, conversationId, messageId, cancellationToken);
+        var message = await chatService.ApproveTicketAsync(projectId, conversationId, messageId, request, cancellationToken);
         return Ok(message);
     }
 

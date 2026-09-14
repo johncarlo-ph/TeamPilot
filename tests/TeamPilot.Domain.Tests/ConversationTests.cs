@@ -143,9 +143,21 @@ public class ConversationTests
         var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
         var ticketId = Guid.NewGuid();
 
-        message.MarkTicketCreated(ticketId);
+        message.MarkTicketCreated(ticketId, "Fix login bug", "desc");
 
         Assert.Equal(ticketId, message.CreatedTicketId);
+    }
+
+    [Fact]
+    public void MarkTicketCreated_EditedTitleAndDescription_OverwritesProposedValues()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+        var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
+
+        message.MarkTicketCreated(Guid.NewGuid(), "Fix Google login bug", "Edited description");
+
+        Assert.Equal("Fix Google login bug", message.ProposedTicketTitle);
+        Assert.Equal("Edited description", message.ProposedTicketDescription);
     }
 
     [Fact]
@@ -153,9 +165,9 @@ public class ConversationTests
     {
         var conversation = Conversation.Create(ProjectId, AgentId);
         var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
-        message.MarkTicketCreated(Guid.NewGuid());
+        message.MarkTicketCreated(Guid.NewGuid(), "Fix login bug", "desc");
 
-        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid(), "Fix login bug", "desc"));
     }
 
     [Fact]
@@ -164,7 +176,7 @@ public class ConversationTests
         var conversation = Conversation.Create(ProjectId, AgentId);
         var message = conversation.AddMessage(ChatMessageRole.User, "What does this project do?");
 
-        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid(), "Fix login bug", "desc"));
     }
 
     [Fact]
@@ -174,7 +186,7 @@ public class ConversationTests
         var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
         message.RejectTicket();
 
-        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid()));
+        Assert.Throws<ChatMessageTicketApprovalException>(() => message.MarkTicketCreated(Guid.NewGuid(), "Fix login bug", "desc"));
     }
 
     [Fact]
@@ -203,7 +215,7 @@ public class ConversationTests
     {
         var conversation = Conversation.Create(ProjectId, AgentId);
         var message = conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
-        message.MarkTicketCreated(Guid.NewGuid());
+        message.MarkTicketCreated(Guid.NewGuid(), "Fix login bug", "desc");
 
         Assert.Throws<ChatMessageTicketApprovalException>(() => message.RejectTicket());
     }

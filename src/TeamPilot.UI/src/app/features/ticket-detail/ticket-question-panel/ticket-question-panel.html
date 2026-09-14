@@ -28,7 +28,14 @@
     </div>
     @if (pendingQuestion(); as pending) {
       <div class="card-footer">
-        @if (pending.kind === 'Question') {
+        @if (pending.kind === 'Question' || pending.kind === 'Decision') {
+          @if (pending.kind === 'Decision') {
+            <p class="small text-body-secondary fst-italic mb-2">
+              An agent can't cancel a ticket itself - if the right call is to abandon this
+              ticket, use the <strong>Cancel Ticket</strong> button above instead of answering
+              below. Answer below only if the pipeline should continue anyway.
+            </p>
+          }
           <div class="d-flex gap-2">
             <textarea
               class="form-control"
@@ -36,6 +43,7 @@
               placeholder="Type your answer..."
               [ngModel]="answerText()"
               (ngModelChange)="answerText.set($event)"
+              (keydown.enter)="onAnswerKeydown($event)"
               [attr.disabled]="submitting() ? true : null"
             ></textarea>
             <button

@@ -111,8 +111,10 @@ who sent it (the Live Agent's own replies are labeled **Live Agent**).
 If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
 card right in the chat, with **Create ticket** and **Reject** buttons side by side. Before
 drafting, it checks the board's existing tickets and will call out related or duplicate ones in
-the draft when relevant. Nothing is created until you click **Create ticket**; the Live Agent
-never adds a ticket to the board on its own. Once you approve it, the new ticket appears on the
+the draft when relevant. Not happy with the wording? Click the ✏️ button on the card to edit the
+title and description right there before creating it — **Create ticket** then uses your edited
+text instead of the original draft. Nothing is created until you click **Create ticket**; the
+Live Agent never adds a ticket to the board on its own. Once you approve it, the new ticket appears on the
 board (in To Do) the next time the board polls, just like one you created yourself with
 **New Ticket**, and the card shows a **Ticket created** badge instead of the buttons. If the
 draft isn't what you wanted, click **Reject** instead — nothing is created, and the card shows a
@@ -168,7 +170,7 @@ fails outright — the ticket moves to **Blocked** instead of continuing on to t
 
 ### Blocked tickets
 
-A ticket becomes Blocked in exactly two situations, both handled the same way on its detail page:
+A ticket becomes Blocked in exactly three situations, all handled on its detail page:
 
 - **An agent asked a clarifying question.** A stage can end its work with a question instead of a
   finished result when something is genuinely ambiguous — which library to use, which of two
@@ -176,15 +178,20 @@ A ticket becomes Blocked in exactly two situations, both handled the same way on
   question; type your answer and send it. The ticket unblocks and the whole pipeline runs again
   immediately, with that stage using your answer to continue (earlier, already-settled stages
   just briefly reaffirm their prior conclusion rather than redoing their work).
+- **An agent raised a proceed-or-cancel decision** — for example, it noticed this ticket conflicts
+  with another one already in flight. An agent can never cancel a ticket itself, so the panel
+  shows a reminder above the answer box: if abandoning the ticket is the right call, use the
+  **Cancel Ticket** button above instead of typing a reply. Only type an answer if the pipeline
+  should continue anyway despite the conflict.
 - **A known Git or LLM failure occurred** — a push was rejected, the LLM provider's API failed
   after retrying. The same panel shows the failure message and a **Retry Pipeline** button
   instead of an answer box, since there's nothing to type - retrying just runs the pipeline again
   from the start.
 
-Every question and failure the ticket has ever hit stays listed here as a running history, even
-after you've answered or retried past it — the panel doesn't disappear once the ticket moves on.
-A Blocked ticket can also be **Cancel**led like any other pre-merge ticket, if it's not worth
-resolving.
+Every question, decision, and failure the ticket has ever hit stays listed here as a running
+history, even after you've answered or retried past it — the panel doesn't disappear once the
+ticket moves on. A Blocked ticket can also be **Cancel**led like any other pre-merge ticket, if
+it's not worth resolving.
 
 Not every failure blocks the ticket this way — only the two categories above (a stage asking a
 question, or a known Git/LLM failure). A genuinely unexpected error still surfaces as a plain
@@ -198,7 +205,10 @@ panels. This page also polls for updates, roughly every 10 seconds.
 **Agent assignments & commits** — lists every agent assigned to the ticket and when. While the
 ticket is To Do or In Progress, a **Start** (or **Run Pipeline**, once it's already In Progress)
 button runs the agent pipeline described above — the same action as dragging the card, available
-here for retrying a failed run or re-running after a review's *Request Changes*. The Commits
+here for retrying a failed run or re-running after a review's *Request Changes*. Whenever a run is
+actually in progress — right after you click it, or because it was triggered another way (a
+*Request Changes* review, answering a question, retrying a failure) — the button is replaced with
+a "Pipeline running…" note instead of staying there to be clicked again. The Commits
 panel lists every commit the ticket has picked up (short hash, message, branch, line-by-line
 diff) — a retried Coding attempt shows up as an additional commit, unless it's a
 *Request Changes* re-run and Coding itself decides no code change is actually needed for your

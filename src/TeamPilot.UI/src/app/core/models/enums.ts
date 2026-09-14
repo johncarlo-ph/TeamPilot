@@ -5,7 +5,7 @@ export type TicketStatus = 'ToDo' | 'InProgress' | 'ForReview' | 'Done' | 'Cance
 
 export const TICKET_STATUSES: TicketStatus[] = ['ToDo', 'InProgress', 'ForReview', 'Done', 'Cancelled', 'Blocked'];
 
-export type TicketQuestionKind = 'Question' | 'Failure';
+export type TicketQuestionKind = 'Question' | 'Failure' | 'Decision';
 
 export type TicketQuestionStatus = 'Pending' | 'Answered';
 

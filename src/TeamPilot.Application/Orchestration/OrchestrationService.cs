@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,14 +34,25 @@ namespace TeamPilot.Application.Orchestration;
 /// it can decide for itself whether the feedback actually changes anything for its part of the
 /// work, rather than blindly redoing it.
 ///
-/// Two things can pause a run instead of letting it finish: a stage can end its response with a
-/// <c>QUESTION: ...</c> marker asking for human clarification, or a known operational failure
+/// Research, Design, and Coding each get on-demand, read-only access to the ticket branch's
+/// current files via a bounded <c>list_files</c>/<c>read_file</c> tool-use loop (see
+/// <see cref="RunStagePromptAsync"/> and <see cref="TeamPilot.Application.Git.GitReadOnlyTools"/>)
+/// so they ground their work in real code instead of the ticket description alone, without a
+/// static snapshot's size caps silently dropping a file an agent actually needs; only Coding
+/// ever writes back to Git.
+///
+/// Three things can pause a run instead of letting it finish: a stage can end its response with a
+/// <c>QUESTION: ...</c> marker asking for human clarification, a <c>DECISION: ...</c> marker when
+/// continuing depends on whether the ticket should proceed or be cancelled (e.g. it conflicts with
+/// another ticket - every stage is told it has no ability to cancel a ticket itself, only to raise
+/// this for a human to act on via the ticket's own Cancel action), or a known operational failure
 /// (<see cref="GitOperationException"/>/<see cref="LlmOperationException"/>) can occur. Either
 /// way the ticket is <see cref="Ticket.Block"/>-ed, a <see cref="TicketQuestion"/> records what
 /// happened, and the run returns early instead of reaching <c>ForReview</c>. Resuming (answering
-/// the question, or retrying a failure - see <c>TicketQuestionService</c>) unblocks the ticket
-/// and calls this method again, which threads the human's answer into the one stage that asked,
-/// via the same "hand the stage its own prior output" mechanism used for review feedback.
+/// the question or decision, or retrying a failure - see <c>TicketQuestionService</c>) unblocks
+/// the ticket and calls this method again, which threads the human's answer into the one stage
+/// that asked, via the same "hand the stage its own prior output" mechanism used for review
+/// feedback.
 /// </summary>
 public sealed class OrchestrationService(
     ITicketRepository ticketRepository,
@@ -60,6 +70,7 @@ public sealed class OrchestrationService(
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IBackgroundTaskRunner backgroundTaskRunner,
+    IPipelineRunTracker pipelineRunTracker,
     ILogger<OrchestrationService> logger) : IOrchestrationService
 {
     private static readonly Regex VerdictPattern =
@@ -71,15 +82,25 @@ public sealed class OrchestrationService(
     private static readonly Regex QuestionPattern =
         new(@"QUESTION:\s*(.+)", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
 
+    private static readonly Regex DecisionPattern =
+        new(@"DECISION:\s*(.+)", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled);
+
     private static readonly Regex FileBlockPattern =
         new(@"<file\s+path=[""'](?<path>[^""']+)[""']\s*>(?<content>.*?)</file>", RegexOptions.Singleline | RegexOptions.Compiled);
 
     /// <summary>
-    /// The Coding stage's single prompt now includes a bounded snapshot of the ticket branch's own
-    /// current files (see <see cref="AppendRepositorySnapshot"/>) plus a request for full per-file
-    /// content back, so it needs far more headroom than every other stage's default 1024.
+    /// Shared by every tool-loop stage call (Research, Design, Coding - see
+    /// <see cref="RunStagePromptAsync"/>): Coding's final response must include the complete new
+    /// content of every file it touches (see <see cref="BuildStagePrompt"/>'s <c>&lt;file&gt;</c>
+    /// output contract), and Research/Design's findings/design summary for a real, non-trivial
+    /// project can easily run past a small default too - a real run against this project's own
+    /// sandbox hit `stop_reason: max_tokens` and got cut off mid-sentence at the old 1024 default,
+    /// which is what raised this to something with real headroom for a project this project's
+    /// size. Testing and any other custom-added role are unaffected - they still get
+    /// <see cref="TeamPilot.Application.Llm.LlmRequest"/>'s own default (1024) via plain
+    /// <c>SendPromptAsync</c>, since they don't ground themselves in repo content the same way.
     /// </summary>
-    private const int CodingStageMaxTokens = 8192;
+    private const int StageToolLoopMaxTokens = 8192;
 
     public async Task<TicketPipelineResultDto> RunPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default)
     {
@@ -207,8 +228,16 @@ public sealed class OrchestrationService(
                 }
                 else
                 {
-                    var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
-                    output = response.Content;
+                    // Research and Design get the same on-demand, sandboxed list_files/read_file
+                    // tool access into the ticket's branch that Coding uses (see
+                    // RunCodingStageAsync/RunStagePromptAsync) - grounding their
+                    // investigation/design in real code instead of the ticket description alone.
+                    // Neither role ever writes back to Git, so this stays read-only in practice.
+                    // Every other role (e.g. Testing, or a custom admin-added agent) gets no repo
+                    // access and its prompt is unchanged.
+                    output = agent.Role is AgentRole.Research or AgentRole.Design
+                        ? await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken)
+                        : (await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken)).Content;
                     steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, null));
 
                     logger.LogInformation(
@@ -218,6 +247,12 @@ public sealed class OrchestrationService(
                         ticket.Id,
                         ticket.ProjectId,
                         output);
+                }
+
+                var decision = ParseDecision(output);
+                if (decision is not null)
+                {
+                    return await BlockOnDecisionAsync(ticket, agent.Id, decision, steps, cancellationToken);
                 }
 
                 var question = ParseQuestion(output);
@@ -262,7 +297,7 @@ public sealed class OrchestrationService(
             ticket.MoveToReview();
             await unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, finalVerdictPassed, finalVerdictAttempts);
+            return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, finalVerdictPassed, finalVerdictAttempts);
         }
         catch (Exception ex) when (ex is GitOperationException or LlmOperationException)
         {
@@ -279,11 +314,20 @@ public sealed class OrchestrationService(
 
         RunPipelineDetached(ticketId);
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticketId));
     }
 
     public void RunPipelineDetached(Guid ticketId)
     {
+        // Marked synchronously, before the background work is even dispatched, so a TicketDto
+        // built right after this call (see StartPipelineAsync and every other caller) already
+        // reports PipelineRunning: true - a caller polling shortly after would otherwise have to
+        // wait for a race-prone Task.Run continuation to actually start. Safe to reference
+        // pipelineRunTracker directly here (unlike the scoped dependencies below, which the
+        // delegate must resolve fresh from its own scope) since it's a true singleton with no
+        // scope of its own to outlive.
+        pipelineRunTracker.MarkRunning(ticketId);
+
         backgroundTaskRunner.Run(async (services, backgroundCancellationToken) =>
         {
             var backgroundOrchestrationService = services.GetRequiredService<IOrchestrationService>();
@@ -294,6 +338,10 @@ public sealed class OrchestrationService(
             catch (Exception ex)
             {
                 await BlockOnBackgroundFailureAsync(services, ticketId, ex, backgroundCancellationToken);
+            }
+            finally
+            {
+                pipelineRunTracker.MarkFinished(ticketId);
             }
         });
     }
@@ -351,7 +399,26 @@ public sealed class OrchestrationService(
         await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - an agent asked a clarifying question.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
+        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
+    }
+
+    /// <summary>
+    /// Persists a stage's proceed-or-cancel decision point, blocks the ticket, and returns an
+    /// early-exit result the same way as <see cref="BlockOnQuestionAsync"/> - the only difference
+    /// is the <see cref="TicketQuestionKind.Decision"/> kind, which the ticket detail page uses to
+    /// point the human at the ticket's own Cancel action instead of a free-text reply.
+    /// </summary>
+    private async Task<TicketPipelineResultDto> BlockOnDecisionAsync(Ticket ticket, Guid agentId, string questionText, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
+    {
+        var question = TicketQuestion.CreateDecision(ticket.Id, agentId, questionText);
+        await ticketQuestionRepository.AddAsync(question, cancellationToken);
+
+        ticket.Block();
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - an agent raised a proceed-or-cancel decision.", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }
 
     /// <summary>
@@ -373,7 +440,7 @@ public sealed class OrchestrationService(
         await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - {exception.Message}", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
+        return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }
 
     /// <summary>
@@ -405,38 +472,30 @@ public sealed class OrchestrationService(
         bool checkForNoChanges,
         CancellationToken cancellationToken)
     {
-        // Gathered by plain Git/filesystem reads (no LLM call), so the agent edits against the
-        // ticket branch's real current files while still costing exactly one Claude API call for
-        // this stage invocation. Locked on its own, released before the (slow) LLM call below,
-        // rather than held for the whole method - see GitRepositoryLock.
-        IReadOnlyDictionary<string, string> snapshot;
-        await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
+        // list_files/read_file tool calls (see RunStagePromptAsync) ground edits in the ticket
+        // branch's real current files, on demand, instead of a capped static snapshot that could
+        // silently drop a file this edit actually needs.
+        var responseContent = await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken);
+
+        // A clarifying question or a proceed-or-cancel decision pre-empts everything else - no
+        // commit/push, regardless of whether this is a reaffirm-style invocation. The outer
+        // loop's own ParseDecision/ParseQuestion checks (on this same output) are what
+        // actually block the ticket.
+        if (ParseDecision(responseContent) is not null || ParseQuestion(responseContent) is not null)
         {
-            snapshot = await gitService.GetRepositorySnapshotAsync(project.RepositoryPath, ticket.BranchName!, cancellationToken);
-        }
-
-        var promptWithContext = AppendRepositorySnapshot(prompt, snapshot);
-
-        var response = await llmConnector.SendPromptAsync(new LlmRequest(promptWithContext, CodingStageMaxTokens), cancellationToken);
-
-        // A clarifying question pre-empts everything else - no commit/push, regardless of
-        // whether this is a reaffirm-style invocation. The outer loop's own ParseQuestion check
-        // (on this same response.Content) is what actually blocks the ticket.
-        if (ParseQuestion(response.Content) is not null)
-        {
-            return (response.Content, null);
+            return (responseContent, null);
         }
 
         // Only asked of - and only honored for - a Coding stage reaffirming its own prior output
         // (see priorOwnOutput/BuildStagePrompt): a "no changes needed" response must not still
         // produce a no-op commit. A missing or unparseable marker falls through and commits as
         // usual, matching every other Coding invocation.
-        if (checkForNoChanges && ParseChanges(response.Content) == false)
+        if (checkForNoChanges && ParseChanges(responseContent) == false)
         {
-            return (response.Content, null);
+            return (responseContent, null);
         }
 
-        var fileChanges = ParseFileChanges(response.Content);
+        var fileChanges = ParseFileChanges(responseContent);
         if (fileChanges.Count == 0)
         {
             // Unlike the explicit CHANGES: NONE marker above, this is an unformatted response -
@@ -446,7 +505,7 @@ public sealed class OrchestrationService(
                 "Coding agent {AgentId} produced no parseable <file> blocks for ticket {TicketId}; nothing committed.",
                 agent.Id,
                 ticket.Id);
-            return (response.Content, null);
+            return (responseContent, null);
         }
 
         var message = attempt == 1
@@ -472,7 +531,7 @@ public sealed class OrchestrationService(
             var currentStatus = await ticketRepository.GetStatusAsync(ticket.Id, cancellationToken);
             if (currentStatus == TicketStatus.Cancelled)
             {
-                return (response.Content, null);
+                return (responseContent, null);
             }
 
             var commitResult = await gitService.CommitFilesAsync(
@@ -493,8 +552,57 @@ public sealed class OrchestrationService(
 
             var commitDto = new CommitDto(commit.Id, commit.TicketId, commit.BranchName, commit.CommitHash, commit.Message, commit.DiffContent, commit.AuthorAgentId, commit.CreatedAtUtc);
 
-            return (response.Content, commitDto);
+            return (responseContent, commitDto);
         }
+    }
+
+    /// <summary>
+    /// A stage gets more round-trips than the Live Agent chat's default (see
+    /// <see cref="TeamPilot.Application.Llm.ToolLoopRunner.DefaultMaxRoundtrips"/>) - exploring a
+    /// repo to implement or investigate a change plausibly takes more back-and-forth than
+    /// answering a single chat question.
+    /// </summary>
+    private const int StageMaxToolRoundtrips = 10;
+
+    /// <summary>
+    /// Runs <paramref name="prompt"/> through the bounded <c>list_files</c>/<c>read_file</c>
+    /// tool-use loop (see <see cref="TeamPilot.Application.Llm.ToolLoopRunner"/> and
+    /// <see cref="TeamPilot.Application.Git.GitReadOnlyTools"/>) - shared by the Coding, Research,
+    /// and Design stages (see <see cref="RunCodingStageAsync"/> and <see cref="RunPipelineAsync"/>)
+    /// so every stage that reads the sandbox does so on demand, against <paramref name="ticket"/>'s
+    /// own branch, instead of a size-capped snapshot gathered once up front. If the model never
+    /// stops asking for tools within <see cref="StageMaxToolRoundtrips"/>, the fallback is phrased
+    /// as a <c>QUESTION:</c> (see <c>ParseQuestion</c>/<c>BlockOnQuestionAsync</c>) so that
+    /// exhaustion blocks the ticket for a human to look at, instead of silently producing no
+    /// commit and letting the run continue as if the stage had nothing to do.
+    /// </summary>
+    private Task<string> RunStagePromptAsync(string prompt, Project project, Ticket ticket, int maxTokens, CancellationToken cancellationToken) =>
+        ToolLoopRunner.RunAsync(
+            llmConnector,
+            [LlmMessage.User(prompt)],
+            system: null,
+            GitReadOnlyTools.Definitions,
+            maxTokens,
+            (toolUse, ct) => ExecuteGitToolAsync(project, ticket, toolUse, ct),
+            cancellationToken,
+            maxRoundtrips: StageMaxToolRoundtrips,
+            fallbackText: "QUESTION: I couldn't finish exploring this ticket's branch and produce an answer within my available tool-call budget. Please retry, or narrow this ticket's scope.",
+            onRound: (round, response) =>
+            {
+                var toolNames = string.Join(", ", response.Content.OfType<LlmToolUseBlock>().Select(t => t.Name));
+                logger.LogInformation(
+                    "Ticket {TicketId} tool-loop round {Round}: stop reason {StopReason}{ToolNames}",
+                    ticket.Id,
+                    round + 1,
+                    response.StopReason,
+                    string.IsNullOrEmpty(toolNames) ? string.Empty : $", tools requested: {toolNames}");
+            });
+
+    private async Task<(string ResultText, bool IsError)> ExecuteGitToolAsync(
+        Project project, Ticket ticket, LlmToolUseBlock toolUse, CancellationToken cancellationToken)
+    {
+        var result = await GitReadOnlyTools.TryExecuteAsync(gitService, project.RepositoryPath, ticket.BranchName, toolUse, cancellationToken);
+        return result ?? ($"Unknown tool '{toolUse.Name}'.", true);
     }
 
     private async Task LinkBranchAsync(Ticket ticket, Project project, CancellationToken cancellationToken)
@@ -568,6 +676,15 @@ public sealed class OrchestrationService(
             prompt += " End your response with a line reading exactly 'RESULT: PASS' or 'RESULT: FAIL'.";
         }
 
+        if (agent.Role is AgentRole.Research or AgentRole.Design or AgentRole.Coding)
+        {
+            prompt += " You have list_files and read_file tools to inspect this ticket's branch - use them " +
+                "to check whether a file exists or to see its current contents rather than assuming or " +
+                "guessing. You have a limited number of tool calls available, so explore efficiently " +
+                "(prefer targeted paths over broad, repeated listing) and give your final answer as soon " +
+                "as you have what you need - do not keep exploring indefinitely.";
+        }
+
         if (agent.Role == AgentRole.Coding)
         {
             if (priorOwnOutput is not null)
@@ -575,12 +692,18 @@ public sealed class OrchestrationService(
                 prompt += " Also end your response with a line reading exactly 'CHANGES: NONE' if you made no code changes, or 'CHANGES: MADE' if you did.";
             }
 
-            prompt += " For every file you create or modify, include its complete new content (the whole " +
-                "file, not a diff) in its own block formatted exactly as <file path=\"relative/path/from/repo/root\">" +
+            prompt += " Use read_file to get a file's current full content before modifying it. For every " +
+                "file you create or modify, include its complete new content (the whole file, not a diff) " +
+                "in its own block formatted exactly as <file path=\"relative/path/from/repo/root\">" +
                 "...entire file content...</file> - one block per file, with no other text inside the tags.";
         }
 
         prompt += " If you need clarification from a human before you can continue, respond with ONLY a single line reading 'QUESTION: <your question>' and nothing else.";
+
+        prompt += " You cannot cancel, approve, merge, or otherwise change this ticket's status yourself - only a human can do that, through the app's own Cancel Ticket action. " +
+            "If continuing depends on whether this ticket should proceed or be cancelled (e.g. it conflicts with another ticket), respond with ONLY a single line reading " +
+            "'DECISION: <your question, explaining the conflict and noting that the ticket should be cancelled manually if that is the right call>' and nothing else - " +
+            "never claim to have cancelled, closed, or changed the ticket's status yourself.";
 
         return prompt;
     }
@@ -638,6 +761,18 @@ public sealed class OrchestrationService(
     }
 
     /// <summary>
+    /// Parses a 'DECISION: &lt;text&gt;' marker the same way as <see cref="ParseQuestion"/> - a
+    /// stage uses this instead of a plain 'QUESTION:' when continuing depends on whether the
+    /// ticket should proceed or be cancelled, so the ticket detail page can point the human at
+    /// the ticket's own Cancel action rather than treating this like an ordinary clarification.
+    /// </summary>
+    private static string? ParseDecision(string output)
+    {
+        var match = DecisionPattern.Match(output);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+
+    /// <summary>
     /// Parses every <c>&lt;file path="..."&gt;...&lt;/file&gt;</c> block out of a Coding stage's raw
     /// response (see the output contract appended in <see cref="BuildStagePrompt"/>). A path that
     /// appears more than once keeps only its last occurrence's content, matching the model's final
@@ -688,28 +823,4 @@ public sealed class OrchestrationService(
         return content;
     }
 
-    /// <summary>
-    /// Renders the Coding stage's repository snapshot (see <see cref="IGitService.GetRepositorySnapshotAsync"/>)
-    /// as a labeled context block appended to its prompt - plain string building, not an LLM call, so
-    /// the Coding stage still costs exactly one Claude API call per invocation. An empty snapshot (e.g.
-    /// a brand-new repository) adds nothing.
-    /// </summary>
-    private static string AppendRepositorySnapshot(string prompt, IReadOnlyDictionary<string, string> snapshot)
-    {
-        if (snapshot.Count == 0)
-        {
-            return prompt;
-        }
-
-        var builder = new StringBuilder(prompt);
-        builder.Append("\n\nCurrent contents of files already in this ticket's branch:\n\n");
-
-        foreach (var (path, content) in snapshot)
-        {
-            builder.Append("### ").Append(path).Append('\n');
-            builder.Append("```\n").Append(content).Append("\n```\n\n");
-        }
-
-        return builder.ToString();
-    }
 }

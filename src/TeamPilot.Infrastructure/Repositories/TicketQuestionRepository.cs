@@ -30,7 +30,7 @@ public class TicketQuestionRepository(TeamPilotDbContext dbContext) : ITicketQue
     public Task<TicketQuestion?> GetMostRecentUnconsumedAnsweredAsync(Guid ticketId, CancellationToken cancellationToken = default) =>
         dbContext.TicketQuestions
             .Where(q => q.TicketId == ticketId
-                && q.Kind == TicketQuestionKind.Question
+                && (q.Kind == TicketQuestionKind.Question || q.Kind == TicketQuestionKind.Decision)
                 && q.Status == TicketQuestionStatus.Answered
                 && !q.Consumed)
             .OrderByDescending(q => q.AnsweredAtUtc)

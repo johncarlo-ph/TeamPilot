@@ -56,8 +56,10 @@ failure - see [docs/application.md](application.md)), so it's queried standalone
 there to be anything to pause) and `Unblock` only from `Blocked` back to `InProgress` - there's no
 `Blocked -> ForReview` shortcut, so a paused ticket always goes through the pipeline again
 (`OrchestrationService.RunPipelineAsync`) to reach review, same as any other run.
-`OrchestrationService` calls `Block()` itself, either when a stage's response contains a
-`QUESTION: ...` marker or when a known operational failure occurs
+`OrchestrationService` calls `Block()` itself, when a stage's response contains a `QUESTION: ...`
+marker, a `DECISION: ...` marker (continuing depends on whether the ticket should proceed or be
+cancelled - every stage is told it has no ability to cancel a ticket itself, only to raise this
+for a human to act on), or when a known operational failure occurs
 (`GitOperationException`/`LlmOperationException`) - either way a `TicketQuestion` is created
 recording what happened, which is what a human answers or retries against
 (`TicketQuestionService`) to call `Unblock()` and resume. `ApprovalGateService` also calls
@@ -109,7 +111,7 @@ automatic branch delete.
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
-| `TicketQuestion` | A record of why a ticket was blocked - a clarifying question or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateFailure`, `Answer`, `MarkConsumed` |
+| `TicketQuestion` | A record of why a ticket was blocked - a clarifying question, a proceed-or-cancel decision point, or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateDecision`, `CreateFailure`, `Answer`, `MarkConsumed` |
 | `Conversation` | One chat session with a project's `LiveAgent` - a project can have any number | `Create`, `Rename`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)*, `MarkTicketCreated`, `RejectTicket` |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
@@ -181,7 +183,10 @@ the user who sent it captured at send time (so the chat history keeps showing wh
 if the user is later renamed or removed) — it's always null for an assistant message. Nothing
 about creating a `ChatMessage` creates a real `Ticket`; that only happens if/when the user
 approves the draft (see [docs/application.md](application.md)). Approval calls
-`ChatMessage.MarkTicketCreated(ticketId)`, which sets `CreatedTicketId`; dismissing a draft
+`ChatMessage.MarkTicketCreated(ticketId, finalTitle, finalDescription)`, which overwrites
+`ProposedTicketTitle`/`ProposedTicketDescription` with the (possibly user-edited) final values
+before setting `CreatedTicketId`, so the stored draft always matches what was actually created;
+dismissing a draft
 instead calls `ChatMessage.RejectTicket()`, which sets `TicketRejected`. Both throw
 `ChatMessageTicketApprovalException` (a `DomainException`, mapped to 409) if the message has no
 `ProposedTicketTitle`, if the *other* decision was already made (you can't reject an approved

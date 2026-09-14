@@ -5,9 +5,14 @@ using TeamPilot.Domain.Exceptions;
 namespace TeamPilot.Domain.Entities;
 
 /// <summary>
-/// A record of why a ticket was blocked mid-pipeline - either an agent stage's clarifying
-/// question (<see cref="TicketQuestionKind.Question"/>) or a known operational failure
-/// (<see cref="TicketQuestionKind.Failure"/>, e.g. a Git or LLM call failure). References its
+/// A record of why a ticket was blocked mid-pipeline - an agent stage's clarifying question
+/// (<see cref="TicketQuestionKind.Question"/>), a stage's proceed-or-cancel decision point
+/// (<see cref="TicketQuestionKind.Decision"/> - e.g. a conflicting related ticket), or a known
+/// operational failure (<see cref="TicketQuestionKind.Failure"/>, e.g. a Git or LLM call
+/// failure). An agent can never cancel a ticket itself, so a <see cref="TicketQuestionKind.Decision"/>
+/// is still resolved the same way as a <see cref="TicketQuestionKind.Question"/> - by answering
+/// it to resume the pipeline - with an actual cancellation left to the human via the ticket's own
+/// Cancel action. References its
 /// <see cref="Ticket"/> and <see cref="Agent"/> by id only, matching how <see cref="StageExecution"/>
 /// relates to <see cref="Ticket"/> - not eagerly loaded onto <see cref="Ticket"/>, since a
 /// ticket can accumulate an unbounded number of these over its lifetime. See docs/domain.md.
@@ -66,6 +71,23 @@ public class TicketQuestion : Entity
         return Create(ticketId, agentId, TicketQuestionKind.Failure, failureMessage);
     }
 
+    /// <summary>
+    /// Raised when a stage's response indicates continuing depends on whether the ticket should
+    /// proceed or be cancelled (e.g. it conflicts with another in-flight ticket) - distinct from
+    /// <see cref="TicketQuestionKind.Question"/> only so the ticket detail page can point the
+    /// human at the ticket's own Cancel action instead of a free-text reply, since the agent
+    /// raising this has no ability to cancel the ticket itself.
+    /// </summary>
+    public static TicketQuestion CreateDecision(Guid ticketId, Guid? agentId, string questionText)
+    {
+        if (string.IsNullOrWhiteSpace(questionText))
+        {
+            throw new ArgumentException("Question text is required.", nameof(questionText));
+        }
+
+        return Create(ticketId, agentId, TicketQuestionKind.Decision, questionText);
+    }
+
     private static TicketQuestion Create(Guid ticketId, Guid? agentId, TicketQuestionKind kind, string prompt)
     {
         if (ticketId == Guid.Empty)
@@ -84,9 +106,10 @@ public class TicketQuestion : Entity
     }
 
     /// <summary>
-    /// Records a human's answer to a <see cref="TicketQuestionKind.Question"/> - a
-    /// <see cref="TicketQuestionKind.Failure"/> has nothing to "answer"; it's resolved by
-    /// retrying the pipeline instead (see <c>TicketQuestionService.RetryAsync</c>).
+    /// Records a human's answer to a <see cref="TicketQuestionKind.Question"/> or
+    /// <see cref="TicketQuestionKind.Decision"/> - a <see cref="TicketQuestionKind.Failure"/> has
+    /// nothing to "answer"; it's resolved by retrying the pipeline instead (see
+    /// <c>TicketQuestionService.RetryAsync</c>).
     /// </summary>
     public void Answer(string answer, string answeredBy)
     {
@@ -100,9 +123,9 @@ public class TicketQuestion : Entity
             throw new ArgumentException("Answered by is required.", nameof(answeredBy));
         }
 
-        if (Kind != TicketQuestionKind.Question)
+        if (Kind == TicketQuestionKind.Failure)
         {
-            throw new InvalidOperationException("Only a clarifying question can be answered - a failure is resolved by retrying the pipeline.");
+            throw new InvalidOperationException("Only a clarifying question or decision can be answered - a failure is resolved by retrying the pipeline.");
         }
 
         if (Status == TicketQuestionStatus.Answered)

@@ -28,6 +28,7 @@ public sealed class ApprovalGateService(
     IUnitOfWork unitOfWork,
     IValidator<SubmitReviewRequest> validator,
     IOrchestrationService orchestrationService,
+    IPipelineRunTracker pipelineRunTracker,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
@@ -85,7 +86,7 @@ public sealed class ApprovalGateService(
                 throw new ArgumentOutOfRangeException(nameof(request), request.Decision, "Unsupported review decision.");
         }
 
-        return TicketMappings.ToDto(ticket);
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     /// <summary>

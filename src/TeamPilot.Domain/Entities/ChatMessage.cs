@@ -54,7 +54,14 @@ public class ChatMessage : Entity
     /// no-op rather than calling this twice - it throws rather than silently overwriting, since
     /// a second, different ticket id here would almost certainly indicate a caller bug.
     /// </summary>
-    public void MarkTicketCreated(Guid ticketId)
+    /// <param name="ticketId">Id of the ticket that was created.</param>
+    /// <param name="finalTitle">
+    /// The title actually used to create the ticket. The user may have edited the draft in the
+    /// chat UI before approving, so this replaces <see cref="ProposedTicketTitle"/> to keep the
+    /// message's stored proposal consistent with what was really created.
+    /// </param>
+    /// <param name="finalDescription">Same as <paramref name="finalTitle"/>, for the description.</param>
+    public void MarkTicketCreated(Guid ticketId, string finalTitle, string? finalDescription)
     {
         if (string.IsNullOrWhiteSpace(ProposedTicketTitle))
         {
@@ -71,6 +78,13 @@ public class ChatMessage : Entity
             throw new ChatMessageTicketApprovalException("This message's proposed ticket was already rejected.");
         }
 
+        if (string.IsNullOrWhiteSpace(finalTitle))
+        {
+            throw new ArgumentException("The ticket's final title is required.", nameof(finalTitle));
+        }
+
+        ProposedTicketTitle = finalTitle.Trim();
+        ProposedTicketDescription = string.IsNullOrWhiteSpace(finalDescription) ? null : finalDescription.Trim();
         CreatedTicketId = ticketId;
         MarkUpdated();
     }

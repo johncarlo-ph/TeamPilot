@@ -13,6 +13,10 @@ export interface TicketDto {
   cancellationReason: string | null;
   createdAtUtc: string;
   updatedAtUtc: string | null;
+  // Whether a pipeline run is actually executing for this ticket right now - status alone can't
+  // tell: a ticket sits InProgress both while a run is actively executing and while it's idle,
+  // waiting for a human to manually trigger one (e.g. via "Run Pipeline").
+  pipelineRunning: boolean;
 }
 
 export interface TicketAgentAssignmentDto {
@@ -35,6 +39,7 @@ export interface TicketDetailDto {
   conflicts: ConflictDto[];
   createdAtUtc: string;
   updatedAtUtc: string | null;
+  pipelineRunning: boolean;
 }
 
 export interface CreateTicketRequest {

@@ -26,8 +26,8 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
 | [`Workflow/`](../src/TeamPilot.Application/Workflow) | Admin-configurable per-project agent workflow: add a blank custom agent, place/remove/reorder stages, and set/clear a stage's loop-back - see "The agent workflow is admin-configurable per project" below |
-| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure, and blocking the ticket when a stage asks a clarifying question or a known Git/LLM failure occurs |
-| [`TicketQuestions/`](../src/TeamPilot.Application/TicketQuestions) | Answering a blocked ticket's clarifying question, or retrying after a blocking failure - either way, unblocks the ticket and re-invokes `Orchestration/` |
+| [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure, and blocking the ticket when a stage asks a clarifying question, raises a proceed-or-cancel decision, or a known Git/LLM failure occurs |
+| [`TicketQuestions/`](../src/TeamPilot.Application/TicketQuestions) | Answering a blocked ticket's clarifying question or decision, or retrying after a blocking failure - either way, unblocks the ticket and re-invokes `Orchestration/` |
 | [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat sessions with its `LiveAgent` - any project member can start their own and every member sees the full list; each session persists its own conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
@@ -230,39 +230,54 @@ Always ends by moving the ticket to `ForReview` once the sequence runs out, whet
 last loop-bounded stage ever passed - the retried commits and final verdict are the visible trail
 for a human reviewer.
 
-**Two things short-circuit a run before it reaches `ForReview`, blocking the ticket instead.**
+**Three things short-circuit a run before it reaches `ForReview`, blocking the ticket instead.**
 Every stage's prompt is told: end the response with a `QUESTION: <text>` marker line if it needs
 human clarification before it can continue (parsed the same way as the existing `RESULT:
 PASS/FAIL` and `CHANGES: NONE/MADE` markers). When a stage's output contains one,
 `RunPipelineAsync` stops immediately - for a Coding stage this is checked *inside*
 `RunCodingStageAsync`, before its commit/push, since that method otherwise runs to completion
 unconditionally - persists a `TicketQuestion` (`TicketQuestion.CreateQuestion`), and calls
-`ticket.Block()`. Separately, the whole run (the initial branch-link plus the entire stage loop)
-is wrapped in a single `try/catch` for exactly two exception types: `GitOperationException` and
-`LlmOperationException` (a new exception, mirroring `GitOperationException`'s shape, that
-`ClaudeLlmConnector` throws when a Claude API call fails after the existing resilience pipeline's
-retries are exhausted - see [docs/infrastructure.md](infrastructure.md)). Catching either
-persists a `TicketQuestion.CreateFailure` instead and blocks the ticket the same way. This is a
-deliberately narrow safety net - **only** these two known "external system failed" categories
-block the ticket; any other exception (a genuine bug) still propagates to a 500 exactly as
-before, so it stays loud instead of quietly turning into a parked ticket. Either way,
-`RunPipelineAsync` returns early with `TicketPipelineResultDto.Blocked = true` and
-`BlockingQuestionId` set, instead of throwing or reaching `ticket.MoveToReview()`.
+`ticket.Block()`. Every stage's prompt is also told it has **no ability to cancel, approve,
+merge, or otherwise change the ticket's status itself** - only a human can do that, through the
+app's own Cancel Ticket action - and that when continuing depends on whether the ticket should
+proceed or be cancelled (e.g. it conflicts with another in-flight ticket), it must end the
+response with a `DECISION: <text>` marker instead of `QUESTION:`, never claiming to have
+cancelled or changed the ticket itself. A `DECISION:` marker is parsed and short-circuits the run
+the same way as `QUESTION:`, except it persists a `TicketQuestion.CreateDecision` (`Kind ==
+Decision`) instead, which the ticket detail page uses to point the human at the ticket's own
+Cancel action rather than a free-text reply. Separately, the whole run (the initial branch-link
+plus the entire stage loop) is wrapped in a single `try/catch` for exactly two exception types:
+`GitOperationException` and `LlmOperationException` (a new exception, mirroring
+`GitOperationException`'s shape, that `ClaudeLlmConnector` throws when a Claude API call fails
+after the existing resilience pipeline's retries are exhausted - see
+[docs/infrastructure.md](infrastructure.md)). Catching either persists a
+`TicketQuestion.CreateFailure` instead and blocks the ticket the same way. This is a deliberately
+narrow safety net - **only** these two known "external system failed" categories block the
+ticket; any other exception (a genuine bug) still propagates to a 500 exactly as before, so it
+stays loud instead of quietly turning into a parked ticket. Either way, `RunPipelineAsync`
+returns early with `TicketPipelineResultDto.Blocked = true` and `BlockingQuestionId` set, instead
+of throwing or reaching `ticket.MoveToReview()`.
 
 **Resuming a blocked ticket reuses the review-feedback threading mechanism above, generalized.**
-`TicketQuestionService.AnswerAsync` (answering a clarifying question) and `RetryAsync` (retrying
-after a failure - the most recent `TicketQuestion` must be `Kind == Failure`, since there's
-nothing to "answer") both call `ticket.Unblock()`, save, then kick the re-run off detached via
+`TicketQuestionService.AnswerAsync` (answering a clarifying question or a decision - both
+`Kind == Question` and `Kind == Decision` can be answered, since a decision is still resolved by
+the human's reply just like an ordinary question) and `RetryAsync` (retrying after a failure -
+the most recent `TicketQuestion` must be `Kind == Failure`, since there's nothing to "answer")
+both call `ticket.Unblock()`, save, then kick the re-run off detached via
 `IOrchestrationService.RunPipelineDetached` (see "Workflow integration" below) - same as
 `ApprovalGateService`'s `RequestChanges` branch does, and for the same reason: a re-run can take
 minutes, and the caller already has everything it needs (the ticket back on `InProgress`) without
 waiting on it. `RunPipelineAsync` looks up the most
-recently *answered but not yet consumed* question (`ITicketQuestionRepository.GetMostRecentUnconsumedAnsweredAsync`
+recently *answered but not yet consumed* question or decision
+(`ITicketQuestionRepository.GetMostRecentUnconsumedAnsweredAsync`
 - `Consumed` exists specifically because, unlike a `Review`, nothing else naturally supersedes an
 old answer) and, unlike `reviewFeedback` (threaded into every stage), threads it only into the
 one stage whose agent asked it - marking it consumed the moment it's actually used in that
 stage's prompt, not gated on the rest of the run succeeding. A failure carries no such context to
-thread; retrying just re-runs the pipeline and lets the same stage attempt its work again.
+thread; retrying just re-runs the pipeline and lets the same stage attempt its work again. If the
+human's answer to a decision is that the ticket should actually be cancelled, resuming the
+pipeline is the wrong move - they cancel it directly instead (`TicketService.CancelAsync`, via the
+ticket detail page's Cancel Ticket button), which never re-enters `RunPipelineAsync` at all.
 
 **An agent needs a current Constitution, Guideline, and Requirement instruction before it can be
 placed into a project's workflow.** `Agent.HasCompleteInstructions` (Domain) checks this; a
@@ -292,7 +307,11 @@ first) to every project member regardless of who started each one;
 session - a conversation isn't private to its creator. `SendMessageAsync` persists the user's
 message onto the specified `Conversation` (404 if it doesn't exist or belongs to a different
 project), then runs a bounded (max 6 round-trip) `ILlmConnector.SendConversationAsync` tool-use
-loop before persisting and returning the assistant's final text reply:
+loop before persisting and returning the assistant's final text reply. The loop mechanics
+themselves (`Application/Llm/ToolLoopRunner`) and the `list_files`/`read_file` tool definitions/
+dispatch (`Application/Git/GitReadOnlyTools`) are shared, generic building blocks - not specific
+to the Live Agent - reused as-is by the Research/Design/Coding pipeline stages' own tool-use loop
+(see [Workflow integration](#workflow-integration) below):
 
 - **Each persisted user message is stamped with the sender's display name** (`ICurrentUserContext.Name`,
   read off the caller's JWT — see [docs/api.md](api.md#authentication)) via
@@ -300,8 +319,10 @@ loop before persisting and returning the assistant's final text reply:
   within a session (any project member can post to any session, not just their own). Assistant
   messages carry no sender name.
 - **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
-  [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction),
-  `list_tickets` (wraps `ITicketRepository.ListAsync`, lean id/title/status rows),
+  [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction; the
+  same pair the pipeline stages use, just always reading whatever branch is currently checked
+  out rather than a specific ticket branch), `list_tickets` (wraps `ITicketRepository.ListAsync`,
+  lean id/title/status rows),
   `get_ticket(id)` (wraps `ITicketRepository.GetByIdAsync` for one ticket's full title/status/
   description/branch/cancellation reason — rejected as not found if the id belongs to a
   different project), and `propose_ticket(title, description)`. The model is instructed to use
@@ -311,13 +332,20 @@ loop before persisting and returning the assistant's final text reply:
   description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
   `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks
   "Create ticket" on that message in the UI, which calls
-  `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/conversations/{conversationId}/messages/{messageId}/approve-ticket`)
-  — it creates the ticket via the ordinary `ITicketService.CreateAsync` and, in the same call,
-  stamps the message's `CreatedTicketId` (`ChatMessage.MarkTicketCreated`) so every viewer -
+  `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/conversations/{conversationId}/messages/{messageId}/approve-ticket`,
+  body `ApproveTicketRequest(Title, Description)`)
+  — it creates the ticket via the ordinary `ITicketService.CreateAsync` using the request's
+  title/description and, in the same call, stamps the message's `CreatedTicketId`
+  (`ChatMessage.MarkTicketCreated(ticketId, finalTitle, finalDescription)`) so every viewer -
   including the same user after a reload - sees the draft as already approved and the
-  "Create ticket"/"Reject" pair doesn't reappear. `ApproveTicketAsync` is idempotent: approving
-  an already-approved message just returns its current state instead of creating a duplicate
-  ticket, which also covers a race between two users clicking the same draft. It checks
+  "Create ticket"/"Reject" pair doesn't reappear. **The request's title/description need not
+  match the message's original proposal**: the chat UI lets the user edit the draft inline
+  (pencil button on the approval card) before clicking "Create ticket", and whatever is in the
+  form at that point is what gets sent — `MarkTicketCreated` overwrites `ProposedTicketTitle`/
+  `ProposedTicketDescription` with the final, possibly-edited values so the stored message stays
+  consistent with the ticket that was actually created. `ApproveTicketAsync` is idempotent:
+  approving an already-approved message just returns its current state instead of creating a
+  duplicate ticket, which also covers a race between two users clicking the same draft. It checks
   `TicketRejected` *before* calling `ITicketService.CreateAsync` and throws immediately if the
   draft was already rejected — checking only afterward, inside `MarkTicketCreated`'s own guard,
   would leave an orphan `Ticket` that no message points at. Rejecting a draft
@@ -338,7 +366,9 @@ loop before persisting and returning the assistant's final text reply:
   locate the current code themselves.
 - **No write-capable `IGitService` method is ever registered as a tool here** — only
   `ListFilesAsync`/`ReadFileAsync`. The Live Agent has no code path that can create, modify,
-  move, or delete anything in the sandbox.
+  move, or delete anything in the sandbox. The same is true of the pipeline stages' tool loop
+  (see below) - only Coding ever writes back to Git, and it does so by returning full file
+  content in its final text answer, not through a tool call.
 - Conversation history is replayed to the model as plain user/assistant text turns on every
   message (no persisted tool-call history) — the tool-use loop itself is rebuilt fresh each
   request from whatever the model asks for that turn.
@@ -460,6 +490,27 @@ the ticket synchronously (exists, accessible) before detaching - the other three
 validated, just-transitioned ticket by the time they call `RunPipelineDetached`, so they skip that
 re-check.
 
+**`TicketDto`/`TicketDetailDto.PipelineRunning` tells a caller whether a run is actually executing
+right now, since `Status` alone can't.** A ticket sits `InProgress` both while a run is actively
+executing and while it's simply idle, waiting for a human to manually trigger one (e.g. the UI's
+"Run Pipeline" button on an `InProgress` ticket that isn't currently running - see
+[docs/frontend.md](frontend.md)). `IPipelineRunTracker` (`Application/Common/Interfaces/IPipelineRunTracker.cs`,
+implemented by `Infrastructure/BackgroundTasks/PipelineRunTracker.cs`) tracks this in memory, per
+ticket, reference-counted rather than a plain flag so two overlapping runs for the same ticket
+(e.g. two browser tabs racing before either sees the other's `PipelineRunning: true`) don't get
+reported as finished the moment the first of the two completes. `RunPipelineDetached` calls
+`MarkRunning` synchronously, before the background work is even dispatched - so a `TicketDto`
+built right after any of the four entry points already reports it - and marks `MarkFinished` in a
+`finally` around the background work, so cleanup always runs whether that work succeeds, is
+handled by `RunPipelineAsync`'s own Git/LLM blocking, or escapes to
+`BlockOnBackgroundFailureAsync`. Every service that maps a `Ticket` to `TicketDto`/`TicketDetailDto`
+(`TicketService`, `OrchestrationService`, `ApprovalGateService`, `TicketQuestionService`) looks
+this up itself via `TicketMappings.ToDto`/`ToDetailDto`'s required `pipelineRunning` parameter -
+deliberately not optional, so a caller can't silently default it to `false` and render a "running"
+ticket's action button as if nothing were happening. Deliberately in-memory, not persisted: the
+actual background work dies with the process too, so an app restart can never leave this stuck
+reporting "running" for a run that no longer exists.
+
 **Each stage decides for itself whether the reviewer's feedback actually changes anything for its
 part of the work, instead of the re-run blindly redoing every stage from scratch.** This was
 deliberately not solved by having the orchestrator pick a "resume point" (e.g. "skip straight to
@@ -487,11 +538,22 @@ entirely on a parsed `NONE` (still recording the `StageExecution` and still pass
 forward as `previousOutput`), and commits exactly as before in every other case - a missing or
 unparseable marker included, so an ambiguous response can never silently suppress a real change.
 
-**The Coding stage commits real per-file changes onto the ticket's own branch, grounded in that
-branch's actual current files - all within a single Claude API call.** Before building its prompt,
-`RunCodingStageAsync` calls `IGitService.GetRepositorySnapshotAsync` (Infrastructure, plain
-Git/filesystem reads - no LLM involved) to get a bounded, secret-redacted snapshot of the text
-files already in `ticket.BranchName`, and appends it to the prompt as context; `BuildStagePrompt`
+**Research, Design, and Coding all ground their prompt in the ticket branch's actual current
+files, via a shared, bounded tool-use loop - not a static, size-capped dump appended up front.**
+Instead of gathering every file's content ahead of time, each of these three stages runs its
+prompt through `OrchestrationService.RunStagePromptAsync`, which calls
+`Application/Llm/ToolLoopRunner.RunAsync` with `Application/Git/GitReadOnlyTools.Definitions`
+(the same `list_files`/`read_file` tool pair the Live Agent chat uses - see
+[LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) above) as the available
+tools, and a dispatch bound to the ticket's own branch (`ticket.BranchName`, checked out fresh on
+every call - see [docs/infrastructure.md](infrastructure.md)). The model calls `list_files`/
+`read_file` itself, as many times as it needs (bounded at 6 round-trips, same as the Live Agent
+chat), instead of being handed a fixed snapshot that could silently omit a file it actually needs.
+Research and Design only ever read - locating the code they need to investigate or design against,
+instead of guessing from the ticket description alone - and never write back to Git.
+
+**The Coding stage additionally commits real per-file changes onto the ticket's own branch, all
+within the same single Claude API call.** `BuildStagePrompt`
 separately requires every Coding response to wrap each created/modified file's **complete new
 content** (not a diff - an LLM-generated unified diff is fragile to apply; overwriting with
 content the model provides directly is not) in `<file path="relative/path">...</file>` blocks, one
@@ -506,12 +568,15 @@ recorded as a `StageExecution` and still passed forward as `previousOutput`; a w
 since, unlike `NONE`, this is an unformatted response rather than a deliberate no-op. Earlier, this
 stage instead wrote its entire raw response verbatim into one file, `tickets/{ticket.Id}.md`,
 authoring blind with no visibility into the branch's real content - that transcript file is gone;
-`StageExecution.Output` already durably persists the same raw text for every invocation. **Known
-limitation, not solved here:** the Coding stage still only has one shot with no ability to read
-back specific files mid-response (`SendPromptAsync` has no tools) - the snapshot is everything it
-gets; giving it interactive read access would mean moving it onto the tool-using
-`SendConversationAsync` path used by the Live Agent chat, at the cost of multiple API calls per
-invocation instead of one.
+`StageExecution.Output` already durably persists the same raw text for every invocation. The
+Coding stage's final answer (the one `ParseFileChanges` reads) is whatever text the tool-use loop
+ends on once the model stops requesting tools - it can still call `read_file` on a file it's about
+to modify before writing that file's `<file>` block, addressing what used to be a real gap: a
+one-shot, size-capped snapshot could silently omit a file a stage actually needed (a real incident
+that motivated this change - see the tool-use loop description above), with no signal to the model
+or a human that the listing was incomplete. If a stage still can't find what it needs after using
+its tools, the only recourse is the same as any other clarifying question: it asks a `QUESTION:`
+and a human answers with the missing detail.
 
 **`Reject` is the "opposite" of `Approve`: it discards the ticket instead of keeping its work,
 gated to Admin/Developer for the same reason.** `ApprovalGateService.RejectAsync` calls

@@ -42,16 +42,6 @@ public interface IGitService
         string authorName,
         CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// A bounded, read-only, secret-redacted snapshot (relative path -&gt; content) of the text files
-    /// currently in <paramref name="branchName"/> - gathered once per Coding-stage invocation so the agent
-    /// edits against real code in its single prompt, instead of authoring blind. Mirrors
-    /// <see cref="ReadFileAsync"/>'s sandboxing/redaction; capped per-file and in total so a large repo
-    /// can't blow out the prompt.
-    /// </summary>
-    Task<IReadOnlyDictionary<string, string>> GetRepositorySnapshotAsync(
-        string repositoryPath, string branchName, CancellationToken cancellationToken = default);
-
     Task<GitDiffResult> GetDiffAsync(string repositoryPath, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
 
     Task<GitMergeConflictResult> DetectMergeConflictsAsync(string repositoryPath, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
@@ -80,22 +70,31 @@ public interface IGitService
     Task DeleteBranchAsync(string repositoryPath, string branchName, string baseBranchName, string accessToken, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Read-only, non-recursive listing of the files and folders directly inside
-    /// <paramref name="relativePath"/> (or the repository root when <see langword="null"/>/empty).
-    /// Folder entries are suffixed with <c>/</c>. Used only by the Live Agent chat's sandboxed
-    /// file-browsing tool - never writes, and rejects any path that would resolve outside the
-    /// repository's working directory.
+    /// Read-only, recursive listing of every file under <paramref name="relativePath"/> (or the
+    /// whole repository when <see langword="null"/>/empty), as paths relative to
+    /// <paramref name="relativePath"/> itself - so a caller can see a whole subtree in one call
+    /// instead of paying one call per directory level. Skips dependency/build-output directories
+    /// (<c>.git</c>, <c>node_modules</c>, <c>bin</c>, <c>obj</c>, <c>dist</c>, <c>.angular</c>) and
+    /// stops at a bounded entry count, appending a note to retry with a more specific path if the
+    /// result was truncated. Backs the Live Agent chat's and the Research/Design/Coding pipeline
+    /// stages' sandboxed file-browsing tool (see
+    /// <see cref="TeamPilot.Application.Git.GitReadOnlyTools"/>) - never writes, and rejects any
+    /// path that would resolve outside the repository's working directory. When
+    /// <paramref name="branchName"/> is given, that branch is checked out first so the listing
+    /// reflects that branch's tip rather than whatever happens to already be checked out.
     /// </summary>
-    Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, string? branchName = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Read-only read of one file's text content from the repository's working directory, for
-    /// the Live Agent chat's file-reading tool. Refuses well-known secret-bearing paths outright
-    /// and best-effort redacts common secret shapes from what it does return (see
+    /// Read-only read of one file's text content from the repository's working directory, backing
+    /// the Live Agent chat's and the Research/Design/Coding pipeline stages' file-reading tool (see
+    /// <see cref="TeamPilot.Application.Git.GitReadOnlyTools"/>). Refuses well-known secret-bearing
+    /// paths outright and best-effort redacts common secret shapes from what it does return (see
     /// <c>SecretRedactor</c>) - not a guarantee, just a defense in depth. Rejects any path that
-    /// would resolve outside the repository's working directory.
+    /// would resolve outside the repository's working directory. When <paramref name="branchName"/>
+    /// is given, that branch is checked out first so the read reflects that branch's tip.
     /// </summary>
-    Task<GitFileReadResult> ReadFileAsync(string repositoryPath, string relativeFilePath, CancellationToken cancellationToken = default);
+    Task<GitFileReadResult> ReadFileAsync(string repositoryPath, string relativeFilePath, string? branchName = null, CancellationToken cancellationToken = default);
 }
 
 public sealed record GitCommitResult(string CommitHash, string DiffContent);

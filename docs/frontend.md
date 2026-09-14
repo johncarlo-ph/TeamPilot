@@ -95,21 +95,59 @@ response body at all, so they needed no change beyond the service's return type.
 own poll (see above) picks up the ticket landing on `ForReview`/`Blocked` once the run actually
 finishes.
 
+**`ticket-detail.html`'s "Start"/"Run Pipeline" button is replaced with a plain "Pipeline
+running…" label whenever `ticket.pipelineRunning` is true, instead of staying visible and
+clickable.** `TicketDto.pipelineRunning` (see [docs/application.md](application.md) for
+`IPipelineRunTracker`) is the only reliable signal for this - `ticket.status === 'InProgress'`
+alone can't distinguish an actively-running pipeline from one that's idle and genuinely waiting
+for a manual trigger, and the component's own local `starting()` signal only covers the few
+hundred milliseconds until the detached-run response comes back, not the run itself (which can
+take minutes). Since `startPipeline()` already calls `refresh()` right after that response - and
+the response itself already reflects `PipelineRunning: true`, `IPipelineRunTracker.MarkRunning`
+having run synchronously before the HTTP call even returns - the button disappears as soon as
+that immediate refetch resolves, without waiting for the next regular poll tick.
+
 **Drag-and-drop is mapped to the API's actual transition endpoints, not a generic status
 setter.** There is no `PUT /tickets/{id}/status`; a ticket only moves between columns through
 specific actions (`start`, `move-to-review`, submitting a `Review`). The board
 (`features/board/board.ts`) uses Angular CDK drag-and-drop purely as the *gesture* — dropping a
 card on a column looks up the `(from, to)` pair and calls the matching endpoint directly, with no
-dialog in between (`ToDo → InProgress` calls `POST /tickets/{id}/start`, which runs the whole
-Research→Design→Coding→Testing pipeline and returns the final ticket state — the card may show up
-in "For Review" once polling picks up the result, since the pipeline runs all the way through in
-that one call; `InProgress → ForReview` calls `move-to-review` directly; `ForReview → Done`/
-`ForReview → InProgress` opens the review form pre-set to Approve/RequestChanges). An unsupported
-drop (e.g. `ToDo → Done`) is rejected client-side with a toast rather than attempting a call that
-doesn't exist. `features/ticket-detail` renders the same "start"-triggering button (labeled
-"Start" or "Run Pipeline" depending on ticket status) for the case where a human wants to
-(re-)trigger the pipeline without going through the board — e.g. retrying after a failed run, or
-after a review's `RequestChanges` sent the ticket back to In Progress.
+dialog in between (`ToDo → InProgress` calls `POST /tickets/{id}/start`; `InProgress → ForReview`
+calls `move-to-review` directly; `ForReview → Done`/`ForReview → InProgress` opens the review form
+pre-set to Approve/RequestChanges). Every combination `handleTransition` doesn't implement (e.g.
+`ToDo → Done`, `ToDo → ForReview`, `InProgress → Done`) is kept out of the drag gesture entirely
+rather than rejected after the fact: `connectedIdsFor(status)` (backed by the module-level
+`VALID_DRAG_TARGETS` map) only lists the specific columns `handleTransition` actually handles for
+that source status, and `cdkDropListConnectedTo` is one-directional, so e.g. `ForReview` lists
+`Done`/`InProgress` as drop targets without `Done`/`InProgress` listing `ForReview` back. A picked-up
+card with no valid target just snaps back into place - CDK fires `cdkDropListDropped` on the
+*origin* list in that case (`previousContainer === container`), which `onDrop` already no-ops on
+before `handleTransition` ever runs. That makes `handleTransition`'s final `notifications.error(...)`
+branch unreachable through the board UI; it exists only as a backstop against `VALID_DRAG_TARGETS`
+drifting out of sync with `handleTransition` itself. `features/ticket-detail`
+renders the same "start"-triggering button (labeled "Start" or "Run Pipeline" depending on ticket
+status) for the case where a human wants to (re-)trigger the pipeline without going through the
+board — e.g. retrying after a failed run, or after a review's `RequestChanges` sent the ticket
+back to In Progress.
+
+**The two direct-transition drops (`ToDo → InProgress`, `InProgress → ForReview`) move the card
+locally before the server confirms anything, instead of waiting on the response or the next poll
+tick.** `handleTransition`'s private `setTicketStatus` helper writes the target status into the
+`tickets` signal immediately on drop; `ticketsByStatus` (the `computed` the two `cdkDropList`s
+bind to) picks it up on the very next change-detection cycle, so the card lands in the new column
+right away and CDK's own drag animation doesn't get contradicted a moment later by the bound array
+snapping back to the pre-drop grouping. This matters most for `start`: the pipeline runs detached
+(see [docs/application.md](application.md)), so the `POST /tickets/{id}/start` response comes back
+before the background run has assigned an agent and can still report the ticket as `ToDo` -
+without the local move, the card would jump to In Progress on drop and then immediately jump back
+to To Do when that response landed. The success handler pins the status to the drop target rather
+than trusting the response's (possibly stale) `status` field for this reason; `refreshTrigger$`
+still fires so `PipelineRunning` and every other field catch up on the next tick. `move-to-review`
+doesn't have this lag - `MoveToReviewAsync` updates the status synchronously - but it takes the
+same optimistic-then-confirm path for consistency and so a slow request doesn't leave the card
+sitting in its old column for the round trip. Either handler's `error` callback calls
+`setTicketStatus` again to put the card back where it started; the interceptor-driven toast (see
+above) already reports the failure, so neither adds its own.
 
 **Cancelling a ticket is a detail-page button, not a board drop target.** `Cancelled` is a real
 `TicketStatus` value but deliberately isn't one of the `BOARD_COLUMNS` — "give up on this
@@ -127,24 +165,31 @@ disappearing.** `BOARD_COLUMNS` (`board.ts`) has 5 entries now (To Do/In Progres
 Review/Done); the column grid switched from a fixed `col-xl-3` (which only divided evenly for 4
 columns) to Bootstrap's auto-sizing `col-xl` so any number of columns stays evenly split without
 a per-column-count class. Blocked is a drag-and-drop dead end in both directions - entered only
-by `OrchestrationService` (a stage's clarifying question or a Git/LLM failure, see
-[docs/application.md](application.md)) and left only via the ticket detail page's answer/retry
-actions, never a manual drag. Concretely, `board.ts`'s `connectedIdsFor(status)` returns `[]` for
-the Blocked column (so nothing can be dropped into or out of it) and the normal shared
-`connectedIdsFor` array for every other column - simpler than adding a new per-card
-`cdkDragDisabled` binding, since an unconnected `cdkDropList` already can't accept a drop and a
-picked-up card with nowhere valid to land just no-ops back into place. Clicking through to ticket
-detail is the only way to see *why* a ticket is blocked and to do anything about it - see
-`TicketQuestionPanel` below.
+by `OrchestrationService` (a stage's clarifying question, a proceed-or-cancel decision, or a
+Git/LLM failure, see [docs/application.md](application.md)) and left only via the ticket detail page's answer/retry
+actions, never a manual drag. Concretely, `VALID_DRAG_TARGETS['Blocked']` is `[]` and no other
+status lists `Blocked` as a target, so `connectedIdsFor('Blocked')` returns `[]` - nothing can be
+dropped into or out of it - simpler than adding a new per-card `cdkDragDisabled` binding, since an
+unconnected `cdkDropList` already can't accept a drop and a picked-up card with nowhere valid to
+land just no-ops back into place. Clicking through to ticket detail is the only way to see *why* a
+ticket is blocked and to do anything about it - see `TicketQuestionPanel` below.
 
 **`TicketQuestionPanel` (`features/ticket-detail/ticket-question-panel`) is the ticket-detail
 counterpart to the board's `ChatPanel` - same message-thread shape, different data source and
-purpose.** It renders every `TicketQuestionDto` for the ticket as a thread entry (the question or
-failure text, plus the human's answer once one exists, styled the same left/right message-bubble
-way `ChatPanel` styles Assistant/User turns) and, only for the ticket's current `Pending`
-question, a footer action: an answer textarea for a `Question`-kind entry, or a **Retry** button
-for a `Failure`-kind one (there's nothing to type for a failure - see
-`TicketQuestionsService.retry`). Unlike `ChatPanel`, it can't rely on "only changes in response to
+purpose.** It renders every `TicketQuestionDto` for the ticket as a thread entry (the question,
+decision, or failure text, plus the human's answer once one exists, styled the same left/right
+message-bubble way `ChatPanel` styles Assistant/User turns) and, only for the ticket's current
+`Pending` question, a footer action: an answer textarea for a `Question`- or `Decision`-kind
+entry, or a **Retry** button for a `Failure`-kind one (there's nothing to type for a failure - see
+`TicketQuestionsService.retry`). Unlike `ChatPanel`'s single-line composer, this answer field is a
+`<textarea>` so a plain Enter keypress wouldn't submit it on its own - `(keydown.enter)` calls
+`onAnswerKeydown`, which sends on Enter (preventing the default newline) and falls through to
+insert a newline as normal on `Shift+Enter`; `submitAnswer` itself now also no-ops while a submit
+is already in flight, since Enter isn't covered by the **Send** button's own `[disabled]` binding.
+A `Decision`-kind entry's textarea is preceded by a fixed hint
+telling the human an agent can't cancel a ticket itself, and to use the ticket's own **Cancel
+Ticket** button above instead of answering if that's the right call - answering only resumes the
+pipeline, it never triggers a cancellation itself. Unlike `ChatPanel`, it can't rely on "only changes in response to
 what this component itself sent," since a pipeline agent can post a new blocking question
 asynchronously - so `ticket-detail.ts`'s existing 10s poll was broadened from fetching just the
 ticket to `forkJoin({ ticket, questions })`, fetching both every tick instead of adding a second,
@@ -194,17 +239,33 @@ it with the sender's name (`ChatMessageDto.senderName`, falling back to `'You'` 
 missing) for a user message, or `'Live Agent'` for an assistant one. An assistant message
 carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with
 **"Create ticket"** and **"Reject"** buttons side by side in the chat thread - clicking either
-calls `LiveAgentChatService.approveTicket(...)`/`rejectTicket(projectId, conversationId, messageId)`, which
-returns the updated `ChatMessageDto` (now carrying `createdTicketId` or `ticketRejected: true`);
-`ChatPanel` splices that updated message back into its `messages` signal in place, which is what
-swaps the button pair for a "Ticket created" or "Ticket rejected" badge. Because that decision is
-persisted on the message server-side rather than tracked in a local-only signal, the badge (not
-the buttons) is also what renders after a reload, or for a second user viewing the same shared
-conversation - nobody can approve *or* reject the same draft twice, and a single
-`processingTicketMessageIds` signal disables both buttons while either request is in flight so a
-double-click can't fire both actions at once. The newly created ticket simply shows up on the
-board once the existing 8s ticket poll (above) picks it up - no new refresh plumbing was added
-for this.
+calls `LiveAgentChatService.approveTicket(projectId, conversationId, messageId, { title, description })`/
+`rejectTicket(projectId, conversationId, messageId)`, which returns the updated `ChatMessageDto`
+(now carrying `createdTicketId` or `ticketRejected: true`); `ChatPanel` splices that updated
+message back into its `messages` signal in place, which is what swaps the button pair for a
+"Ticket created" or "Ticket rejected" badge. Because that decision is persisted on the message
+server-side rather than tracked in a local-only signal, the badge (not the buttons) is also what
+renders after a reload, or for a second user viewing the same shared conversation - nobody can
+approve *or* reject the same draft twice, and a single `processingTicketMessageIds` signal
+disables both buttons while either request is in flight so a double-click can't fire both actions
+at once. **The draft is editable before approval**: an undecided approval card also shows a
+pencil (✏️) button next to the title; clicking it calls `startEditTicket`, which seeds a shared
+`ticketEditForm` (title/description) from that message's current proposal and swaps the static
+title/description for an inline form with its own **"Create ticket"**/**"Reject"**/**"Cancel"**
+row (mirroring the single-editor-at-a-time pattern `renameForm` already uses for session titles -
+`ticketEditingMessageId` tracks which one message, if any, is being edited). Both the title input
+and the description textarea are editable; the description textarea also grows to fit its
+starting content instead of staying at its fixed `rows="3"` and scrolling internally - a
+`viewChild('ticketDescriptionTextarea')` signal paired with an `effect()` keyed off
+`ticketEditingMessageId` resizes it (`scrollHeight`-based) the moment the edit form mounts, and an
+`(input)` handler keeps re-measuring it as the user types. Submitting from that
+form still calls `approveTicket(message)`, which checks `isEditingTicket(message)` to source the
+title/description from `ticketEditForm`'s current values instead of the message's own
+`proposedTicketTitle`/`proposedTicketDescription` - so the ticket is created with whatever the
+user last typed, not the model's original draft. `cancelEditTicket` discards the in-progress edit
+and reverts to the static card; approving or rejecting an edited draft also clears the editing
+state on success. The newly created ticket simply shows up on the board once the existing 8s
+ticket poll (above) picks it up - no new refresh plumbing was added for this.
 
 **The chat panel collapses to a thin strip so the board can reclaim its width, with the resize
 itself animated.** The collapsed flag lives in `Board` (`chatCollapsed`, a plain signal), not in
@@ -254,6 +315,15 @@ the single global `src/styles.scss`, not per-component `styleUrls` - this projec
 scoped component styles (everything else is Bootstrap utility classes in the template), so a new
 per-component stylesheet would be a second, competing styling convention rather than a small
 addition to the existing one.
+
+**`btn-danger`/`btn-outline-danger` text color is pinned explicitly, not left to Bootstrap's
+contrast guess.** The custom `$danger` (`#f04923`) has only a ~3.7:1 contrast ratio against white,
+under Bootstrap's `$min-contrast-ratio` (4.5) - so `button-variant`'s built-in `color-contrast()`
+picks black text for a filled `.btn-danger` instead of white. `styles.scss` overrides `.btn-danger`
+(all states) to `color: #fff` and `.btn-outline-danger`'s plain/unhovered state to `color: $danger`
+(its hover/active/checked fill states go white too, matching the filled button) rather than
+raising `$min-contrast-ratio` globally, which would also affect `$warning`/`$board-forreview-color`
+button and badge text this codebase already relies on.
 
 **The project list's per-status count badges reuse the board's icon/color mapping, computed
 server-side, not fetched per project.** `ProjectDto.ticketStatusCounts` (`TicketStatusCountsDto`

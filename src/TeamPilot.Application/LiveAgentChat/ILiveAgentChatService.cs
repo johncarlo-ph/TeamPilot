@@ -34,10 +34,13 @@ public interface ILiveAgentChatService
     /// <summary>
     /// Approves a drafted ticket from an assistant message, creating the real <see cref="TeamPilot.Domain.Entities.Ticket"/>
     /// and stamping the message with its id so every viewer (including after a reload) sees the
-    /// draft as already approved. Idempotent: approving an already-approved message just returns
-    /// its current state instead of creating a duplicate ticket.
+    /// draft as already approved. <paramref name="request"/> carries the title/description to
+    /// create - normally the message's own proposal, but the user may have edited them in the
+    /// chat UI first, in which case the edited values are used and recorded back onto the
+    /// message. Idempotent: approving an already-approved message just returns its current state
+    /// instead of creating a duplicate ticket.
     /// </summary>
-    Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken = default);
+    Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid conversationId, Guid messageId, ApproveTicketRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Dismisses a drafted ticket from an assistant message without creating anything, so the

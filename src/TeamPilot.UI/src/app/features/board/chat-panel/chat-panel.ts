@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, input, output, signal } from '@angular/core';
+import { Component, computed, effect, ElementRef, inject, input, output, signal, viewChild } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { LiveAgentChatService } from '../../../core/services/live-agent-chat.service';
 import { NotificationService } from '../../../core/notification/notification.service';
@@ -37,6 +37,18 @@ export class ChatPanel {
     title: ['', Validators.required],
   });
 
+  // Only one proposed-ticket draft can be edited at a time, same pattern as conversation
+  // renaming above - edits are local to the form until "Create ticket" is clicked.
+  readonly ticketEditingMessageId = signal<string | null>(null);
+  readonly ticketEditForm = this.fb.nonNullable.group({
+    title: ['', Validators.required],
+    description: [''],
+  });
+  // Grows the edit form's description textarea to fit whatever's already in it (the model's
+  // draft can be much longer than its fixed rows="3"), keyed off ticketEditingMessageId so it
+  // re-measures every time a different message's edit form mounts.
+  private readonly ticketDescriptionTextarea = viewChild<ElementRef<HTMLTextAreaElement>>('ticketDescriptionTextarea');
+
   readonly messages = signal<ChatMessageDto[]>([]);
   readonly loading = signal(true);
   readonly sending = signal(false);
@@ -53,6 +65,14 @@ export class ChatPanel {
     effect(() => {
       const projectId = this.projectId();
       this.loadConversations(projectId);
+    });
+
+    effect(() => {
+      this.ticketEditingMessageId();
+      const textarea = this.ticketDescriptionTextarea()?.nativeElement;
+      if (textarea) {
+        this.resizeTicketDescriptionTextarea(textarea);
+      }
     });
   }
 
@@ -205,21 +225,67 @@ export class ChatPanel {
     });
   }
 
+  startEditTicket(message: ChatMessageDto): void {
+    if (this.isTicketDecided(message)) {
+      return;
+    }
+
+    this.ticketEditForm.setValue({
+      title: message.proposedTicketTitle ?? '',
+      description: message.proposedTicketDescription ?? '',
+    });
+    this.ticketEditingMessageId.set(message.id);
+  }
+
+  cancelEditTicket(): void {
+    this.ticketEditingMessageId.set(null);
+  }
+
+  isEditingTicket(message: ChatMessageDto): boolean {
+    return this.ticketEditingMessageId() === message.id;
+  }
+
+  onTicketDescriptionInput(event: Event): void {
+    this.resizeTicketDescriptionTextarea(event.target as HTMLTextAreaElement);
+  }
+
+  private resizeTicketDescriptionTextarea(textarea: HTMLTextAreaElement): void {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }
+
   approveTicket(message: ChatMessageDto): void {
     const conversationId = this.selectedConversationId();
     if (!conversationId || !message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
       return;
     }
 
+    const isEditing = this.isEditingTicket(message);
+    if (isEditing && this.ticketEditForm.invalid) {
+      this.ticketEditForm.markAllAsTouched();
+      return;
+    }
+
+    const title = (isEditing ? this.ticketEditForm.getRawValue().title : message.proposedTicketTitle).trim();
+    const description = (
+      isEditing ? this.ticketEditForm.getRawValue().description : message.proposedTicketDescription ?? ''
+    ).trim();
+    if (!title) {
+      return;
+    }
+
     this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
-    this.chatService.approveTicket(this.projectId(), conversationId, message.id).subscribe({
-      next: (updated) => {
-        this.notifications.success('Ticket created.');
-        this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
-        this.removeProcessingId(message.id);
-      },
-      error: () => this.removeProcessingId(message.id),
-    });
+    this.chatService
+      .approveTicket(this.projectId(), conversationId, message.id, { title, description: description || null })
+      .subscribe({
+        next: (updated) => {
+          this.notifications.success('Ticket created.');
+          this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
+          this.removeProcessingId(message.id);
+          this.clearEditingIfMatches(message.id);
+        },
+        error: () => this.removeProcessingId(message.id),
+      });
   }
 
   rejectTicket(message: ChatMessageDto): void {
@@ -233,6 +299,7 @@ export class ChatPanel {
       next: (updated) => {
         this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
         this.removeProcessingId(message.id);
+        this.clearEditingIfMatches(message.id);
       },
       error: () => this.removeProcessingId(message.id),
     });
@@ -260,5 +327,11 @@ export class ChatPanel {
       next.delete(messageId);
       return next;
     });
+  }
+
+  private clearEditingIfMatches(messageId: string): void {
+    if (this.ticketEditingMessageId() === messageId) {
+      this.ticketEditingMessageId.set(null);
+    }
   }
 }

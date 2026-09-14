@@ -33,3 +33,8 @@ export interface ChatMessageDto {
 export interface SendChatMessageRequest {
   content: string;
 }
+
+export interface ApproveTicketRequest {
+  title: string;
+  description: string | null;
+}

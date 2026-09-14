@@ -23,6 +23,7 @@ public class TicketQuestionServiceTests
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly TicketQuestionService _sut;
     private readonly Guid _projectId = Guid.NewGuid();
 
@@ -38,6 +39,7 @@ public class TicketQuestionServiceTests
             _currentUser.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
+            _pipelineRunTracker.Object,
             new AnswerTicketQuestionRequestValidator());
     }
 
@@ -56,6 +58,9 @@ public class TicketQuestionServiceTests
         var question = TicketQuestion.CreateQuestion(ticket.Id, Guid.NewGuid(), "Which provider?");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _ticketQuestionRepository.Setup(r => r.GetByIdAsync(question.Id, It.IsAny<CancellationToken>())).ReturnsAsync(question);
+        // The mocked IOrchestrationService.RunPipelineDetached doesn't actually touch the real
+        // tracker, so this stands in for what it would report once really invoked.
+        _pipelineRunTracker.Setup(t => t.IsRunning(ticket.Id)).Returns(true);
 
         var result = await _sut.AnswerAsync(ticket.Id, question.Id, new AnswerTicketQuestionRequest("Use Google."));
 
@@ -65,7 +70,26 @@ public class TicketQuestionServiceTests
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
         // The pipeline re-run is kicked off detached (see IOrchestrationService.RunPipelineDetached)
         // instead of awaited, so the returned DTO reflects the ticket right after Unblock() -
-        // still InProgress, not whatever the eventual re-run settles on.
+        // still InProgress, not whatever the eventual re-run settles on - but PipelineRunning
+        // already reports the run as in flight.
+        Assert.Equal(TicketStatus.InProgress, result.Status);
+        Assert.True(result.PipelineRunning);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task AnswerAsync_WithAPendingDecision_AnswersUnblocksAndKicksOffThePipelineDetached()
+    {
+        var ticket = CreateBlockedTicket();
+        var decision = TicketQuestion.CreateDecision(ticket.Id, Guid.NewGuid(), "Should this proceed given the conflicting ticket?");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _ticketQuestionRepository.Setup(r => r.GetByIdAsync(decision.Id, It.IsAny<CancellationToken>())).ReturnsAsync(decision);
+
+        var result = await _sut.AnswerAsync(ticket.Id, decision.Id, new AnswerTicketQuestionRequest("Continue anyway."));
+
+        Assert.Equal(TicketQuestionStatus.Answered, decision.Status);
+        Assert.Equal("Continue anyway.", decision.AnswerText);
+        Assert.Equal(TicketStatus.InProgress, ticket.Status);
         Assert.Equal(TicketStatus.InProgress, result.Status);
         _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
     }
@@ -102,10 +126,12 @@ public class TicketQuestionServiceTests
         var failure = TicketQuestion.CreateFailure(ticket.Id, Guid.NewGuid(), "Git push failed.");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _ticketQuestionRepository.Setup(r => r.GetMostRecentAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(failure);
+        _pipelineRunTracker.Setup(t => t.IsRunning(ticket.Id)).Returns(true);
 
-        await _sut.RetryAsync(ticket.Id);
+        var result = await _sut.RetryAsync(ticket.Id);
 
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
+        Assert.True(result.PipelineRunning);
         _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
     }
 
@@ -116,6 +142,18 @@ public class TicketQuestionServiceTests
         var question = TicketQuestion.CreateQuestion(ticket.Id, Guid.NewGuid(), "Which provider?");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _ticketQuestionRepository.Setup(r => r.GetMostRecentAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(question);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.RetryAsync(ticket.Id));
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+    }
+
+    [Fact]
+    public async Task RetryAsync_WhenMostRecentQuestionIsADecision_ThrowsInvalidOperationException()
+    {
+        var ticket = CreateBlockedTicket();
+        var decision = TicketQuestion.CreateDecision(ticket.Id, Guid.NewGuid(), "Should this proceed given the conflicting ticket?");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _ticketQuestionRepository.Setup(r => r.GetMostRecentAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(decision);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.RetryAsync(ticket.Id));
         Assert.Equal(TicketStatus.Blocked, ticket.Status);

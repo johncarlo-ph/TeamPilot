@@ -30,6 +30,35 @@ body {
   background-color: var(--bs-body-bg);
 }
 
+// Custom $danger (#f04923) falls just short of Bootstrap's automatic min-contrast-ratio (4.5)
+// against white, so button-variant's built-in color-contrast() picks black text for btn-danger
+// instead of white - pin danger buttons explicitly instead: white text once filled (solid
+// background or hovered/active outline), red text for the plain outline button.
+.btn-danger,
+.btn-check:checked + .btn-danger,
+.btn-check:focus + .btn-danger,
+.btn-danger:hover,
+.btn-danger:focus,
+.btn-danger:active,
+.btn-danger.active,
+.btn-danger:disabled,
+.btn-danger.disabled {
+  color: #fff;
+}
+
+.btn-outline-danger {
+  color: $danger;
+}
+
+.btn-outline-danger:hover,
+.btn-outline-danger:focus,
+.btn-outline-danger:active,
+.btn-outline-danger.active,
+.btn-check:checked + .btn-outline-danger,
+.btn-check:focus + .btn-outline-danger {
+  color: #fff;
+}
+
 .status-badge {
   font-weight: 600;
   letter-spacing: 0.02em;

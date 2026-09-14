@@ -34,10 +34,18 @@ export class TicketQuestionPanel {
     return questions.find((q) => q.status === 'Pending') ?? null;
   });
 
+  onAnswerKeydown(event: Event): void {
+    if ((event as KeyboardEvent).shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    this.submitAnswer();
+  }
+
   submitAnswer(): void {
     const question = this.pendingQuestion();
     const answer = this.answerText().trim();
-    if (!question || !answer) {
+    if (!question || !answer || this.submitting()) {
       return;
     }
     this.submitting.set(true);

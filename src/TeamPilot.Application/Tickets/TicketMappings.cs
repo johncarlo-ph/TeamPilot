@@ -12,7 +12,14 @@ namespace TeamPilot.Application.Tickets;
 /// </summary>
 internal static class TicketMappings
 {
-    public static TicketDto ToDto(Ticket ticket) => new(
+    /// <summary>
+    /// <paramref name="pipelineRunning"/> is a required parameter, not an optional one - every
+    /// caller must look it up from <c>IPipelineRunTracker</c> itself (or explicitly pass
+    /// <see langword="false"/> when it genuinely doesn't apply) rather than silently defaulting
+    /// to it, since a caller that forgets would render the "Run Pipeline" button visible while a
+    /// run is actually in flight - the exact bug this field exists to prevent.
+    /// </summary>
+    public static TicketDto ToDto(Ticket ticket, bool pipelineRunning) => new(
         ticket.Id,
         ticket.ProjectId,
         ticket.Title,
@@ -21,9 +28,10 @@ internal static class TicketMappings
         ticket.BranchName,
         ticket.CancellationReason,
         ticket.CreatedAtUtc,
-        ticket.UpdatedAtUtc);
+        ticket.UpdatedAtUtc,
+        pipelineRunning);
 
-    public static TicketDetailDto ToDetailDto(Ticket ticket) => new(
+    public static TicketDetailDto ToDetailDto(Ticket ticket, bool pipelineRunning) => new(
         ticket.Id,
         ticket.ProjectId,
         ticket.Title,
@@ -44,5 +52,6 @@ internal static class TicketMappings
             .Select(c => new ConflictDto(c.Id, c.TicketId, c.CommitId, c.FilePath, c.ConflictingDiffContent, c.AiSuggestedResolution, c.ResolvedContent, c.ResolutionNote, c.Status, c.ResolvedAtUtc, c.ResolvedBy, c.CreatedAtUtc))
             .ToList(),
         ticket.CreatedAtUtc,
-        ticket.UpdatedAtUtc);
+        ticket.UpdatedAtUtc,
+        pipelineRunning);
 }

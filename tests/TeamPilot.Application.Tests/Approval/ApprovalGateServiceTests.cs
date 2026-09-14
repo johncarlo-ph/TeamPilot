@@ -30,6 +30,7 @@ public class ApprovalGateServiceTests
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly ApprovalGateService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
@@ -71,6 +72,7 @@ public class ApprovalGateServiceTests
             _unitOfWork.Object,
             new SubmitReviewRequestValidator(),
             _orchestrationService.Object,
+            _pipelineRunTracker.Object,
             NullLogger<ApprovalGateService>.Instance);
     }
 
@@ -177,6 +179,9 @@ public class ApprovalGateServiceTests
     {
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        // The mocked IOrchestrationService.RunPipelineDetached doesn't actually touch the real
+        // tracker, so this stands in for what it would report once really invoked.
+        _pipelineRunTracker.Setup(t => t.IsRunning(ticket.Id)).Returns(true);
 
         var request = new SubmitReviewRequest("Bob", ReviewDecision.RequestChanges, "Needs work");
 
@@ -187,6 +192,7 @@ public class ApprovalGateServiceTests
         // itself lands on InProgress and the returned DTO reflects that immediately, and that
         // the re-run was actually kicked off, without waiting on it.
         Assert.Equal(TicketStatus.InProgress, result.Status);
+        Assert.True(result.PipelineRunning);
         _gitService.Verify(
             g => g.MergeWithResolutionsAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),

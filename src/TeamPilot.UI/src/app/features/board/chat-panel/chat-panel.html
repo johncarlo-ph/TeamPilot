@@ -120,35 +120,94 @@
             @if (message.proposedTicketTitle) {
               <div class="card mt-2 text-dark">
                 <div class="card-body p-2">
-                  <div class="fw-semibold small">{{ message.proposedTicketTitle }}</div>
-                  @if (message.proposedTicketDescription) {
-                    <div class="small text-body-secondary">
-                      {{ message.proposedTicketDescription }}
-                    </div>
-                  }
-                  @if (isTicketCreated(message)) {
-                    <span class="badge text-bg-success mt-2">Ticket created</span>
-                  } @else if (isTicketRejected(message)) {
-                    <span class="badge text-bg-secondary mt-2">Ticket rejected</span>
+                  @if (isEditingTicket(message)) {
+                    <form [formGroup]="ticketEditForm" (ngSubmit)="approveTicket(message)">
+                      <input
+                        type="text"
+                        class="form-control form-control-sm mb-1"
+                        formControlName="title"
+                        placeholder="Ticket title"
+                        aria-label="Ticket title"
+                      />
+                      <textarea
+                        #ticketDescriptionTextarea
+                        class="form-control form-control-sm"
+                        formControlName="description"
+                        rows="3"
+                        placeholder="Ticket description"
+                        aria-label="Ticket description"
+                        (input)="onTicketDescriptionInput($event)"
+                      ></textarea>
+                      <div class="d-flex gap-2 mt-2">
+                        <button
+                          type="submit"
+                          class="btn btn-sm btn-success"
+                          [disabled]="isProcessingTicket(message) || ticketEditForm.invalid"
+                        >
+                          {{ isProcessingTicket(message) ? 'Creating...' : 'Create ticket' }}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline-secondary"
+                          [disabled]="isProcessingTicket(message)"
+                          (click)="rejectTicket(message)"
+                        >
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline-secondary"
+                          [disabled]="isProcessingTicket(message)"
+                          (click)="cancelEditTicket()"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
                   } @else {
-                    <div class="d-flex gap-2 mt-2">
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-success"
-                        [disabled]="isProcessingTicket(message)"
-                        (click)="approveTicket(message)"
-                      >
-                        {{ isProcessingTicket(message) ? 'Creating...' : 'Create ticket' }}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn btn-sm btn-outline-secondary"
-                        [disabled]="isProcessingTicket(message)"
-                        (click)="rejectTicket(message)"
-                      >
-                        Reject
-                      </button>
+                    <div class="d-flex align-items-start justify-content-between gap-2">
+                      <div class="fw-semibold small">{{ message.proposedTicketTitle }}</div>
+                      @if (!isTicketDecided(message)) {
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-link p-0 text-decoration-none"
+                          title="Edit ticket before creating"
+                          aria-label="Edit ticket before creating"
+                          (click)="startEditTicket(message)"
+                        >
+                          ✏️
+                        </button>
+                      }
                     </div>
+                    @if (message.proposedTicketDescription) {
+                      <div class="small text-body-secondary">
+                        {{ message.proposedTicketDescription }}
+                      </div>
+                    }
+                    @if (isTicketCreated(message)) {
+                      <span class="badge text-bg-success mt-2">Ticket created</span>
+                    } @else if (isTicketRejected(message)) {
+                      <span class="badge text-bg-secondary mt-2">Ticket rejected</span>
+                    } @else {
+                      <div class="d-flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-success"
+                          [disabled]="isProcessingTicket(message)"
+                          (click)="approveTicket(message)"
+                        >
+                          {{ isProcessingTicket(message) ? 'Creating...' : 'Create ticket' }}
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-outline-secondary"
+                          [disabled]="isProcessingTicket(message)"
+                          (click)="rejectTicket(message)"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    }
                   }
                 </div>
               </div>

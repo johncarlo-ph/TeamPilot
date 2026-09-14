@@ -38,6 +38,7 @@ public class OrchestrationServiceTests
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IBackgroundTaskRunner> _backgroundTaskRunner = new();
     private readonly Mock<IOrchestrationService> _backgroundOrchestrationService = new();
+    private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly OrchestrationService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
@@ -83,9 +84,23 @@ public class OrchestrationServiceTests
             .Setup(g => g.CommitFilesAsync(_project.RepositoryPath, It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), _codingAgent.Name, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitCommitResult("abc123", "diff content"));
 
-        _gitService
-            .Setup(g => g.GetRepositorySnapshotAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Dictionary<string, string>());
+        // Research/Design/Coding now ground their work via an on-demand list_files/read_file tool
+        // loop (SendConversationAsync) instead of a static snapshot appended to a single
+        // SendPromptAsync call. Most tests here don't care about that mechanism at all - they're
+        // testing pipeline orchestration - so this default bridges every SendConversationAsync
+        // call straight through to whatever this test already configured for SendPromptAsync
+        // (matching the exact same one-shot-answer behavior as before, when the snapshot was
+        // always empty in tests anyway). Tests that need to exercise a real tool round-trip (see
+        // RunCodingStageAsync_WhenCodingAgentCallsReadFile_ThreadsTheToolResultBackAndCommitsTheFinalAnswer)
+        // override this per-test, same as any other constructor default.
+        _llmConnector
+            .Setup(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .Returns(async (LlmConversationRequest req, CancellationToken ct) =>
+            {
+                var promptText = ((LlmTextBlock)req.Messages[0].Content[0]).Text;
+                var response = await _llmConnector.Object.SendPromptAsync(new LlmRequest(promptText, req.MaxTokens), ct);
+                return new LlmConversationResponse([new LlmTextBlock(response.Content)], "end_turn", response.Model, response.InputTokens, response.OutputTokens);
+            });
 
         // RunPipelineDetached (see IOrchestrationService) hands its work to IBackgroundTaskRunner
         // instead of awaiting it directly. Rather than mock that abstraction away entirely, this
@@ -126,6 +141,7 @@ public class OrchestrationServiceTests
             _auditLogger.Object,
             _unitOfWork.Object,
             _backgroundTaskRunner.Object,
+            _pipelineRunTracker.Object,
             NullLogger<OrchestrationService>.Instance);
     }
 
@@ -135,7 +151,9 @@ public class OrchestrationServiceTests
     private void SetUpAgents(params Agent[] agents) =>
         _agentRepository.Setup(r => r.ListAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(agents);
 
-    private static bool IsPromptFor(LlmRequest request, Agent agent) => request.Prompt.Contains($"You are {agent.Name} (");
+    private static bool IsPromptFor(LlmRequest request, Agent agent) => IsPromptFor(request.Prompt, agent);
+
+    private static bool IsPromptFor(string promptText, Agent agent) => promptText.Contains($"You are {agent.Name} (");
 
     /// <summary>A Coding-stage response with a parseable &lt;file&gt; block - since a commit now
     /// only happens when at least one such block parses (see OrchestrationService.ParseFileChanges),
@@ -278,6 +296,122 @@ public class OrchestrationServiceTests
         Assert.Single(codingPrompts);
         Assert.Contains("Standing instructions for this agent:", codingPrompts[0]);
         Assert.Contains("Always write tests first.", codingPrompts[0]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_ResearchAndDesignStages_GetListFilesAndReadFileToolsButTestingDoesNot()
+    {
+        var ticket = Ticket.Create(_project.Id, "Rename shop to \"JC Shop 1\"", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var researchToolNames = new List<string>();
+        var designToolNames = new List<string>();
+        var testingPrompts = new List<string>();
+
+        _llmConnector
+            .Setup(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmConversationRequest req, CancellationToken _) =>
+            {
+                var promptText = ((LlmTextBlock)req.Messages[0].Content[0]).Text;
+                var toolNames = req.Tools?.Select(t => t.Name).ToList() ?? [];
+                if (IsPromptFor(promptText, _researchAgent))
+                {
+                    researchToolNames.AddRange(toolNames);
+                }
+                else if (IsPromptFor(promptText, _designAgent))
+                {
+                    designToolNames.AddRange(toolNames);
+                }
+
+                return Task.FromResult(new LlmConversationResponse([new LlmTextBlock("Some output")], "end_turn", "claude-test", 10, 20));
+            });
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                testingPrompts.Add(req.Prompt);
+                return Task.FromResult(new LlmResponse("RESULT: PASS", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Contains("list_files", researchToolNames);
+        Assert.Contains("read_file", researchToolNames);
+        Assert.Contains("list_files", designToolNames);
+        Assert.Contains("read_file", designToolNames);
+
+        // Testing's prompt is unaffected by this change - only Research/Design/Coding get tools.
+        Assert.Single(testingPrompts);
+
+        // Neither role ever writes back to Git - this stays read-only in practice.
+        Assert.Empty(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFilesAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunCodingStageAsync_WhenCodingAgentCallsReadFile_ThreadsTheToolResultBackAndCommitsTheFinalAnswer()
+    {
+        // Regression test for the cart-button bug: the Coding stage must be able to read a file
+        // that a size-capped upfront snapshot could have silently dropped, by calling read_file
+        // itself mid-response instead of relying on a static dump.
+        var ticket = Ticket.Create(_project.Id, "Show item count in cart title", "desc");
+        ticket.LinkBranch("ticket-branch");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _ticketRepository.Setup(r => r.GetStatusAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(TicketStatus.InProgress);
+
+        _gitService
+            .Setup(g => g.ReadFileAsync(_project.RepositoryPath, "src/app/shared/components/cart-button/cart-button.component.ts", ticket.BranchName, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GitFileReadResult(true, "export class CartButtonComponent {}", false));
+
+        var codingRounds = 0;
+        _llmConnector
+            .Setup(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmConversationRequest req, CancellationToken _) =>
+            {
+                var promptText = ((LlmTextBlock)req.Messages[0].Content[0]).Text;
+                if (!IsPromptFor(promptText, _codingAgent))
+                {
+                    return Task.FromResult(new LlmConversationResponse([new LlmTextBlock("Some output")], "end_turn", "claude-test", 10, 20));
+                }
+
+                codingRounds++;
+                if (codingRounds == 1)
+                {
+                    var toolUse = new LlmToolUseBlock(
+                        "tool-1",
+                        "read_file",
+                        """{"path":"src/app/shared/components/cart-button/cart-button.component.ts"}""");
+                    return Task.FromResult(new LlmConversationResponse([toolUse], "tool_use", "claude-test", 10, 20));
+                }
+
+                return Task.FromResult(new LlmConversationResponse(
+                    [new LlmTextBlock(CodingOutputWithFileChange("Added the item count."))],
+                    "end_turn",
+                    "claude-test",
+                    10,
+                    20));
+            });
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LlmResponse("RESULT: PASS", "claude-test", 10, 20));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(2, codingRounds);
+        Assert.Single(ticket.Commits);
+        _gitService.Verify(
+            g => g.CommitFilesAsync(
+                _project.RepositoryPath,
+                ticket.BranchName!,
+                It.Is<IReadOnlyDictionary<string, string>>(files => files.ContainsKey("src/App.tsx")),
+                It.IsAny<string>(),
+                _codingAgent.Name,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -822,6 +956,38 @@ public class OrchestrationServiceTests
     }
 
     [Fact]
+    public async Task RunPipelineAsync_WhenAStageRaisesADecision_BlocksTheTicketWithDecisionKind()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var designCalled = false;
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _designAgent))
+                {
+                    designCalled = true;
+                }
+
+                return Task.FromResult(IsPromptFor(req, _researchAgent)
+                    ? new LlmResponse("DECISION: Should this proceed given the conflicting ticket, or should it be cancelled?", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        Assert.True(result.Blocked);
+        Assert.NotNull(result.BlockingQuestionId);
+        Assert.False(designCalled);
+        _ticketQuestionRepository.Verify(
+            r => r.AddAsync(It.Is<TicketQuestion>(q => q.Kind == TicketQuestionKind.Decision && q.AgentId == _researchAgent.Id && q.Prompt == "Should this proceed given the conflicting ticket, or should it be cancelled?"), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task RunPipelineAsync_WhenCodingAsksAQuestion_BlocksWithoutCommitting()
     {
         var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
@@ -937,6 +1103,40 @@ public class OrchestrationServiceTests
     }
 
     [Fact]
+    public async Task RunPipelineAsync_WhenResumingWithAnAnsweredDecision_ThreadsItIntoOnlyTheMatchingStageAndMarksItConsumed()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var answeredDecision = TicketQuestion.CreateDecision(ticket.Id, _researchAgent.Id, "Should this proceed given the conflicting ticket?");
+        answeredDecision.Answer("Continue anyway.", "Alice");
+        _ticketQuestionRepository
+            .Setup(r => r.GetMostRecentUnconsumedAnsweredAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(answeredDecision);
+
+        var researchPrompts = new List<string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompts.Add(req.Prompt);
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("RESULT: PASS", "claude-test", 10, 20)
+                    : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Contains("Should this proceed given the conflicting ticket?", researchPrompts[0]);
+        Assert.Contains("Continue anyway.", researchPrompts[0]);
+        Assert.True(answeredDecision.Consumed);
+    }
+
+    [Fact]
     public async Task StartPipelineAsync_WhenTicketExists_KicksOffThePipelineDetachedAndReturnsTheTicket()
     {
         var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
@@ -950,6 +1150,13 @@ public class OrchestrationServiceTests
         Assert.Equal(ticket.Id, result.Id);
         _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
         _backgroundOrchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
+        // Asserted directly against the tracker rather than result.PipelineRunning: this test's
+        // fake IBackgroundTaskRunner runs the whole detached delegate synchronously (see the
+        // constructor), so by the time StartPipelineAsync returns, MarkFinished has already
+        // fired too, in this harness alone - unlike production, where MarkRunning fires
+        // synchronously but the matching MarkFinished only happens once the real background
+        // work completes, well after the caller already has its response.
+        _pipelineRunTracker.Verify(t => t.MarkRunning(ticket.Id), Times.Once);
     }
 
     [Fact]
@@ -971,6 +1178,8 @@ public class OrchestrationServiceTests
 
         _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
         _backgroundOrchestrationService.Verify(o => o.RunPipelineAsync(ticketId, It.IsAny<CancellationToken>()), Times.Once);
+        _pipelineRunTracker.Verify(t => t.MarkRunning(ticketId), Times.Once);
+        _pipelineRunTracker.Verify(t => t.MarkFinished(ticketId), Times.Once);
     }
 
     [Fact]
@@ -996,6 +1205,9 @@ public class OrchestrationServiceTests
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        // The tracker's cleanup runs in a finally, so it fires even though the run itself threw -
+        // otherwise the ticket would be stuck reporting PipelineRunning: true forever.
+        _pipelineRunTracker.Verify(t => t.MarkFinished(ticket.Id), Times.Once);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
+  ApproveTicketRequest,
   ChatMessageDto,
   ConversationDto,
   CreateConversationRequest,
@@ -43,10 +44,15 @@ export class LiveAgentChatService {
     );
   }
 
-  approveTicket(projectId: string, conversationId: string, messageId: string): Observable<ChatMessageDto> {
+  approveTicket(
+    projectId: string,
+    conversationId: string,
+    messageId: string,
+    request: ApproveTicketRequest
+  ): Observable<ChatMessageDto> {
     return this.http.post<ChatMessageDto>(
       `${this.apiBaseUrl}/projects/${projectId}/live-agent/conversations/${conversationId}/messages/${messageId}/approve-ticket`,
-      null
+      request
     );
   }
 

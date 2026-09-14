@@ -58,7 +58,10 @@ builder.Services.AddHttpContextAccessor();
 
 // HttpContext is only ever null here when this resolves outside a live HTTP request - i.e. a
 // detached background scope (IBackgroundTaskRunner) - never during normal request handling,
-// since IHttpContextAccessor's ambient HttpContext is set for the whole pipeline. See
+// since IHttpContextAccessor's ambient HttpContext is set for the whole pipeline. That guarantee
+// only holds because BackgroundTaskRunner.Run explicitly suppresses ExecutionContext flow before
+// its Task.Run - without that, the AsyncLocal behind IHttpContextAccessor would flow into the
+// "detached" task anyway and this would wrongly pick HttpContextCurrentUserContext there. See
 // SystemCurrentUserContext for why that case needs a distinct identity rather than just falling
 // through as "unauthenticated" from HttpContextCurrentUserContext itself.
 builder.Services.AddScoped<ICurrentUserContext>(sp =>

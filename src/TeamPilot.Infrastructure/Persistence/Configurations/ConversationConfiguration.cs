@@ -11,8 +11,12 @@ public class ConversationConfiguration : IEntityTypeConfiguration<Conversation>
         builder.ToTable("Conversations");
         builder.HasKey(c => c.Id);
 
-        // Exactly one conversation per project - the Live Agent's single standing chat thread.
-        builder.HasIndex(c => c.ProjectId).IsUnique();
+        builder.Property(c => c.Title).HasMaxLength(200).IsRequired();
+        builder.Property(c => c.CreatedByName).HasMaxLength(200);
+
+        // A project can have any number of conversations - one project member's chat sessions
+        // are listed alongside everyone else's, most recently updated first.
+        builder.HasIndex(c => c.ProjectId);
 
         builder.Navigation(c => c.Messages).UsePropertyAccessMode(PropertyAccessMode.Field);
 

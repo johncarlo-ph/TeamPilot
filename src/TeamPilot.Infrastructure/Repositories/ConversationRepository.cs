@@ -7,10 +7,17 @@ namespace TeamPilot.Infrastructure.Repositories;
 
 public class ConversationRepository(TeamPilotDbContext dbContext) : IConversationRepository
 {
-    public Task<Conversation?> GetByProjectIdAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+    public async Task<IReadOnlyList<Conversation>> ListByProjectIdAsync(Guid projectId, CancellationToken cancellationToken = default) =>
+        await dbContext.Conversations
+            .AsNoTracking()
+            .Where(c => c.ProjectId == projectId)
+            .OrderByDescending(c => c.UpdatedAtUtc ?? c.CreatedAtUtc)
+            .ToListAsync(cancellationToken);
+
+    public Task<Conversation?> GetByIdAsync(Guid conversationId, CancellationToken cancellationToken = default) =>
         dbContext.Conversations
             .Include(c => c.Messages.OrderBy(m => m.CreatedAtUtc))
-            .FirstOrDefaultAsync(c => c.ProjectId == projectId, cancellationToken);
+            .FirstOrDefaultAsync(c => c.Id == conversationId, cancellationToken);
 
     public async Task AddAsync(Conversation conversation, CancellationToken cancellationToken = default) =>
         await dbContext.Conversations.AddAsync(conversation, cancellationToken);

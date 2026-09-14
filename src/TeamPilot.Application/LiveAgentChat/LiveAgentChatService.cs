@@ -37,24 +37,62 @@ public sealed class LiveAgentChatService(
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
     IUnitOfWork unitOfWork,
-    IValidator<SendChatMessageRequest> sendValidator) : ILiveAgentChatService
+    IValidator<SendChatMessageRequest> sendValidator,
+    IValidator<CreateConversationRequest> createConversationValidator,
+    IValidator<RenameConversationRequest> renameConversationValidator) : ILiveAgentChatService
 {
     private const int MaxToolRoundtrips = 6;
     private const int MaxToolResultChars = 8000;
 
-    public async Task<IReadOnlyList<ChatMessageDto>> GetHistoryAsync(Guid projectId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ConversationDto>> ListConversationsAsync(Guid projectId, CancellationToken cancellationToken = default)
     {
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        var conversation = await conversationRepository.GetByProjectIdAsync(projectId, cancellationToken);
-        return conversation is null ? [] : conversation.Messages.Select(ToDto).ToList();
+        var conversations = await conversationRepository.ListByProjectIdAsync(projectId, cancellationToken);
+        return conversations.Select(ToDto).ToList();
     }
 
-    public async Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken = default)
+    public async Task<ConversationDto> CreateConversationAsync(Guid projectId, CreateConversationRequest request, CancellationToken cancellationToken = default)
+    {
+        await createConversationValidator.EnsureValidAsync(request, cancellationToken);
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        await agentService.EnsureLiveAgentAsync(projectId, cancellationToken);
+        var liveAgent = await agentRepository.GetByProjectAndRoleAsync(projectId, AgentRole.LiveAgent, cancellationToken)
+            ?? throw new InvalidOperationException($"Project '{projectId}' has no active Live Agent.");
+
+        var conversation = Conversation.Create(projectId, liveAgent.Id, request.Title, currentUser.UserId, currentUser.Name);
+        await conversationRepository.AddAsync(conversation, cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ToDto(conversation);
+    }
+
+    public async Task<ConversationDto> RenameConversationAsync(Guid projectId, Guid conversationId, RenameConversationRequest request, CancellationToken cancellationToken = default)
+    {
+        await renameConversationValidator.EnsureValidAsync(request, cancellationToken);
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var conversation = await GetConversationOrThrowAsync(projectId, conversationId, cancellationToken);
+        conversation.Rename(request.Title);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return ToDto(conversation);
+    }
+
+    public async Task<IReadOnlyList<ChatMessageDto>> GetHistoryAsync(Guid projectId, Guid conversationId, CancellationToken cancellationToken = default)
     {
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        var message = await GetMessageOrThrowAsync(projectId, messageId, cancellationToken);
+        var conversation = await GetConversationOrThrowAsync(projectId, conversationId, cancellationToken);
+        return conversation.Messages.Select(ToDto).ToList();
+    }
+
+    public async Task<ChatMessageDto> ApproveTicketAsync(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken = default)
+    {
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var message = await GetMessageOrThrowAsync(projectId, conversationId, messageId, cancellationToken);
 
         // Idempotent: a message already marked approved (e.g. a second click before the UI
         // re-rendered, or two users racing on the same draft) just returns its current state
@@ -83,11 +121,11 @@ public sealed class LiveAgentChatService(
         return ToDto(message);
     }
 
-    public async Task<ChatMessageDto> RejectTicketAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken = default)
+    public async Task<ChatMessageDto> RejectTicketAsync(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken = default)
     {
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        var message = await GetMessageOrThrowAsync(projectId, messageId, cancellationToken);
+        var message = await GetMessageOrThrowAsync(projectId, conversationId, messageId, cancellationToken);
 
         // Idempotent, same reasoning as ApproveTicketAsync.
         if (message.TicketRejected)
@@ -101,16 +139,26 @@ public sealed class LiveAgentChatService(
         return ToDto(message);
     }
 
-    private async Task<ChatMessage> GetMessageOrThrowAsync(Guid projectId, Guid messageId, CancellationToken cancellationToken)
+    private async Task<Conversation> GetConversationOrThrowAsync(Guid projectId, Guid conversationId, CancellationToken cancellationToken)
     {
-        var conversation = await conversationRepository.GetByProjectIdAsync(projectId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Conversation), projectId);
+        var conversation = await conversationRepository.GetByIdAsync(conversationId, cancellationToken);
+        if (conversation is null || conversation.ProjectId != projectId)
+        {
+            throw new NotFoundException(nameof(Conversation), conversationId);
+        }
+
+        return conversation;
+    }
+
+    private async Task<ChatMessage> GetMessageOrThrowAsync(Guid projectId, Guid conversationId, Guid messageId, CancellationToken cancellationToken)
+    {
+        var conversation = await GetConversationOrThrowAsync(projectId, conversationId, cancellationToken);
 
         return conversation.Messages.FirstOrDefault(m => m.Id == messageId)
             ?? throw new NotFoundException(nameof(ChatMessage), messageId);
     }
 
-    public async Task<ChatMessageDto> SendMessageAsync(Guid projectId, SendChatMessageRequest request, CancellationToken cancellationToken = default)
+    public async Task<ChatMessageDto> SendMessageAsync(Guid projectId, Guid conversationId, SendChatMessageRequest request, CancellationToken cancellationToken = default)
     {
         await sendValidator.EnsureValidAsync(request, cancellationToken);
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
@@ -119,20 +167,13 @@ public sealed class LiveAgentChatService(
             ?? throw new NotFoundException(nameof(Project), projectId);
 
         await agentService.EnsureLiveAgentAsync(projectId, cancellationToken);
-        var liveAgent = await agentRepository.GetByProjectAndRoleAsync(projectId, AgentRole.LiveAgent, cancellationToken)
-            ?? throw new InvalidOperationException($"Project '{projectId}' has no active Live Agent.");
 
-        var conversation = await conversationRepository.GetByProjectIdAsync(projectId, cancellationToken);
-        if (conversation is null)
-        {
-            conversation = Conversation.Create(projectId, liveAgent.Id);
-            await conversationRepository.AddAsync(conversation, cancellationToken);
-        }
+        var conversation = await GetConversationOrThrowAsync(projectId, conversationId, cancellationToken);
 
         conversation.AddMessage(ChatMessageRole.User, request.Content, senderName: currentUser.Name);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var instructions = await AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, liveAgent.Id, cancellationToken);
+        var instructions = await AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, conversation.AgentId, cancellationToken);
         var system = AgentInstructionsFormatter.FormatInstructions(instructions) +
             $"Project: {project.Name}\nDescription: {project.Description}";
 
@@ -353,4 +394,13 @@ public sealed class LiveAgentChatService(
         message.TicketRejected,
         message.SenderName,
         message.CreatedAtUtc);
+
+    private static ConversationDto ToDto(Conversation conversation) => new(
+        conversation.Id,
+        conversation.ProjectId,
+        conversation.Title,
+        conversation.CreatedByUserId,
+        conversation.CreatedByName,
+        conversation.CreatedAtUtc,
+        conversation.UpdatedAtUtc);
 }

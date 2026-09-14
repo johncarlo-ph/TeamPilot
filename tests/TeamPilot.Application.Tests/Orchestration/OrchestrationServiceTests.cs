@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Agents;
@@ -35,6 +36,8 @@ public class OrchestrationServiceTests
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
+    private readonly Mock<IBackgroundTaskRunner> _backgroundTaskRunner = new();
+    private readonly Mock<IOrchestrationService> _backgroundOrchestrationService = new();
     private readonly OrchestrationService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
@@ -84,6 +87,29 @@ public class OrchestrationServiceTests
             .Setup(g => g.GetRepositorySnapshotAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<string, string>());
 
+        // RunPipelineDetached (see IOrchestrationService) hands its work to IBackgroundTaskRunner
+        // instead of awaiting it directly. Rather than mock that abstraction away entirely, this
+        // makes Run execute its work item synchronously - inline, right here - against a minimal
+        // IServiceProvider wired to this test's own mocks (including a second, independent
+        // IOrchestrationService mock standing in for the fresh scope's own resolved instance).
+        // That keeps every RunPipelineDetached test deterministic (no real threading to race
+        // against) while still exercising the exact delegate OrchestrationService hands it,
+        // background dependency resolution included.
+        var backgroundServiceProvider = new FakeServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IOrchestrationService)] = _backgroundOrchestrationService.Object,
+            [typeof(ITicketRepository)] = _ticketRepository.Object,
+            [typeof(ITicketQuestionRepository)] = _ticketQuestionRepository.Object,
+            [typeof(IAuditLogger)] = _auditLogger.Object,
+            [typeof(IUnitOfWork)] = _unitOfWork.Object,
+            [typeof(ILogger<OrchestrationService>)] = NullLogger<OrchestrationService>.Instance,
+        });
+
+        _backgroundTaskRunner
+            .Setup(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()))
+            .Callback<Func<IServiceProvider, CancellationToken, Task>>(
+                work => work(backgroundServiceProvider, CancellationToken.None).GetAwaiter().GetResult());
+
         _sut = new OrchestrationService(
             _ticketRepository.Object,
             _workflowStageRepository.Object,
@@ -99,6 +125,7 @@ public class OrchestrationServiceTests
             _projectAccessGuard.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
+            _backgroundTaskRunner.Object,
             NullLogger<OrchestrationService>.Instance);
     }
 
@@ -907,5 +934,101 @@ public class OrchestrationServiceTests
         Assert.Contains("Use Google OAuth.", researchPrompts[0]);
         Assert.DoesNotContain("Which auth provider?", designPrompts[0]);
         Assert.True(answeredQuestion.Consumed);
+    }
+
+    [Fact]
+    public async Task StartPipelineAsync_WhenTicketExists_KicksOffThePipelineDetachedAndReturnsTheTicket()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        // The actual ToDo -> InProgress flip only happens once RunPipelineAsync itself assigns
+        // the workflow's agents (see StartPipelineAsync's own doc comment) - the mocked
+        // background run below never does that, so this ticket is still ToDo when returned.
+        var result = await _sut.StartPipelineAsync(ticket.Id);
+
+        Assert.Equal(ticket.Id, result.Id);
+        _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
+        _backgroundOrchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task StartPipelineAsync_WhenTicketDoesNotExist_ThrowsNotFoundException()
+    {
+        var ticketId = Guid.NewGuid();
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticketId, It.IsAny<CancellationToken>())).ReturnsAsync((Ticket?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.StartPipelineAsync(ticketId));
+        _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Never);
+    }
+
+    [Fact]
+    public void RunPipelineDetached_RunsRunPipelineAsyncInTheBackground()
+    {
+        var ticketId = Guid.NewGuid();
+
+        _sut.RunPipelineDetached(ticketId);
+
+        _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
+        _backgroundOrchestrationService.Verify(o => o.RunPipelineAsync(ticketId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void RunPipelineDetached_WhenTheBackgroundRunThrowsUnexpectedly_BlocksTheTicketWithARetryableFailureQuestion()
+    {
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.AssignAgent(_researchAgent);
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        _backgroundOrchestrationService
+            .Setup(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Project was deleted mid-run."));
+
+        // The background-runner mock executes the failing run (and its failure handler)
+        // synchronously, so by the time this returns the ticket already reflects the outcome -
+        // it must not be left silently stuck In Progress with no visible sign anything failed.
+        _sut.RunPipelineDetached(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        _ticketQuestionRepository.Verify(
+            r => r.AddAsync(
+                It.Is<TicketQuestion>(q => q.TicketId == ticket.Id && q.Kind == TicketQuestionKind.Failure),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public void RunPipelineDetached_WhenTheBackgroundRunThrowsAfterTheTicketWasAlreadyBlocked_DoesNotDoubleBlock()
+    {
+        // RunPipelineAsync itself already handles known Git/LLM failures by blocking the ticket
+        // and returning normally rather than throwing - so an exception reaching the background
+        // failure handler with the ticket already out of InProgress (e.g. blocked by a
+        // near-simultaneous request, or by RunPipelineAsync's own handling in a path this mock
+        // doesn't model) should be a no-op rather than throwing from a second Block() call.
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        ticket.AssignAgent(_researchAgent);
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        _backgroundOrchestrationService
+            .Setup(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => ticket.Block())
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        _sut.RunPipelineDetached(ticket.Id);
+
+        Assert.Equal(TicketStatus.Blocked, ticket.Status);
+        _ticketQuestionRepository.Verify(r => r.AddAsync(It.IsAny<TicketQuestion>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Minimal <see cref="IServiceProvider"/> standing in for the fresh DI scope
+    /// <see cref="IBackgroundTaskRunner"/> would normally create - just enough for the delegate
+    /// OrchestrationService hands to <c>Run</c> to resolve its dependencies via
+    /// <c>GetRequiredService</c>.
+    /// </summary>
+    private sealed class FakeServiceProvider(IReadOnlyDictionary<Type, object> services) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => services.GetValueOrDefault(serviceType);
     }
 }

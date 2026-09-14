@@ -3,12 +3,10 @@ using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.TicketQuestions.Dtos;
 using TeamPilot.Application.TicketQuestions.Validators;
 using TeamPilot.Application.Tickets;
-using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
 using TeamPilot.Domain.Exceptions;
@@ -32,11 +30,6 @@ public class TicketQuestionServiceTests
     {
         _currentUser.Setup(c => c.Name).Returns("Alice");
 
-        _orchestrationService
-            .Setup(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid ticketId, CancellationToken _) =>
-                new TicketPipelineResultDto(new TicketDto(ticketId, _projectId, "t", "d", TicketStatus.ForReview, null, null, DateTime.UtcNow, null), [], true, 0));
-
         _sut = new TicketQuestionService(
             _ticketRepository.Object,
             _ticketQuestionRepository.Object,
@@ -57,7 +50,7 @@ public class TicketQuestionServiceTests
     }
 
     [Fact]
-    public async Task AnswerAsync_WithAPendingQuestion_AnswersUnblocksAndRunsThePipeline()
+    public async Task AnswerAsync_WithAPendingQuestion_AnswersUnblocksAndKicksOffThePipelineDetached()
     {
         var ticket = CreateBlockedTicket();
         var question = TicketQuestion.CreateQuestion(ticket.Id, Guid.NewGuid(), "Which provider?");
@@ -70,8 +63,11 @@ public class TicketQuestionServiceTests
         Assert.Equal("Use Google.", question.AnswerText);
         Assert.Equal("Alice", question.AnsweredBy);
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
-        _orchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
-        Assert.Equal(TicketStatus.ForReview, result.Ticket.Status);
+        // The pipeline re-run is kicked off detached (see IOrchestrationService.RunPipelineDetached)
+        // instead of awaited, so the returned DTO reflects the ticket right after Unblock() -
+        // still InProgress, not whatever the eventual re-run settles on.
+        Assert.Equal(TicketStatus.InProgress, result.Status);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
     }
 
     [Fact]
@@ -100,7 +96,7 @@ public class TicketQuestionServiceTests
     }
 
     [Fact]
-    public async Task RetryAsync_WhenMostRecentQuestionIsAFailure_UnblocksAndRunsThePipeline()
+    public async Task RetryAsync_WhenMostRecentQuestionIsAFailure_UnblocksAndKicksOffThePipelineDetached()
     {
         var ticket = CreateBlockedTicket();
         var failure = TicketQuestion.CreateFailure(ticket.Id, Guid.NewGuid(), "Git push failed.");
@@ -110,7 +106,7 @@ public class TicketQuestionServiceTests
         await _sut.RetryAsync(ticket.Id);
 
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
-        _orchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
     }
 
     [Fact]

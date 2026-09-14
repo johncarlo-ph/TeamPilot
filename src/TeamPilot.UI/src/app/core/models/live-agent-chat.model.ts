@@ -1,5 +1,23 @@
 import { ChatMessageRole } from './enums';
 
+export interface ConversationDto {
+  id: string;
+  projectId: string;
+  title: string;
+  createdByUserId: string | null;
+  createdByName: string | null;
+  createdAtUtc: string;
+  updatedAtUtc: string | null;
+}
+
+export interface CreateConversationRequest {
+  title: string | null;
+}
+
+export interface RenameConversationRequest {
+  title: string;
+}
+
 export interface ChatMessageDto {
   id: string;
   role: ChatMessageRole;

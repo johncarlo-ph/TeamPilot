@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Approval;
@@ -7,13 +6,11 @@ using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Pipelines.Dtos;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Reviews.Validators;
-using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
@@ -33,8 +30,6 @@ public class ApprovalGateServiceTests
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
-    private readonly Mock<ITicketQuestionRepository> _ticketQuestionRepository = new();
-    private readonly Mock<IBackgroundTaskRunner> _backgroundTaskRunner = new();
     private readonly ApprovalGateService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
@@ -64,27 +59,6 @@ public class ApprovalGateServiceTests
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitMergeResolutionResult(true, Array.Empty<string>()));
 
-        // The RequestChanges path now kicks the pipeline re-run off via IBackgroundTaskRunner
-        // instead of awaiting it directly. Rather than mock that abstraction away entirely, this
-        // makes Run execute its work item synchronously - inline, right here - against a minimal
-        // IServiceProvider wired to this test's own mocks. That keeps every RequestChanges test
-        // deterministic (no real threading to race against) while still exercising the exact
-        // delegate ApprovalGateService hands it, background dependency resolution included.
-        var backgroundServiceProvider = new FakeServiceProvider(new Dictionary<Type, object>
-        {
-            [typeof(IOrchestrationService)] = _orchestrationService.Object,
-            [typeof(ITicketRepository)] = _ticketRepository.Object,
-            [typeof(ITicketQuestionRepository)] = _ticketQuestionRepository.Object,
-            [typeof(IAuditLogger)] = _auditLogger.Object,
-            [typeof(IUnitOfWork)] = _unitOfWork.Object,
-            [typeof(ILogger<ApprovalGateService>)] = NullLogger<ApprovalGateService>.Instance,
-        });
-
-        _backgroundTaskRunner
-            .Setup(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()))
-            .Callback<Func<IServiceProvider, CancellationToken, Task>>(
-                work => work(backgroundServiceProvider, CancellationToken.None).GetAwaiter().GetResult());
-
         _sut = new ApprovalGateService(
             _ticketRepository.Object,
             _projectRepository.Object,
@@ -96,7 +70,7 @@ public class ApprovalGateServiceTests
             _auditLogger.Object,
             _unitOfWork.Object,
             new SubmitReviewRequestValidator(),
-            _backgroundTaskRunner.Object,
+            _orchestrationService.Object,
             NullLogger<ApprovalGateService>.Instance);
     }
 
@@ -199,7 +173,7 @@ public class ApprovalGateServiceTests
     }
 
     [Fact]
-    public async Task SubmitReviewAsync_WhenDecisionIsRequestChanges_MovesTicketBackToInProgressAndRunsThePipelineInTheBackground()
+    public async Task SubmitReviewAsync_WhenDecisionIsRequestChanges_MovesTicketBackToInProgressAndKicksOffThePipelineDetached()
     {
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
@@ -208,9 +182,10 @@ public class ApprovalGateServiceTests
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
-        // The mocked IOrchestrationService doesn't actually move the ticket to ForReview the way
-        // a real re-run would - this just confirms RequestChanges itself lands on InProgress and
-        // the returned DTO reflects that immediately, without waiting on the pipeline re-run.
+        // RunPipelineDetached is fire-and-forget - see OrchestrationServiceTests for its own
+        // dispatch/background-failure-handling coverage. This just confirms RequestChanges
+        // itself lands on InProgress and the returned DTO reflects that immediately, and that
+        // the re-run was actually kicked off, without waiting on it.
         Assert.Equal(TicketStatus.InProgress, result.Status);
         _gitService.Verify(
             g => g.MergeWithResolutionsAsync(
@@ -219,58 +194,7 @@ public class ApprovalGateServiceTests
         _pipelineService.Verify(
             p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
-        _orchestrationService.Verify(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task SubmitReviewAsync_WhenBackgroundPipelineRerunThrowsUnexpectedly_BlocksTicketWithARetryableFailureQuestion()
-    {
-        var ticket = CreateTicketInReview("feature/add-feature");
-        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
-
-        _orchestrationService
-            .Setup(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Project was deleted mid-run."));
-
-        var request = new SubmitReviewRequest("Bob", ReviewDecision.RequestChanges, "Needs work");
-
-        // The background-runner mock executes the failing re-run (and its failure handler)
-        // synchronously, so by the time this returns the ticket already reflects the outcome -
-        // it must not be left silently stuck In Progress with no visible sign anything failed.
-        await _sut.SubmitReviewAsync(ticket.Id, request);
-
-        Assert.Equal(TicketStatus.Blocked, ticket.Status);
-        _ticketQuestionRepository.Verify(
-            r => r.AddAsync(
-                It.Is<TicketQuestion>(q => q.TicketId == ticket.Id && q.Kind == TicketQuestionKind.Failure),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
-        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
-    }
-
-    [Fact]
-    public async Task SubmitReviewAsync_WhenBackgroundPipelineRerunThrowsAfterTheTicketWasAlreadyBlocked_DoesNotDoubleBlock()
-    {
-        // RunPipelineAsync itself already handles known Git/LLM failures by blocking the ticket
-        // and returning normally rather than throwing - so an exception reaching the background
-        // failure handler with the ticket already out of InProgress (e.g. blocked by a
-        // near-simultaneous request, or by RunPipelineAsync's own handling in a path this mock
-        // doesn't model) should be a no-op rather than throwing from a second Block() call.
-        var ticket = CreateTicketInReview("feature/add-feature");
-        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
-
-        _orchestrationService
-            .Setup(o => o.RunPipelineAsync(ticket.Id, It.IsAny<CancellationToken>()))
-            .Callback(() => ticket.Block())
-            .ThrowsAsync(new InvalidOperationException("boom"));
-
-        var request = new SubmitReviewRequest("Bob", ReviewDecision.RequestChanges, "Needs work");
-
-        await _sut.SubmitReviewAsync(ticket.Id, request);
-
-        Assert.Equal(TicketStatus.Blocked, ticket.Status);
-        _ticketQuestionRepository.Verify(r => r.AddAsync(It.IsAny<TicketQuestion>(), It.IsAny<CancellationToken>()), Times.Never);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
     }
 
     [Fact]
@@ -387,16 +311,5 @@ public class ApprovalGateServiceTests
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
         Assert.Equal(TicketStatus.InProgress, result.Status);
-    }
-
-    /// <summary>
-    /// Minimal <see cref="IServiceProvider"/> standing in for the fresh DI scope
-    /// <see cref="IBackgroundTaskRunner"/> would normally create - just enough for the delegate
-    /// ApprovalGateService hands to <c>Run</c> to resolve its dependencies via
-    /// <c>GetRequiredService</c>.
-    /// </summary>
-    private sealed class FakeServiceProvider(IReadOnlyDictionary<Type, object> services) : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => services.GetValueOrDefault(serviceType);
     }
 }

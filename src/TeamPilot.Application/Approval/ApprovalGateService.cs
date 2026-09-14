@@ -1,5 +1,4 @@
 using FluentValidation;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common.Exceptions;
@@ -10,7 +9,6 @@ using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
-using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -29,7 +27,7 @@ public sealed class ApprovalGateService(
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IValidator<SubmitReviewRequest> validator,
-    IBackgroundTaskRunner backgroundTaskRunner,
+    IOrchestrationService orchestrationService,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
@@ -66,27 +64,11 @@ public sealed class ApprovalGateService(
                 // Re-run the workflow rather than leaving the ticket sitting In Progress until
                 // someone manually clicks Run Pipeline - RunPipelineAsync is idempotent/
                 // re-entrant by design (see IOrchestrationService), so calling it again here is
-                // safe. It's kicked off detached instead of awaited: a re-run can take minutes
-                // (multiple LLM/Git calls per stage), and the status change above already gives
-                // the caller everything it needs to show the ticket as In Progress immediately.
-                // RunPipelineAsync handles known Git/LLM failures itself (blocking the ticket
-                // with a retryable question); BlockOnBackgroundFailureAsync below is the
-                // backstop for anything else, so an unhandled exception here can't leave the
-                // ticket silently stuck In Progress with no visible indication anything went
-                // wrong.
-                var requestChangesTicketId = ticket.Id;
-                backgroundTaskRunner.Run(async (services, backgroundCancellationToken) =>
-                {
-                    var backgroundOrchestrationService = services.GetRequiredService<IOrchestrationService>();
-                    try
-                    {
-                        await backgroundOrchestrationService.RunPipelineAsync(requestChangesTicketId, backgroundCancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        await BlockOnBackgroundFailureAsync(services, requestChangesTicketId, ex, backgroundCancellationToken);
-                    }
-                });
+                // safe. Kicked off detached (see IOrchestrationService.RunPipelineDetached)
+                // instead of awaited: a re-run can take minutes (multiple LLM/Git calls per
+                // stage), and the status change above already gives the caller everything it
+                // needs to show the ticket as In Progress immediately.
+                orchestrationService.RunPipelineDetached(ticket.Id);
                 break;
 
             case ReviewDecision.Reject:
@@ -104,45 +86,6 @@ public sealed class ApprovalGateService(
         }
 
         return TicketMappings.ToDto(ticket);
-    }
-
-    /// <summary>
-    /// Backstop for the detached RequestChanges pipeline re-run: mirrors
-    /// <c>OrchestrationService.BlockOnFailureAsync</c>'s own Git/LLM failure handling, but for
-    /// whatever exception type made it out of <see cref="IOrchestrationService.RunPipelineAsync"/>
-    /// unhandled. Resolves every dependency from the background task's own scoped
-    /// <paramref name="services"/> rather than this instance's fields, since by the time this
-    /// runs the request that started it (and this instance's own scope) is long gone.
-    /// </summary>
-    private static async Task BlockOnBackgroundFailureAsync(IServiceProvider services, Guid ticketId, Exception exception, CancellationToken cancellationToken)
-    {
-        var backgroundLogger = services.GetRequiredService<ILogger<ApprovalGateService>>();
-        backgroundLogger.LogError(exception, "Background pipeline re-run failed for ticket {TicketId}.", ticketId);
-
-        var ticketRepository = services.GetRequiredService<ITicketRepository>();
-        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
-        if (ticket is null || ticket.Status != TicketStatus.InProgress)
-        {
-            // RunPipelineAsync already left the ticket in a terminal state itself (e.g. Blocked
-            // via its own Git/LLM handling, or Cancelled by a concurrent request) - nothing more
-            // to do here.
-            return;
-        }
-
-        var ticketQuestionRepository = services.GetRequiredService<ITicketQuestionRepository>();
-        var question = TicketQuestion.CreateFailure(ticket.Id, agentId: null, exception.Message);
-        await ticketQuestionRepository.AddAsync(question, cancellationToken);
-
-        ticket.Block();
-
-        var backgroundAuditLogger = services.GetRequiredService<IAuditLogger>();
-        await backgroundAuditLogger.LogActionAsync(
-            AuditEventType.TicketBlocked,
-            $"Ticket '{ticket.Title}' blocked - background pipeline re-run failed: {exception.Message}",
-            cancellationToken);
-
-        var backgroundUnitOfWork = services.GetRequiredService<IUnitOfWork>();
-        await backgroundUnitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>

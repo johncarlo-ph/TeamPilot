@@ -100,8 +100,13 @@ questions about its existing tickets. It only reads the repository (nothing it d
 move, or delete a file), and it only looks at files and tickets relevant to what you actually
 asked.
 
-The chat is shared by everyone with access to the project, so each message is labeled with the
-name of the person who sent it (the Live Agent's own replies are labeled **Live Agent**).
+A project can have any number of **chat sessions** with the Live Agent, and everyone with access
+to the project sees the same list and can switch between them from the dropdown at the top of the
+chat panel — each entry shows the session's name and who started it. Click **+ New chat** to start
+your own session (it starts out named "New chat"); click the ✏️ button next to the dropdown to
+rename whichever session is currently selected — any project member can rename any session, not
+just the one they started. Within a session, each message is labeled with the name of the person
+who sent it (the Live Agent's own replies are labeled **Live Agent**).
 
 If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
 card right in the chat, with **Create ticket** and **Reject** buttons side by side. Before

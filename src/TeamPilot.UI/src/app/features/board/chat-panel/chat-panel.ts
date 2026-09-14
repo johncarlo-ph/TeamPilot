@@ -1,9 +1,9 @@
-import { Component, effect, inject, input, output, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, output, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { LiveAgentChatService } from '../../../core/services/live-agent-chat.service';
 import { NotificationService } from '../../../core/notification/notification.service';
 import { AuthService } from '../../../core/services/auth.service';
-import { ChatMessageDto } from '../../../core/models';
+import { ChatMessageDto, ConversationDto } from '../../../core/models';
 
 @Component({
   selector: 'app-chat-panel',
@@ -23,6 +23,20 @@ export class ChatPanel {
   readonly collapsed = input(false);
   readonly collapsedChange = output<boolean>();
 
+  readonly conversations = signal<ConversationDto[]>([]);
+  readonly loadingConversations = signal(true);
+  readonly creatingConversation = signal(false);
+  readonly selectedConversationId = signal<string | null>(null);
+  readonly selectedConversation = computed(() =>
+    this.conversations().find((c) => c.id === this.selectedConversationId())
+  );
+
+  readonly renaming = signal(false);
+  readonly savingRename = signal(false);
+  readonly renameForm = this.fb.nonNullable.group({
+    title: ['', Validators.required],
+  });
+
   readonly messages = signal<ChatMessageDto[]>([]);
   readonly loading = signal(true);
   readonly sending = signal(false);
@@ -38,14 +52,7 @@ export class ChatPanel {
   constructor() {
     effect(() => {
       const projectId = this.projectId();
-      this.loading.set(true);
-      this.chatService.listMessages(projectId).subscribe({
-        next: (messages) => {
-          this.messages.set(messages);
-          this.loading.set(false);
-        },
-        error: () => this.loading.set(false),
-      });
+      this.loadConversations(projectId);
     });
   }
 
@@ -53,8 +60,116 @@ export class ChatPanel {
     this.collapsedChange.emit(!this.collapsed());
   }
 
+  private loadConversations(projectId: string): void {
+    this.loadingConversations.set(true);
+    this.chatService.listConversations(projectId).subscribe({
+      next: (conversations) => {
+        this.conversations.set(conversations);
+        this.loadingConversations.set(false);
+
+        const currentId = this.selectedConversationId();
+        const stillExists = currentId !== null && conversations.some((c) => c.id === currentId);
+        if (!stillExists) {
+          this.selectConversation(conversations[0]?.id ?? null);
+        }
+      },
+      error: () => this.loadingConversations.set(false),
+    });
+  }
+
+  selectConversation(conversationId: string | null): void {
+    this.cancelRename();
+    this.selectedConversationId.set(conversationId);
+
+    if (!conversationId) {
+      this.messages.set([]);
+      this.loading.set(false);
+      return;
+    }
+
+    this.loading.set(true);
+    this.chatService.listMessages(this.projectId(), conversationId).subscribe({
+      next: (messages) => {
+        this.messages.set(messages);
+        this.loading.set(false);
+      },
+      error: () => this.loading.set(false),
+    });
+  }
+
+  onConversationSelected(conversationId: string): void {
+    if (conversationId !== this.selectedConversationId()) {
+      this.selectConversation(conversationId);
+    }
+  }
+
+  createConversation(): void {
+    if (this.creatingConversation()) {
+      return;
+    }
+
+    this.creatingConversation.set(true);
+    this.chatService.createConversation(this.projectId(), { title: null }).subscribe({
+      next: (conversation) => {
+        this.conversations.update((list) => [conversation, ...list]);
+        this.creatingConversation.set(false);
+        this.selectConversation(conversation.id);
+      },
+      error: () => {
+        this.creatingConversation.set(false);
+        this.notifications.error('Could not start a new chat session.');
+      },
+    });
+  }
+
+  startRename(): void {
+    const conversation = this.selectedConversation();
+    if (!conversation) {
+      return;
+    }
+
+    this.renameForm.setValue({ title: conversation.title });
+    this.renaming.set(true);
+  }
+
+  cancelRename(): void {
+    this.renaming.set(false);
+  }
+
+  saveRename(): void {
+    const conversation = this.selectedConversation();
+    if (!conversation || this.renameForm.invalid || this.savingRename()) {
+      this.renameForm.markAllAsTouched();
+      return;
+    }
+
+    const title = this.renameForm.getRawValue().title.trim();
+    if (!title) {
+      return;
+    }
+
+    if (title === conversation.title) {
+      this.renaming.set(false);
+      return;
+    }
+
+    this.savingRename.set(true);
+    this.chatService.renameConversation(this.projectId(), conversation.id, { title }).subscribe({
+      next: (updated) => {
+        this.conversations.update((list) => list.map((c) => (c.id === updated.id ? updated : c)));
+        this.savingRename.set(false);
+        this.renaming.set(false);
+      },
+      error: () => {
+        this.savingRename.set(false);
+        this.notifications.error('Could not rename this chat session.');
+      },
+    });
+  }
+
   send(): void {
-    if (this.form.invalid || this.sending()) {
+    const conversationId = this.selectedConversationId();
+    if (this.form.invalid || this.sending() || !conversationId) {
       this.form.markAllAsTouched();
       return;
     }
@@ -81,7 +196,7 @@ export class ChatPanel {
     ]);
     this.form.reset({ content: '' });
 
-    this.chatService.sendMessage(this.projectId(), { content }).subscribe({
+    this.chatService.sendMessage(this.projectId(), conversationId, { content }).subscribe({
       next: (reply) => {
         this.messages.update((messages) => [...messages, reply]);
         this.sending.set(false);
@@ -91,12 +206,13 @@ export class ChatPanel {
   }
 
   approveTicket(message: ChatMessageDto): void {
-    if (!message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
+    const conversationId = this.selectedConversationId();
+    if (!conversationId || !message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
       return;
     }
 
     this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
-    this.chatService.approveTicket(this.projectId(), message.id).subscribe({
+    this.chatService.approveTicket(this.projectId(), conversationId, message.id).subscribe({
       next: (updated) => {
         this.notifications.success('Ticket created.');
         this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
@@ -107,12 +223,13 @@ export class ChatPanel {
   }
 
   rejectTicket(message: ChatMessageDto): void {
-    if (!message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
+    const conversationId = this.selectedConversationId();
+    if (!conversationId || !message.proposedTicketTitle || this.isTicketDecided(message) || this.isProcessingTicket(message)) {
       return;
     }
 
     this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
-    this.chatService.rejectTicket(this.projectId(), message.id).subscribe({
+    this.chatService.rejectTicket(this.projectId(), conversationId, message.id).subscribe({
       next: (updated) => {
         this.messages.update((messages) => messages.map((m) => (m.id === updated.id ? updated : m)));
         this.removeProcessingId(message.id);

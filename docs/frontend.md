@@ -82,6 +82,19 @@ is still happening after the modal closes. If that background run later fails un
 ticket lands in the `Blocked` column with a retryable `Failure` question — the same UI (and the
 same Retry button) already used for a mid-pipeline Git/LLM failure, not a separate error surface.
 
+**The other three ways to (re-)start the pipeline — the `ToDo` → `InProgress` drag/Start button,
+answering a clarifying question, and retrying a failure — return just as fast, for the same
+reason.** `TicketsService.startPipeline`/`TicketQuestionsService.answer`/`.retry` all now resolve
+to a plain `TicketDto` instead of the old `TicketPipelineResultDto` (which carried the finished
+run's `testingPassed`/`testingAttempts`/`steps`) — the server kicks the run off detached (see
+[docs/application.md](application.md)) and returns before it finishes, so there's no final
+verdict to report yet. `board.ts`'s drag handler and `ticket-detail.ts`'s `startPipeline()` both
+show a plain "Pipeline started." toast instead of the old "Pipeline complete - testing
+passed/failed…" one; `ticket-question-panel.ts`'s `submitAnswer()`/`retry()` never read the
+response body at all, so they needed no change beyond the service's return type. Either page's
+own poll (see above) picks up the ticket landing on `ForReview`/`Blocked` once the run actually
+finishes.
+
 **Drag-and-drop is mapped to the API's actual transition endpoints, not a generic status
 setter.** There is no `PUT /tickets/{id}/status`; a ticket only moves between columns through
 specific actions (`start`, `move-to-review`, submitting a `Review`). The board
@@ -158,17 +171,30 @@ different mutations, not one.
 `board.html` wraps both in one `.row g-3` (`.col-12 col-lg-4` / `.col-12 col-lg-8`), the same
 Bootstrap grid split `ticket-detail.html` already used for its main-content/side-panel layout -
 no new layout primitive introduced. `features/board/chat-panel` (`ChatPanel`) owns its own state
-entirely: it takes only `projectId` as input, loads the project's chat history itself via
-`LiveAgentChatService.listMessages` on init (an `effect()` reacting to the `projectId` signal
-input, not a poll - the chat only changes in response to a message this component itself sent),
-and appends the user's message optimistically before the `POST` resolves - stamping the
-optimistic message's `senderName` from `AuthService.currentUser()` itself, since the real value
-only comes back once the `POST` response arrives. Each message bubble renders a small label above
+entirely: it takes only `projectId` as input, and loads the project's list of Live Agent chat
+sessions itself via `LiveAgentChatService.listConversations` on init (an `effect()` reacting to
+the `projectId` signal input). A project can have any number of sessions - anyone with project
+access can start their own via **+ New chat** (`createConversation`, with a blank title so the
+backend falls back to `"New chat"`), and everyone with project access sees the same list and can
+select any session from it (a native `<select>` in the header, each option showing the session's
+title and `createdByName`) - selecting one calls `listMessages(projectId, conversationId)` to load
+just that session's history. `ChatPanel` auto-selects the most recently updated session (position
+0 - the list is already sorted that way by the API) whenever the loaded conversation list no
+longer contains the currently selected id (covers both first load and the project changing), and
+shows an empty-state prompt with the composer disabled when the project has no sessions yet.
+Renaming (✏️ button next to the dropdown) swaps the dropdown for an inline `renameForm` text input
+scoped to the currently selected session - `saveRename` calls `LiveAgentChatService.renameConversation`
+and splices the updated title back into the `conversations` signal; any project member can rename
+any session, not just the one they started. Sending a message still appends the user's message
+optimistically before the `POST` resolves - stamping the optimistic message's `senderName` from
+`AuthService.currentUser()` itself, since the real value only comes back once the `POST` response
+arrives - but now targets whichever conversation is currently selected
+(`sendMessage(projectId, conversationId, ...)`). Each message bubble renders a small label above
 it with the sender's name (`ChatMessageDto.senderName`, falling back to `'You'` if it's ever
 missing) for a user message, or `'Live Agent'` for an assistant one. An assistant message
 carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with
 **"Create ticket"** and **"Reject"** buttons side by side in the chat thread - clicking either
-calls `LiveAgentChatService.approveTicket(...)`/`rejectTicket(projectId, messageId)`, which
+calls `LiveAgentChatService.approveTicket(...)`/`rejectTicket(projectId, conversationId, messageId)`, which
 returns the updated `ChatMessageDto` (now carrying `createdTicketId` or `ticketRejected: true`);
 `ChatPanel` splices that updated message back into its `messages` signal in place, which is what
 swaps the button pair for a "Ticket created" or "Ticket rejected" badge. Because that decision is

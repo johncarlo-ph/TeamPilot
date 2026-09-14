@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Agents;
 using TeamPilot.Application.Auth;
@@ -58,6 +59,7 @@ public sealed class OrchestrationService(
     IProjectAccessGuard projectAccessGuard,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
+    IBackgroundTaskRunner backgroundTaskRunner,
     ILogger<OrchestrationService> logger) : IOrchestrationService
 {
     private static readonly Regex VerdictPattern =
@@ -266,6 +268,73 @@ public sealed class OrchestrationService(
         {
             return await BlockOnFailureAsync(ticket, currentAgentId, steps, ex, cancellationToken);
         }
+    }
+
+    public async Task<TicketDto> StartPipelineAsync(Guid ticketId, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Ticket), ticketId);
+
+        await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
+
+        RunPipelineDetached(ticketId);
+
+        return TicketMappings.ToDto(ticket);
+    }
+
+    public void RunPipelineDetached(Guid ticketId)
+    {
+        backgroundTaskRunner.Run(async (services, backgroundCancellationToken) =>
+        {
+            var backgroundOrchestrationService = services.GetRequiredService<IOrchestrationService>();
+            try
+            {
+                await backgroundOrchestrationService.RunPipelineAsync(ticketId, backgroundCancellationToken);
+            }
+            catch (Exception ex)
+            {
+                await BlockOnBackgroundFailureAsync(services, ticketId, ex, backgroundCancellationToken);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Backstop for a detached pipeline run (see <see cref="RunPipelineDetached"/>): mirrors
+    /// <see cref="BlockOnFailureAsync"/>'s own Git/LLM failure handling, but for whatever
+    /// exception type made it out of <see cref="RunPipelineAsync"/> unhandled. Resolves every
+    /// dependency from the background task's own scoped <paramref name="services"/> rather than
+    /// this instance's fields, since by the time this runs the request that started it (and this
+    /// instance's own scope) may be long gone.
+    /// </summary>
+    private static async Task BlockOnBackgroundFailureAsync(IServiceProvider services, Guid ticketId, Exception exception, CancellationToken cancellationToken)
+    {
+        var backgroundLogger = services.GetRequiredService<ILogger<OrchestrationService>>();
+        backgroundLogger.LogError(exception, "Background pipeline run failed for ticket {TicketId}.", ticketId);
+
+        var backgroundTicketRepository = services.GetRequiredService<ITicketRepository>();
+        var ticket = await backgroundTicketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null || ticket.Status != TicketStatus.InProgress)
+        {
+            // RunPipelineAsync already left the ticket in a terminal state itself (e.g. Blocked
+            // via its own Git/LLM handling, or Cancelled by a concurrent request) - nothing more
+            // to do here.
+            return;
+        }
+
+        var backgroundTicketQuestionRepository = services.GetRequiredService<ITicketQuestionRepository>();
+        var question = TicketQuestion.CreateFailure(ticket.Id, agentId: null, exception.Message);
+        await backgroundTicketQuestionRepository.AddAsync(question, cancellationToken);
+
+        ticket.Block();
+
+        var backgroundAuditLogger = services.GetRequiredService<IAuditLogger>();
+        await backgroundAuditLogger.LogActionAsync(
+            AuditEventType.TicketBlocked,
+            $"Ticket '{ticket.Title}' blocked - background pipeline run failed: {exception.Message}",
+            cancellationToken);
+
+        var backgroundUnitOfWork = services.GetRequiredService<IUnitOfWork>();
+        await backgroundUnitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>

@@ -28,7 +28,7 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Workflow/`](../src/TeamPilot.Application/Workflow) | Admin-configurable per-project agent workflow: add a blank custom agent, place/remove/reorder stages, and set/clear a stage's loop-back - see "The agent workflow is admin-configurable per project" below |
 | [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure, and blocking the ticket when a stage asks a clarifying question or a known Git/LLM failure occurs |
 | [`TicketQuestions/`](../src/TeamPilot.Application/TicketQuestions) | Answering a blocked ticket's clarifying question, or retrying after a blocking failure - either way, unblocks the ticket and re-invokes `Orchestration/` |
-| [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat with its `LiveAgent`: persists the conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
+| [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat sessions with its `LiveAgent` - any project member can start their own and every member sees the full list; each session persists its own conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
 | [`Pipelines/`](../src/TeamPilot.Application/Pipelines) | CI/CD status-tracking use cases |
@@ -222,10 +222,13 @@ only when it has a loop-back configured), up to that stage's own `MaxLoopIterati
 The default workflow's Testing stage loops back to Coding bounded at 3 total attempts -
 numerically identical to the old hardcoded retry, just expressed as data instead of C#. Only a
 stage whose agent has the `Coding` role commits to Git; every other role (including every custom
-agent) is prompt-only. Runs synchronously within one call, same as before (no background-job
-infra, matching `ProjectService.CreateAsync`'s synchronous clone), and always ends by moving the
-ticket to `ForReview` once the sequence runs out, whether or not its last loop-bounded stage ever
-passed - the retried commits and final verdict are the visible trail for a human reviewer.
+agent) is prompt-only. `RunPipelineAsync` itself still runs the whole sequence synchronously
+within one call (no background-job infra inside the method itself, matching
+`ProjectService.CreateAsync`'s synchronous clone) - every caller that reaches it from an HTTP
+request runs it detached instead, never awaiting it inline (see "Workflow integration" below).
+Always ends by moving the ticket to `ForReview` once the sequence runs out, whether or not its
+last loop-bounded stage ever passed - the retried commits and final verdict are the visible trail
+for a human reviewer.
 
 **Two things short-circuit a run before it reaches `ForReview`, blocking the ticket instead.**
 Every stage's prompt is told: end the response with a `QUESTION: <text>` marker line if it needs
@@ -249,8 +252,11 @@ before, so it stays loud instead of quietly turning into a parked ticket. Either
 **Resuming a blocked ticket reuses the review-feedback threading mechanism above, generalized.**
 `TicketQuestionService.AnswerAsync` (answering a clarifying question) and `RetryAsync` (retrying
 after a failure - the most recent `TicketQuestion` must be `Kind == Failure`, since there's
-nothing to "answer") both just call `ticket.Unblock()` and re-invoke `RunPipelineAsync`, same as
-`ApprovalGateService`'s `RequestChanges` branch does. `RunPipelineAsync` looks up the most
+nothing to "answer") both call `ticket.Unblock()`, save, then kick the re-run off detached via
+`IOrchestrationService.RunPipelineDetached` (see "Workflow integration" below) - same as
+`ApprovalGateService`'s `RequestChanges` branch does, and for the same reason: a re-run can take
+minutes, and the caller already has everything it needs (the ticket back on `InProgress`) without
+waiting on it. `RunPipelineAsync` looks up the most
 recently *answered but not yet consumed* question (`ITicketQuestionRepository.GetMostRecentUnconsumedAnsweredAsync`
 - `Consumed` exists specifically because, unlike a `Review`, nothing else naturally supersedes an
 old answer) and, unlike `reviewFeedback` (threaded into every stage), threads it only into the
@@ -278,16 +284,21 @@ below.
 
 ### LiveAgentChat / the Live Agent chat
 
-`LiveAgentChatService.SendMessageAsync` persists the user's message onto the project's single
-`Conversation` (created lazily on first use), then runs a bounded (max 6 round-trip)
-`ILlmConnector.SendConversationAsync` tool-use loop before persisting and returning the
-assistant's final text reply:
+A project can have any number of `Conversation` sessions with its `LiveAgent`.
+`LiveAgentChatService.ListConversationsAsync` lists a project's sessions (most recently updated
+first) to every project member regardless of who started each one;
+`CreateConversationAsync` starts a new one for the caller (optionally titled, defaulting to
+`Conversation.DefaultTitle`); `RenameConversationAsync` lets any project member rename any
+session - a conversation isn't private to its creator. `SendMessageAsync` persists the user's
+message onto the specified `Conversation` (404 if it doesn't exist or belongs to a different
+project), then runs a bounded (max 6 round-trip) `ILlmConnector.SendConversationAsync` tool-use
+loop before persisting and returning the assistant's final text reply:
 
 - **Each persisted user message is stamped with the sender's display name** (`ICurrentUserContext.Name`,
   read off the caller's JWT — see [docs/api.md](api.md#authentication)) via
   `Conversation.AddMessage(..., senderName:)`, so the chat UI can show who sent each message
-  (any project member can post to the same single per-project `Conversation`). Assistant messages
-  carry no sender name.
+  within a session (any project member can post to any session, not just their own). Assistant
+  messages carry no sender name.
 - **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
   [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction),
   `list_tickets` (wraps `ITicketRepository.ListAsync`, lean id/title/status rows),
@@ -300,7 +311,7 @@ assistant's final text reply:
   description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
   `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks
   "Create ticket" on that message in the UI, which calls
-  `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/messages/{messageId}/approve-ticket`)
+  `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/conversations/{conversationId}/messages/{messageId}/approve-ticket`)
   — it creates the ticket via the ordinary `ITicketService.CreateAsync` and, in the same call,
   stamps the message's `CreatedTicketId` (`ChatMessage.MarkTicketCreated`) so every viewer -
   including the same user after a reload - sees the draft as already approved and the
@@ -310,7 +321,7 @@ assistant's final text reply:
   `TicketRejected` *before* calling `ITicketService.CreateAsync` and throws immediately if the
   draft was already rejected — checking only afterward, inside `MarkTicketCreated`'s own guard,
   would leave an orphan `Ticket` that no message points at. Rejecting a draft
-  (`LiveAgentChatService.RejectTicketAsync`, `POST .../messages/{messageId}/reject-ticket`) is the
+  (`LiveAgentChatService.RejectTicketAsync`, `POST .../conversations/{conversationId}/messages/{messageId}/reject-ticket`) is the
   mirror image: it calls `ChatMessage.RejectTicket()` to set `TicketRejected`, with the same
   idempotency and cross-guard (can't reject an already-approved message) as approval, but never
   touches `ITicketService` since nothing is created. There is no "Draft" `TicketStatus`; the
@@ -382,16 +393,16 @@ The **ticket lifecycle** is the central workflow this module orchestrates:
 ```mermaid
 stateDiagram-v2
     [*] --> ToDo: TicketService.CreateAsync
-    ToDo --> InProgress: OrchestrationService.RunPipelineAsync
-    InProgress --> ForReview: OrchestrationService.RunPipelineAsync
+    ToDo --> InProgress: OrchestrationService.StartPipelineAsync (background pipeline run)
+    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (background)
     InProgress --> ForReview: TicketService.MoveToReviewAsync
     ForReview --> Done: ApprovalGateService.SubmitReviewAsync(Approve)
     ForReview --> InProgress: ApprovalGateService.SubmitReviewAsync(RequestChanges)
     InProgress --> ForReview: OrchestrationService.RunPipelineAsync (background re-run, auto-triggered by RequestChanges)
     InProgress --> Blocked: OrchestrationService.RunPipelineAsync (question or Git/LLM failure)
-    InProgress --> Blocked: ApprovalGateService (background RequestChanges re-run threw unexpectedly)
+    InProgress --> Blocked: OrchestrationService.RunPipelineDetached (background run threw unexpectedly)
     Blocked --> InProgress: TicketQuestionService.AnswerAsync / RetryAsync
-    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (auto-triggered by AnswerAsync/RetryAsync)
+    InProgress --> ForReview: OrchestrationService.RunPipelineAsync (background, auto-triggered by AnswerAsync/RetryAsync)
     ToDo --> Cancelled: TicketService.CancelAsync
     InProgress --> Cancelled: TicketService.CancelAsync
     ForReview --> Cancelled: TicketService.CancelAsync
@@ -399,38 +410,55 @@ stateDiagram-v2
     ForReview --> Cancelled: ApprovalGateService.SubmitReviewAsync(Reject)
 ```
 
-`RunPipelineAsync` both starts a ticket (first agent assignment moves it out of To Do) and, in
-the same call, runs it all the way through to For Review — see "The agent workflow is
-admin-configurable per project" above. `TicketService.MoveToReviewAsync` remains as a manual
-escape hatch for an
-In Progress ticket a human wants to push to review without invoking the pipeline again.
+`RunPipelineAsync` both starts a ticket (first agent assignment moves it out of To Do) and runs it
+all the way through to For Review — see "The agent workflow is admin-configurable per project"
+above. `TicketService.MoveToReviewAsync` remains as a manual escape hatch for an In Progress
+ticket a human wants to push to review without invoking the pipeline again.
 
-**`RequestChanges` doesn't just flip the status back — it re-runs the pipeline in the background,
-not the same call.** Previously a reviewer had to separately click Run Pipeline afterward; now
-`ApprovalGateService.SubmitReviewAsync` commits the review and `ticket.RequestChanges()` (a
-`SaveChangesAsync` of its own), then hands `OrchestrationService.RunPipelineAsync` to
-`IBackgroundTaskRunner.Run` instead of awaiting it - the request returns immediately with the
-ticket already showing `InProgress`, rather than blocking for however long the re-run takes
-(potentially minutes: multiple LLM/Git calls per stage). `RunPipelineAsync` is safe to call again
-on an already-In-Progress ticket (see above), and `OrchestrationService` also looks up the
-ticket's most recent `RequestChanges` review with non-blank comments and threads that text into
-every stage's prompt for that run (not just the first stage, and not just Coding) - so the re-run
-actually addresses what the reviewer flagged rather than repeating the exact same work.
+**None of the four ways to (re-)start a run — the initial `ToDo` → `InProgress` move, a
+`RequestChanges` review, answering a clarifying question, or retrying a failure — wait for
+`RunPipelineAsync` to finish; all four kick it off detached instead.** A run can take minutes
+(multiple LLM/Git calls per stage), and awaiting it inline would tie the run's `CancellationToken`
+to the HTTP request that started it - a client disconnecting (e.g. a page refresh) would then
+cancel the run itself mid-flight, not just the caller's view of it. So:
 
-`IBackgroundTaskRunner` (`Application/Common/Interfaces/IBackgroundTaskRunner.cs`, implemented by
-`Infrastructure/BackgroundTasks/BackgroundTaskRunner.cs`) runs its delegate on the thread pool
-inside a brand-new DI scope, resolving `IOrchestrationService` and everything else it needs from
-that scope's `IServiceProvider` rather than closing over `ApprovalGateService`'s own
-request-scoped dependencies - by the time the detached work runs, the HTTP request (and its
-scoped `DbContext`) that started it is already gone. `RunPipelineAsync` still handles known Git/LLM
-failures itself by blocking the ticket with a retryable question (see below); if anything else
-escapes it unhandled, `ApprovalGateService.BlockOnBackgroundFailureAsync` is the backstop - it
-re-fetches the ticket, and if it's still `InProgress` (i.e. `RunPipelineAsync` didn't already
-leave it in some other terminal state itself), blocks it with a `Failure`-kind `TicketQuestion`
-carrying the exception message, exactly like a Git/LLM failure would. This is what stops an
-unexpected bug in the background re-run from leaving the ticket silently stuck `InProgress`
-forever with no visible sign anything went wrong - the reviewer sees it land in Blocked with a
-retryable failure entry, same as any other operational failure mid-pipeline.
+- `TicketsController.Start` → `OrchestrationService.StartPipelineAsync` validates the ticket
+  exists and is accessible, then calls `RunPipelineDetached` and returns the current `TicketDto`
+  immediately - still `ToDo` at that point, since the actual flip only happens once the detached
+  run itself assigns the workflow's agents.
+- `ApprovalGateService.SubmitReviewAsync`'s `RequestChanges` branch commits the review and
+  `ticket.RequestChanges()` (a `SaveChangesAsync` of its own, flipping it back to `InProgress`),
+  then calls `RunPipelineDetached` directly - the request returns immediately with the ticket
+  already showing `InProgress`, rather than blocking for the re-run.
+- `TicketQuestionService.AnswerAsync`/`RetryAsync` call `ticket.Unblock()`, save, then call
+  `RunPipelineDetached` the same way, returning the now-`InProgress` `TicketDto`.
+
+`RunPipelineAsync` is safe to call again on an already-In-Progress ticket (see above), and also
+looks up the ticket's most recent `RequestChanges` review with non-blank comments and threads that
+text into every stage's prompt for that run (not just the first stage, and not just Coding) - so a
+RequestChanges re-run actually addresses what the reviewer flagged rather than repeating the exact
+same work.
+
+`OrchestrationService.RunPipelineDetached` is the one place all four entry points converge: it
+hands `RunPipelineAsync` to `IBackgroundTaskRunner.Run`
+(`Application/Common/Interfaces/IBackgroundTaskRunner.cs`, implemented by
+`Infrastructure/BackgroundTasks/BackgroundTaskRunner.cs`), which runs the delegate on the thread
+pool inside a brand-new DI scope, resolving `IOrchestrationService` and everything else it needs
+from that scope's `IServiceProvider` rather than closing over the caller's own request-scoped
+dependencies - by the time the detached work runs, the HTTP request (and its scoped `DbContext`)
+that started it is already gone, and its `CancellationToken.None` means the run is no longer tied
+to that request's lifetime either. `RunPipelineAsync` still handles known Git/LLM failures itself
+by blocking the ticket with a retryable question (see below); if anything else escapes it
+unhandled, `RunPipelineDetached`'s own `BlockOnBackgroundFailureAsync` is the backstop - it
+re-fetches the ticket, and if it's still `InProgress` (i.e. `RunPipelineAsync` didn't already leave
+it in some other terminal state itself), blocks it with a `Failure`-kind `TicketQuestion` carrying
+the exception message, exactly like a Git/LLM failure would. This is what stops an unexpected bug
+in a detached run from leaving the ticket silently stuck `InProgress` forever with no visible sign
+anything went wrong - it lands in Blocked with a retryable failure entry instead, same as any
+other operational failure mid-pipeline. `StartPipelineAsync` is the one entry point that validates
+the ticket synchronously (exists, accessible) before detaching - the other three already hold a
+validated, just-transitioned ticket by the time they call `RunPipelineDetached`, so they skip that
+re-check.
 
 **Each stage decides for itself whether the reviewer's feedback actually changes anything for its
 part of the work, instead of the re-run blindly redoing every stage from scratch.** This was

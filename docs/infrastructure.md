@@ -191,11 +191,14 @@ registration, which is `AddScoped` because `TeamPilotDbContext` is. `Run(work)` 
 the thread pool inside a fresh `IServiceScopeFactory.CreateScope()`, passing that scope's own
 `IServiceProvider` in rather than anything from the caller's scope, and catches/logs any
 exception `work` doesn't handle itself as a last-resort safety net. Currently used by
-`ApprovalGateService` for the `RequestChanges` pipeline re-run (see
-[docs/application.md](application.md)) — the caller resolves its own dependencies
-(`IOrchestrationService`, `ITicketRepository`, etc.) from the given `IServiceProvider` inside the
-delegate, never from fields injected into the caller itself, since the caller's own scope (and
-scoped `DbContext`) is disposed once its request returns, before the detached work runs.
+`OrchestrationService.RunPipelineDetached`, the single point every pipeline-(re-)starting entry
+point (`TicketsController.Start`, `ApprovalGateService`'s `RequestChanges` branch,
+`TicketQuestionService.AnswerAsync`/`RetryAsync`) goes through instead of awaiting
+`RunPipelineAsync` inline (see [docs/application.md](application.md)) — the delegate resolves its
+own dependencies (`IOrchestrationService`, `ITicketRepository`, etc.) from the given
+`IServiceProvider`, never from fields injected into the caller itself, since the caller's own
+scope (and scoped `DbContext`, and its request's `CancellationToken`) is disposed/cancelled once
+its request returns, before the detached work runs.
 
 ## Code style notes
 

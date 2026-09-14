@@ -23,6 +23,60 @@ public class ConversationTests
     }
 
     [Fact]
+    public void Create_NoTitle_FallsBackToDefaultTitle()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+
+        Assert.Equal(Conversation.DefaultTitle, conversation.Title);
+    }
+
+    [Fact]
+    public void Create_BlankTitle_FallsBackToDefaultTitle()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId, "   ");
+
+        Assert.Equal(Conversation.DefaultTitle, conversation.Title);
+    }
+
+    [Fact]
+    public void Create_WithTitleAndCreator_CapturesThemTrimmed()
+    {
+        var userId = Guid.NewGuid();
+
+        var conversation = Conversation.Create(ProjectId, AgentId, "  Bug triage  ", userId, "  Jordan Lee  ");
+
+        Assert.Equal("Bug triage", conversation.Title);
+        Assert.Equal(userId, conversation.CreatedByUserId);
+        Assert.Equal("Jordan Lee", conversation.CreatedByName);
+    }
+
+    [Fact]
+    public void Create_EmptyCreatedByUserId_StoresNull()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId, createdByUserId: Guid.Empty);
+
+        Assert.Null(conversation.CreatedByUserId);
+    }
+
+    [Fact]
+    public void Rename_NewTitle_UpdatesTitleTrimmed()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+
+        conversation.Rename("  Renamed session  ");
+
+        Assert.Equal("Renamed session", conversation.Title);
+    }
+
+    [Fact]
+    public void Rename_BlankTitle_ThrowsArgumentException()
+    {
+        var conversation = Conversation.Create(ProjectId, AgentId);
+
+        Assert.Throws<ArgumentException>(() => conversation.Rename("   "));
+    }
+
+    [Fact]
     public void AddMessage_UserMessage_AppendsWithNoProposedTicket()
     {
         var conversation = Conversation.Create(ProjectId, AgentId);

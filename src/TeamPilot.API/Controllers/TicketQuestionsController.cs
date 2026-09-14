@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.TicketQuestions.Dtos;
+using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
 
 namespace TeamPilot.API.Controllers;
@@ -18,10 +18,10 @@ public class TicketQuestionsController(ITicketQuestionService ticketQuestionServ
     }
 
     [HttpPost("{questionId:guid}/answer")]
-    public async Task<ActionResult<TicketPipelineResultDto>> Answer(Guid ticketId, Guid questionId, [FromBody] AnswerTicketQuestionRequest request, CancellationToken cancellationToken)
+    public async Task<ActionResult<TicketDto>> Answer(Guid ticketId, Guid questionId, [FromBody] AnswerTicketQuestionRequest request, CancellationToken cancellationToken)
     {
-        var result = await ticketQuestionService.AnswerAsync(ticketId, questionId, request, cancellationToken);
-        return Ok(result);
+        var ticket = await ticketQuestionService.AnswerAsync(ticketId, questionId, request, cancellationToken);
+        return Ok(ticket);
     }
 
     private static TicketQuestionDto ToDto(TicketQuestion question) => new(

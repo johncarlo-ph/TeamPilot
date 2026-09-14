@@ -110,7 +110,7 @@ automatic branch delete.
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
 | `TicketQuestion` | A record of why a ticket was blocked - a clarifying question or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateFailure`, `Answer`, `MarkConsumed` |
-| `Conversation` | A project's single, ongoing chat thread with its `LiveAgent` | `Create`, `AddMessage` |
+| `Conversation` | One chat session with a project's `LiveAgent` - a project can have any number | `Create`, `Rename`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)*, `MarkTicketCreated`, `RejectTicket` |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
@@ -162,11 +162,18 @@ that's ever actually run - stays permanent.
 
 ## Conversation and ChatMessage
 
-`Conversation.Create(projectId, agentId)` creates a project's single chat thread with its
-`LiveAgent`, created lazily on the project's first chat message
-(`Conversation` has a unique index on `ProjectId` — see
-[`Entities/Conversation.cs`](../src/TeamPilot.Domain/Entities/Conversation.cs)). Each turn is a
-`ChatMessage` appended via `Conversation.AddMessage(role, content, proposedTicketTitle?,
+`Conversation.Create(projectId, agentId, title?, createdByUserId?, createdByName?)` starts one
+chat session with a project's `LiveAgent`. A project can have any number of conversations - any
+project member can start their own via the "New chat" action, and every project member can see
+and select from the full list (see
+[`Entities/Conversation.cs`](../src/TeamPilot.Domain/Entities/Conversation.cs)). `Title` defaults
+to `Conversation.DefaultTitle` ("New chat") when omitted or blank, and can be changed later by any
+project member via `Conversation.Rename(title)` - a conversation isn't private to the user who
+started it, so renaming isn't restricted to its creator. `CreatedByUserId`/`CreatedByName` capture
+who started the session (name captured at creation time, same reasoning as
+`ChatMessage.SenderName` below) so the session list can show it; both are null for a conversation
+that predates these fields. Each turn is a `ChatMessage` appended via
+`Conversation.AddMessage(role, content, proposedTicketTitle?,
 proposedTicketDescription?, senderName?)` — an assistant message that drafted a ticket carries
 those two optional ticket fields so the "create ticket" approval card in the UI re-renders
 correctly after a reload. A user message additionally carries `SenderName`, the display name of

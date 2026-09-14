@@ -145,14 +145,13 @@ export class TicketDetail {
       return;
     }
     this.starting.set(true);
+    // Runs detached on the server (see TicketsService.startPipeline) - it can take minutes, so
+    // this doesn't wait on it; refresh() re-fetches immediately, and the page's own poll picks
+    // up the eventual outcome.
     this.ticketsService.startPipeline(ticket.id).subscribe({
-      next: (result) => {
+      next: () => {
         this.starting.set(false);
-        this.notifications.success(
-          result.testingPassed
-            ? 'Pipeline complete - testing passed.'
-            : `Pipeline complete - testing failed after ${result.testingAttempts} attempts.`
-        );
+        this.notifications.success('Pipeline started.');
         this.refresh();
       },
       error: () => this.starting.set(false),

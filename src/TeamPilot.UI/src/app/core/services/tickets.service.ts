@@ -7,7 +7,6 @@ import {
   CreateTicketRequest,
   TicketDetailDto,
   TicketDto,
-  TicketPipelineResultDto,
   TicketStatus,
 } from '../models';
 
@@ -32,8 +31,11 @@ export class TicketsService {
     return this.http.get<TicketDetailDto>(`${this.apiBaseUrl}/tickets/${id}`);
   }
 
-  startPipeline(id: string): Observable<TicketPipelineResultDto> {
-    return this.http.post<TicketPipelineResultDto>(`${this.apiBaseUrl}/tickets/${id}/start`, null);
+  // Runs detached on the server (see IOrchestrationService.StartPipelineAsync) so a client
+  // disconnecting (e.g. a page refresh) can't abort an in-flight run - the returned ticket may
+  // still show ToDo; poll (listForProject/getById) to observe the eventual outcome.
+  startPipeline(id: string): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${id}/start`, null);
   }
 
   moveToReview(id: string): Observable<TicketDto> {

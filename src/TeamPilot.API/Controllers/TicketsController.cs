@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
@@ -33,10 +32,10 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
     }
 
     [HttpPost("api/tickets/{id:guid}/start")]
-    public async Task<ActionResult<TicketPipelineResultDto>> Start(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<TicketDto>> Start(Guid id, CancellationToken cancellationToken)
     {
-        var result = await orchestrationService.RunPipelineAsync(id, cancellationToken);
-        return Ok(result);
+        var ticket = await orchestrationService.StartPipelineAsync(id, cancellationToken);
+        return Ok(ticket);
     }
 
     [HttpPost("api/tickets/{id:guid}/move-to-review")]
@@ -54,9 +53,9 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
     }
 
     [HttpPost("api/tickets/{id:guid}/retry")]
-    public async Task<ActionResult<TicketPipelineResultDto>> Retry(Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<TicketDto>> Retry(Guid id, CancellationToken cancellationToken)
     {
-        var result = await ticketQuestionService.RetryAsync(id, cancellationToken);
-        return Ok(result);
+        var ticket = await ticketQuestionService.RetryAsync(id, cancellationToken);
+        return Ok(ticket);
     }
 }

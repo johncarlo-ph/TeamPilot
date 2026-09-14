@@ -150,15 +150,14 @@ export class Board {
 
   private handleTransition(ticket: TicketDto, targetStatus: TicketStatus): void {
     if (ticket.status === 'ToDo' && targetStatus === 'InProgress') {
+      // The pipeline runs detached on the server (see TicketsService.startPipeline) - it can
+      // take minutes, so this doesn't wait on it. refreshTrigger$ forces an immediate poll tick
+      // to pick up the status change as soon as it lands; the regular poll covers the rest.
       this.ticketsService.startPipeline(ticket.id).subscribe({
-        next: (result) => {
-          this.patchTicket(result.ticket);
+        next: (updated) => {
+          this.patchTicket(updated);
           this.refreshTrigger$.next();
-          this.notifications.success(
-            result.testingPassed
-              ? 'Pipeline complete - testing passed.'
-              : `Pipeline complete - testing failed after ${result.testingAttempts} attempts.`
-          );
+          this.notifications.success('Pipeline started.');
         },
       });
       return;

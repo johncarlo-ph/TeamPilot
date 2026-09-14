@@ -7,7 +7,7 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   InProgress: 'text-bg-warning',
   ForReview: 'text-bg-forreview',
   Done: 'text-bg-success',
-  Cancelled: 'text-bg-dark',
+  Cancelled: 'text-bg-danger',
   Blocked: 'text-bg-danger',
   // Ticket question kind/status
   Question: 'text-bg-warning',
@@ -24,11 +24,6 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   AiResolutionSuggested: 'text-bg-warning',
   ResolvedManually: 'text-bg-success',
   ResolvedWithAiSuggestion: 'text-bg-success',
-  // Pipeline run status
-  Queued: 'text-bg-secondary',
-  Running: 'text-bg-primary',
-  Succeeded: 'text-bg-success',
-  Failed: 'text-bg-danger',
   // Review decision
   Approve: 'text-bg-success',
   RequestChanges: 'text-bg-warning',

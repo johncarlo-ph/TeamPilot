@@ -59,6 +59,15 @@ body {
   color: #fff;
 }
 
+// Same min-contrast-ratio issue as .btn-danger above, but for solid (fill) badge backgrounds -
+// Bootstrap's own text-bg-* utilities already carry !important (see _color-bg.scss), so matching
+// it here is required to actually win, not just style preference.
+.text-bg-danger,
+.text-bg-success,
+.text-bg-primary {
+  color: #fff !important;
+}
+
 .status-badge {
   font-weight: 600;
   letter-spacing: 0.02em;

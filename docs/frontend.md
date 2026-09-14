@@ -54,21 +54,47 @@ Both providers hand their raw `id_token` to the same
 `POST /api/auth/login/{provider}` — the API does the actual verification against each provider's
 JWKS (see [docs/infrastructure.md](infrastructure.md#authentication)).
 
-**Polling instead of SSE.** The README's original design called for real-time updates via
-Server-Sent Events, but no SSE/WebSocket/SignalR endpoint exists anywhere in the backend today.
-Rather than build new backend real-time infrastructure as part of a frontend task, the board
-(`features/board`) and ticket detail (`features/ticket-detail`) pages poll their respective
-GET endpoints on a short interval (8s / 10s) via `interval(...).pipe(switchMap(...))`, scoped to
-the active route with `takeUntilDestroyed()`. Revisit this if/when the backend grows a
-real-time transport — see [docs/cross-cutting-concerns.md](cross-cutting-concerns.md).
+**SSE-driven refresh, not polling.** The README's original design called for real-time updates
+via Server-Sent Events; the board (`features/board`) and ticket detail (`features/ticket-detail`)
+pages used to poll their respective GET endpoints on a short interval (8s/10s) instead, since no
+real-time transport existed in the backend. That transport now exists (`IProjectEventBroadcaster`,
+`GET /api/projects/{projectId}/events` — see [docs/application.md](application.md) and
+[docs/api.md](api.md)), and both pages consume it via `core/services/project-events.service.ts`'s
+`ProjectEventsService.stream(projectId)` in place of the old `interval(...)`. A 60s `interval` is
+still merged in alongside it as a safety net for a stuck/misbehaving connection, but it's no
+longer the primary refresh mechanism.
 
-Both pages also `merge` a private `Subject<void>` ("refresh trigger") into the polling `interval`
-before the outer `switchMap`, and every local mutation (create ticket, start pipeline, move to
-review, submit a review, etc.) calls it after updating local state. Without this, a poll request
-already in flight when the mutation fires can resolve afterward with pre-mutation data and
-overwrite the optimistic update — the `switchMap` on the merged stream cancels that stale request
-instead, so the next tick is always a fresh, authoritative fetch. `ticket-detail.ts`'s private
-`refresh()` helper is just a call to this trigger.
+`ProjectEventsService` deliberately consumes the SSE endpoint via `fetch()` + `ReadableStream`
+rather than native `EventSource`: `EventSource` can't set a custom `Authorization` header, only a
+cookie or a query-string token, and this app holds its access token in memory and attaches it as
+a header (see "Auth token handling" above) — reusing that avoids a second, token-in-URL auth
+pattern with no other precedent in this codebase. The trade-off is that `fetch` gives none of
+`EventSource`'s built-in reconnect behavior, so the service reconnects itself with a capped
+exponential backoff (1s → 2s → 5s → 10s, reset on a successful message) on any stream error or
+clean close, and never errors its returned `Observable` — it's meant to be merged in once and
+left running for the page's lifetime, the same way `interval(...)` used to be.
+
+Events carry no ticket/question state of their own — just `{ type: 'TicketChanged' |
+'TicketQuestionChanged', projectId, ticketId, occurredAtUtc }` (`ProjectEventDto`,
+`core/models/project-event.model.ts`). Both pages react to one by re-issuing the exact same GET(s)
+they used to poll with, rather than trying to apply the event's payload directly — this is why the
+event shape never needs to be kept in sync with `TicketDto`/`TicketQuestionDto` the way a full
+state-push design would. `board.ts` filters the stream to `TicketChanged` only; `ticket-detail.ts`
+reacts to both types, since a `TicketQuestionChanged` event (a new blocking question, or one just
+answered) needs the same `forkJoin({ ticket, questions })` refetch as a plain ticket change.
+`ticket-detail.ts` doesn't know its ticket's `projectId` until the first `GET /tickets/{id}`
+resolves (the route only carries the ticket id), so it fetches the ticket once up front purely to
+learn which project's event stream to open, then starts the merged refresh pipeline (which
+immediately re-fetches both ticket and questions again via `startWith(0)`) — one extra GET on
+initial page load, traded for not needing to thread `projectId` through the route.
+
+Both pages also `merge` a private `Subject<void>` ("refresh trigger") into the merged
+stream/interval before the outer `switchMap`, and every local mutation (create ticket, start
+pipeline, move to review, submit a review, etc.) calls it after updating local state. Without
+this, a fetch already in flight when the mutation fires can resolve afterward with pre-mutation
+data and overwrite the optimistic update — the `switchMap` on the merged stream cancels that stale
+request instead, so the next tick is always a fresh, authoritative fetch. `ticket-detail.ts`'s
+private `refresh()` helper is just a call to this trigger.
 
 **Submitting a `RequestChanges` review returns fast, not once the pipeline finishes.**
 `ApprovalGateService` now kicks the pipeline re-run off in the background instead of awaiting it
@@ -156,8 +182,12 @@ ticket" doesn't fit the drag-a-card-between-columns metaphor the way `start`/`mo
 `InProgress`/`ForReview`/`Blocked` tickets) that uses the same `confirm()`/`prompt()` pattern as
 deleting an instruction template — a plain browser confirm, then an optional reason — rather than
 a dedicated modal. `board.ts`'s `ticketsByStatus` grouping filters `Cancelled` tickets out
-entirely, so a cancelled ticket simply disappears from the board; it's still reachable directly
-by URL.
+entirely, so a cancelled ticket simply disappears from the board's kanban columns. It's not lost,
+though: a **Cancelled Tickets** button in the board header
+(`features/board/cancelled-tickets-modal`) opens a modal that fetches
+`listForProject(projectId, 'Cancelled')` (the same `TicketsService` method the board itself uses,
+just with the API's existing `status` query filter) on open and lists each cancelled ticket's
+title, last-updated time, and cancellation reason (if any), linking through to its detail page.
 
 **`Blocked` *is* a board column, unlike `Cancelled` - the difference is that a blocked ticket
 needs a human to notice and act on it, so it stays visible in the normal kanban flow rather than
@@ -549,8 +579,12 @@ than a toast).
   [docs/cross-cutting-concerns.md](cross-cutting-concerns.md#testing-strategy).
 - **Generated TypeScript client** from the Swagger document, to remove the manual-sync burden
   of hand-written models — see [docs/api.md](api.md#future-considerations).
-- **Real-time updates**: replace polling with SSE/WebSockets/SignalR once the backend grows a
-  real-time transport.
+- **Live Agent chat has no real-time updates yet.** `features/board/chat-panel` still only
+  refreshes on the user's own actions (sending a message, switching sessions) — two people in the
+  same conversation don't see each other's messages without a manual reload/reselect. Extending
+  `ProjectEventsService`'s stream (or the `ProjectEvent` type set) to cover new chat messages would
+  be the natural next step, deliberately left out of the board/ticket-detail SSE conversion above
+  to keep that change scoped to the polling it was replacing.
 - **Server-side fix for the branchless-approve 500** described above under "Authorization" —
   the client-side guard is a stopgap, not a substitute for the API returning a proper error.
 - **No delete endpoints** exist for `Project` or `Ticket` on the API, so the UI has no delete

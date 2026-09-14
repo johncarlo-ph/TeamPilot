@@ -48,9 +48,6 @@ export type AuditEventType =
   | 'ConflictResolvedManually'
   | 'ConflictAiSuggestionAccepted'
   | 'GitBranchCreated'
-  | 'PipelineRunTriggered'
-  | 'PipelineRunStarted'
-  | 'PipelineRunCompleted'
   | 'UserRolesChanged'
   | 'UserStatusChanged'
   | 'UserProjectAssignmentsChanged';
@@ -64,8 +61,6 @@ export type ConflictStatus =
 export type InstructionType = 'Constitution' | 'Guideline' | 'Requirement';
 
 export const INSTRUCTION_TYPES: InstructionType[] = ['Constitution', 'Guideline', 'Requirement'];
-
-export type PipelineRunStatus = 'Queued' | 'Running' | 'Succeeded' | 'Failed';
 
 export type ReviewDecision = 'Approve' | 'RequestChanges' | 'Reject' | 'ResolveConflict';
 

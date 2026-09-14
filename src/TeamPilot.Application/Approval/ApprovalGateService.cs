@@ -1,12 +1,12 @@
 using FluentValidation;
 using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Tickets;
@@ -21,7 +21,6 @@ public sealed class ApprovalGateService(
     IProjectRepository projectRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
-    IPipelineService pipelineService,
     IProjectAccessGuard projectAccessGuard,
     ICurrentUserContext currentUser,
     IAuditLogger auditLogger,
@@ -29,6 +28,7 @@ public sealed class ApprovalGateService(
     IValidator<SubmitReviewRequest> validator,
     IOrchestrationService orchestrationService,
     IPipelineRunTracker pipelineRunTracker,
+    IProjectEventBroadcaster eventBroadcaster,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
@@ -69,7 +69,7 @@ public sealed class ApprovalGateService(
                 // instead of awaited: a re-run can take minutes (multiple LLM/Git calls per
                 // stage), and the status change above already gives the caller everything it
                 // needs to show the ticket as In Progress immediately.
-                orchestrationService.RunPipelineDetached(ticket.Id);
+                orchestrationService.RunPipelineDetached(ticket.ProjectId, ticket.Id);
                 break;
 
             case ReviewDecision.Reject:
@@ -85,6 +85,8 @@ public sealed class ApprovalGateService(
             default:
                 throw new ArgumentOutOfRangeException(nameof(request), request.Decision, "Unsupported review decision.");
         }
+
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
@@ -191,11 +193,9 @@ public sealed class ApprovalGateService(
         }
 
         logger.LogInformation(
-            "Ticket {TicketId} in project {ProjectId} approved and merged by {ReviewerName}; triggering pipeline run",
+            "Ticket {TicketId} in project {ProjectId} approved and merged by {ReviewerName}",
             ticket.Id,
             ticket.ProjectId,
             reviewerName);
-
-        await pipelineService.TriggerAsync(ticket.ProjectId, ticket.Id, $"Merge of ticket '{ticket.Title}'", cancellationToken);
     }
 }

@@ -19,7 +19,7 @@ logging: `IAuditLogger.LogAsync(eventType, userId, detail, ipAddress)` writes an
 logout, detected refresh-token reuse) calls this directly with an explicit `userId`/`ipAddress`
 since those requests are anonymous. Every other state-changing use case (creating/updating a
 project, ticket, or agent; adding/removing/reordering a workflow stage or configuring its
-loop-back; submitting a review, triggering a pipeline run, changing a user's roles, etc.)
+loop-back; submitting a review, changing a user's roles, etc.)
 instead calls the convenience overload `IAuditLogger.LogActionAsync(eventType,
 detail)`, which reads the caller's id and IP off `ICurrentUserContext` so services don't have to
 thread those values through every call site. A silent background token refresh is deliberately
@@ -124,6 +124,16 @@ committed alongside the non-secret config. On the frontend side,
 `apiBaseUrl` and the Google/Microsoft OAuth client IDs for that environment — these are public
 client identifiers, not secrets, but still must match whatever origin they're deployed to (see
 `Cors:AllowedOrigins` above and the OAuth provider's own redirect/origin configuration).
+
+**Reverse proxies must not buffer or time out the SSE endpoint.** `GET /api/projects/{projectId}/events`
+(`ProjectEventsController` — see [docs/api.md](api.md)) is a long-lived `text/event-stream`
+connection, one per open board/ticket-detail page, not a request-response call. A reverse proxy
+placed in front of Kestrel (nginx, an API gateway, a load balancer) must have response buffering
+disabled and its idle-connection timeout raised for this route, or it will hold every event until
+the connection closes (defeating the point) or drop the connection outright. The controller
+already sets `X-Accel-Buffering: no` (nginx's own opt-out) and sends a heartbeat comment every 15s
+to keep the connection visibly active, but proxy-side configuration is still required for
+whichever reverse proxy actually fronts a given deployment.
 
 **Migrations.** Two supported approaches:
 - Run `dotnet ef database update` as a deploy step against the target database (simplest, but

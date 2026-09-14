@@ -5,6 +5,7 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import {
   Subject,
   distinctUntilChanged,
+  filter,
   forkJoin,
   interval,
   map,
@@ -17,6 +18,7 @@ import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { TicketQuestionsService } from '../../core/services/ticket-questions.service';
 import { ProjectsService } from '../../core/services/projects.service';
+import { ProjectEventsService } from '../../core/services/project-events.service';
 import { NotificationService } from '../../core/notification/notification.service';
 import {
   ProjectDto,
@@ -33,7 +35,9 @@ import { ReviewForm } from './review-form/review-form';
 import { TicketQuestionPanel } from './ticket-question-panel/ticket-question-panel';
 import { buildBranchUrl } from '../../core/utils/git-url.util';
 
-const POLL_INTERVAL_MS = 10000;
+// The SSE stream (see ProjectEventsService) now drives the primary refresh; this is only a
+// safety net for a stuck/misbehaving connection, so it's far longer than the old 10s poll.
+const SAFETY_POLL_INTERVAL_MS = 60000;
 const DESCRIPTION_PREVIEW_LENGTH = 400;
 
 @Component({
@@ -56,6 +60,7 @@ export class TicketDetail {
   private readonly reviewsService = inject(ReviewsService);
   private readonly ticketQuestionsService = inject(TicketQuestionsService);
   private readonly projectsService = inject(ProjectsService);
+  private readonly projectEventsService = inject(ProjectEventsService);
   private readonly notifications = inject(NotificationService);
 
   readonly ticket = signal<TicketDetailDto | null>(null);
@@ -100,14 +105,28 @@ export class TicketDetail {
         map((params) => params.get('id')!),
         distinctUntilChanged(),
         tap(() => this.descriptionExpanded.set(false)),
+        // A single upfront fetch just to learn the ticket's projectId (needed to open the
+        // project-scoped event stream below) - cheap, and simpler than threading projectId in
+        // through the route or a separate lookup. The startWith(0) still does its own first
+        // real fetch of both ticket and questions immediately after.
         switchMap((id) =>
-          merge(interval(POLL_INTERVAL_MS), this.refreshTrigger$).pipe(
-            startWith(0),
-            switchMap(() =>
-              forkJoin({
-                ticket: this.ticketsService.getById(id),
-                questions: this.ticketQuestionsService.listForTicket(id),
-              })
+          this.ticketsService.getById(id).pipe(
+            switchMap((initialTicket) =>
+              merge(
+                this.projectEventsService
+                  .stream(initialTicket.projectId)
+                  .pipe(filter((e) => e.ticketId === null || e.ticketId === id)),
+                interval(SAFETY_POLL_INTERVAL_MS),
+                this.refreshTrigger$
+              ).pipe(
+                startWith(0),
+                switchMap(() =>
+                  forkJoin({
+                    ticket: this.ticketsService.getById(id),
+                    questions: this.ticketQuestionsService.listForTicket(id),
+                  })
+                )
+              )
             )
           )
         ),

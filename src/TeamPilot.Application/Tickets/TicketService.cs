@@ -1,5 +1,6 @@
 using FluentValidation;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -20,10 +21,13 @@ public sealed class TicketService(
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IPipelineRunTracker pipelineRunTracker,
+    IProjectEventBroadcaster eventBroadcaster,
     IValidator<CreateTicketRequest> createValidator,
     IValidator<CreateBranchRequest> createBranchValidator,
     IValidator<CancelTicketRequest> cancelValidator) : ITicketService
 {
+    private void PublishTicketChanged(Ticket ticket) =>
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
     public async Task<TicketDto> CreateAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default)
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
@@ -37,6 +41,7 @@ public sealed class TicketService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
@@ -70,6 +75,7 @@ public sealed class TicketService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketMovedToReview, $"Ticket '{ticket.Title}' moved to review.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
@@ -110,6 +116,8 @@ public sealed class TicketService(
             }
         }
 
+        PublishTicketChanged(ticket);
+
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
@@ -135,6 +143,8 @@ public sealed class TicketService(
             await DeleteLinkedBranchAsync(ticket, project, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
+
+        PublishTicketChanged(ticket);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
@@ -186,6 +196,7 @@ public sealed class TicketService(
 
         await auditLogger.LogActionAsync(AuditEventType.GitBranchCreated, $"Branch '{branchName}' created for ticket '{ticket.Title}'.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }

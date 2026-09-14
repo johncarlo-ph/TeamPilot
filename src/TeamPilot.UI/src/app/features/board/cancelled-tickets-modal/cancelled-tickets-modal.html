@@ -1,0 +1,25 @@
+<app-modal [open]="open()" title="Cancelled Tickets" size="lg" (closed)="closed.emit()">
+  @if (loading()) {
+    <div class="text-body-secondary">Loading cancelled tickets...</div>
+  } @else if (tickets().length === 0) {
+    <div class="text-body-secondary">No cancelled tickets.</div>
+  } @else {
+    <div class="list-group">
+      @for (ticket of tickets(); track ticket.id) {
+        <a
+          class="list-group-item list-group-item-action"
+          [routerLink]="['/tickets', ticket.id]"
+          (click)="closed.emit()"
+        >
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <h3 class="h6 mb-1">{{ ticket.title }}</h3>
+            <span class="small text-body-tertiary text-nowrap">{{ ticket.updatedAtUtc || ticket.createdAtUtc | date: 'short' }}</span>
+          </div>
+          @if (ticket.cancellationReason) {
+            <p class="small text-body-secondary mb-0">{{ ticket.cancellationReason }}</p>
+          }
+        </a>
+      }
+    </div>
+  }
+</app-modal>

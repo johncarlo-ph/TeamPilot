@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Agents;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -39,6 +40,7 @@ public class OrchestrationServiceTests
     private readonly Mock<IBackgroundTaskRunner> _backgroundTaskRunner = new();
     private readonly Mock<IOrchestrationService> _backgroundOrchestrationService = new();
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
+    private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly OrchestrationService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
@@ -117,6 +119,7 @@ public class OrchestrationServiceTests
             [typeof(ITicketQuestionRepository)] = _ticketQuestionRepository.Object,
             [typeof(IAuditLogger)] = _auditLogger.Object,
             [typeof(IUnitOfWork)] = _unitOfWork.Object,
+            [typeof(IProjectEventBroadcaster)] = _eventBroadcaster.Object,
             [typeof(ILogger<OrchestrationService>)] = NullLogger<OrchestrationService>.Instance,
         });
 
@@ -142,6 +145,7 @@ public class OrchestrationServiceTests
             _unitOfWork.Object,
             _backgroundTaskRunner.Object,
             _pipelineRunTracker.Object,
+            _eventBroadcaster.Object,
             NullLogger<OrchestrationService>.Instance);
     }
 
@@ -1174,12 +1178,15 @@ public class OrchestrationServiceTests
     {
         var ticketId = Guid.NewGuid();
 
-        _sut.RunPipelineDetached(ticketId);
+        _sut.RunPipelineDetached(_project.Id, ticketId);
 
         _backgroundTaskRunner.Verify(r => r.Run(It.IsAny<Func<IServiceProvider, CancellationToken, Task>>()), Times.Once);
         _backgroundOrchestrationService.Verify(o => o.RunPipelineAsync(ticketId, It.IsAny<CancellationToken>()), Times.Once);
         _pipelineRunTracker.Verify(t => t.MarkRunning(ticketId), Times.Once);
         _pipelineRunTracker.Verify(t => t.MarkFinished(ticketId), Times.Once);
+        // Once for the synchronous MarkRunning signal, once more from the finally block once the
+        // (synchronously-run, in this test harness) background work completes.
+        _eventBroadcaster.Verify(b => b.Publish(_project.Id, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketChanged && e.TicketId == ticketId)), Times.Exactly(2));
     }
 
     [Fact]
@@ -1196,7 +1203,7 @@ public class OrchestrationServiceTests
         // The background-runner mock executes the failing run (and its failure handler)
         // synchronously, so by the time this returns the ticket already reflects the outcome -
         // it must not be left silently stuck In Progress with no visible sign anything failed.
-        _sut.RunPipelineDetached(ticket.Id);
+        _sut.RunPipelineDetached(ticket.ProjectId, ticket.Id);
 
         Assert.Equal(TicketStatus.Blocked, ticket.Status);
         _ticketQuestionRepository.Verify(
@@ -1227,7 +1234,7 @@ public class OrchestrationServiceTests
             .Callback(() => ticket.Block())
             .ThrowsAsync(new InvalidOperationException("boom"));
 
-        _sut.RunPipelineDetached(ticket.Id);
+        _sut.RunPipelineDetached(ticket.ProjectId, ticket.Id);
 
         Assert.Equal(TicketStatus.Blocked, ticket.Status);
         _ticketQuestionRepository.Verify(r => r.AddAsync(It.IsAny<TicketQuestion>(), It.IsAny<CancellationToken>()), Times.Never);

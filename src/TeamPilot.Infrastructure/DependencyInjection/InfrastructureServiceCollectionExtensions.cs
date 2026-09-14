@@ -13,7 +13,6 @@ using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.LiveAgentChat;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Pipelines;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
 using TeamPilot.Application.TicketQuestions;
@@ -25,6 +24,7 @@ using TeamPilot.Infrastructure.BackgroundTasks;
 using TeamPilot.Infrastructure.Git;
 using TeamPilot.Infrastructure.Llm;
 using TeamPilot.Infrastructure.Persistence;
+using TeamPilot.Infrastructure.RealTime;
 using TeamPilot.Infrastructure.Repositories;
 
 namespace TeamPilot.Infrastructure.DependencyInjection;
@@ -51,7 +51,6 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ICommitRepository, CommitRepository>();
         services.AddScoped<IReviewRepository, ReviewRepository>();
         services.AddScoped<IConflictRepository, ConflictRepository>();
-        services.AddScoped<IPipelineRunRepository, PipelineRunRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
@@ -74,6 +73,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddSingleton<IBackgroundTaskRunner, BackgroundTaskRunner>();
         services.AddSingleton<IPipelineRunTracker, PipelineRunTracker>();
+        services.AddSingleton<IProjectEventBroadcaster, ProjectEventBroadcaster>();
 
         return services;
     }

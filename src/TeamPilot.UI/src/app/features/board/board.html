@@ -10,9 +10,9 @@
     <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']"
       >Agents</a
     >
-    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'pipeline-runs']">
-      Pipeline Runs
-    </a>
+    <button type="button" class="btn btn-outline-secondary" (click)="cancelledTicketsOpen.set(true)">
+      Cancelled Tickets
+    </button>
     <button type="button" class="btn btn-outline-primary" (click)="createFormOpen.set(true)">
       New Ticket
     </button>
@@ -79,3 +79,9 @@
   (closed)="reviewTarget.set(null)"
   (submitted)="confirmReview($event)"
 ></app-review-form>
+
+<app-cancelled-tickets-modal
+  [open]="cancelledTicketsOpen()"
+  [projectId]="projectId"
+  (closed)="cancelledTicketsOpen.set(false)"
+></app-cancelled-tickets-modal>

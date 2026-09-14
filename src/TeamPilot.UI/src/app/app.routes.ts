@@ -28,11 +28,6 @@ export const routes: Routes = [
         loadComponent: () => import('./features/agents/agents').then((m) => m.Agents),
       },
       {
-        path: 'projects/:projectId/pipeline-runs',
-        loadComponent: () =>
-          import('./features/pipeline-runs/pipeline-runs').then((m) => m.PipelineRuns),
-      },
-      {
         path: 'tickets/:id',
         loadComponent: () =>
           import('./features/ticket-detail/ticket-detail').then((m) => m.TicketDetail),

@@ -2,18 +2,22 @@ import { CdkDragDrop, DragDropModule } from '@angular/cdk/drag-drop';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Component, computed, inject, signal } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Subject, distinctUntilChanged, interval, map, merge, startWith, switchMap } from 'rxjs';
+import { Subject, distinctUntilChanged, filter, interval, map, merge, startWith, switchMap } from 'rxjs';
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { ProjectsService } from '../../core/services/projects.service';
+import { ProjectEventsService } from '../../core/services/project-events.service';
 import { NotificationService } from '../../core/notification/notification.service';
 import { ProjectDto, ReviewDecision, TicketDto, TicketStatus } from '../../core/models';
 import { TicketCard } from './ticket-card/ticket-card';
 import { CreateTicketForm } from './create-ticket-form/create-ticket-form';
 import { ReviewForm } from '../ticket-detail/review-form/review-form';
 import { ChatPanel } from './chat-panel/chat-panel';
+import { CancelledTicketsModal } from './cancelled-tickets-modal/cancelled-tickets-modal';
 
-const POLL_INTERVAL_MS = 8000;
+// The SSE stream (see ProjectEventsService) now drives the primary refresh; this is only a
+// safety net for a stuck/misbehaving connection, so it's far longer than the old 8s poll.
+const SAFETY_POLL_INTERVAL_MS = 60000;
 
 type BoardStatus = Exclude<TicketStatus, 'Cancelled'>;
 
@@ -40,7 +44,15 @@ const VALID_DRAG_TARGETS: Record<BoardStatus, BoardStatus[]> = {
 
 @Component({
   selector: 'app-board',
-  imports: [RouterLink, DragDropModule, TicketCard, CreateTicketForm, ReviewForm, ChatPanel],
+  imports: [
+    RouterLink,
+    DragDropModule,
+    TicketCard,
+    CreateTicketForm,
+    ReviewForm,
+    ChatPanel,
+    CancelledTicketsModal,
+  ],
   templateUrl: './board.html',
 })
 export class Board {
@@ -48,6 +60,7 @@ export class Board {
   private readonly ticketsService = inject(TicketsService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly projectsService = inject(ProjectsService);
+  private readonly projectEventsService = inject(ProjectEventsService);
   private readonly notifications = inject(NotificationService);
 
   readonly columns = BOARD_COLUMNS;
@@ -60,6 +73,7 @@ export class Board {
   readonly chatCollapsed = signal(false);
 
   readonly createFormOpen = signal(false);
+  readonly cancelledTicketsOpen = signal(false);
   readonly creatingTicket = signal(false);
   readonly reviewTarget = signal<TicketDto | null>(null);
   readonly reviewInitialDecision = signal<ReviewDecision>('Approve');
@@ -109,7 +123,11 @@ export class Board {
         map((params) => params.get('projectId')!),
         distinctUntilChanged(),
         switchMap((projectId) =>
-          merge(interval(POLL_INTERVAL_MS), this.refreshTrigger$).pipe(
+          merge(
+            this.projectEventsService.stream(projectId).pipe(filter((e) => e.type === 'TicketChanged')),
+            interval(SAFETY_POLL_INTERVAL_MS),
+            this.refreshTrigger$
+          ).pipe(
             startWith(0),
             switchMap(() => this.ticketsService.listForProject(projectId))
           )

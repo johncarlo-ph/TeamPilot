@@ -1,5 +1,6 @@
 using Moq;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Orchestration;
@@ -24,6 +25,7 @@ public class TicketQuestionServiceTests
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
+    private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly TicketQuestionService _sut;
     private readonly Guid _projectId = Guid.NewGuid();
 
@@ -40,6 +42,7 @@ public class TicketQuestionServiceTests
             _auditLogger.Object,
             _unitOfWork.Object,
             _pipelineRunTracker.Object,
+            _eventBroadcaster.Object,
             new AnswerTicketQuestionRequestValidator());
     }
 
@@ -74,7 +77,9 @@ public class TicketQuestionServiceTests
         // already reports the run as in flight.
         Assert.Equal(TicketStatus.InProgress, result.Status);
         Assert.True(result.PipelineRunning);
-        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.ProjectId, ticket.Id), Times.Once);
+        _eventBroadcaster.Verify(b => b.Publish(ticket.ProjectId, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketChanged && e.TicketId == ticket.Id)), Times.Once);
+        _eventBroadcaster.Verify(b => b.Publish(ticket.ProjectId, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketQuestionChanged && e.TicketId == ticket.Id)), Times.Once);
     }
 
     [Fact]
@@ -91,7 +96,7 @@ public class TicketQuestionServiceTests
         Assert.Equal("Continue anyway.", decision.AnswerText);
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
         Assert.Equal(TicketStatus.InProgress, result.Status);
-        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.ProjectId, ticket.Id), Times.Once);
     }
 
     [Fact]
@@ -132,7 +137,8 @@ public class TicketQuestionServiceTests
 
         Assert.Equal(TicketStatus.InProgress, ticket.Status);
         Assert.True(result.PipelineRunning);
-        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.ProjectId, ticket.Id), Times.Once);
+        _eventBroadcaster.Verify(b => b.Publish(ticket.ProjectId, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketChanged && e.TicketId == ticket.Id)), Times.Once);
     }
 
     [Fact]

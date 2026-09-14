@@ -380,17 +380,6 @@ nothing is applied until you save.
 > failure — but a stage already in progress will finish using whatever instructions were current
 > when it started.
 
-## Pipeline runs
-
-Also reached from the board. Tracks the status of a project's CI/CD runs — Queued, Running,
-Succeeded, Failed — as a log of when runs started and finished. It does not run a real build.
-
-| Control | What it does |
-|---|---|
-| Trigger reason (text, optional) + Trigger Run | Records free text (e.g. "manual re-run") against the new run being created. |
-| Start | Moves a Queued run to Running. |
-| Mark Succeeded / Mark Failed | Closes out a Running run with its final status. |
-
 ## Admin: Users
 
 `/admin/users` — Admin only; the navbar shows **Users** and **Audit Log** links only to Admins.
@@ -409,7 +398,7 @@ settings.
 
 `/admin/audit-log` — Admin only. A read-only, paged record of authentication events and every
 state-changing action taken elsewhere in the app (creating or updating a project, ticket, or
-agent; submitting a review; triggering a pipeline run; changing a user's roles; and so on).
+agent; submitting a review; changing a user's roles; and so on).
 
 | Column | Shows |
 |---|---|

@@ -1,5 +1,6 @@
 using FluentValidation;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
@@ -21,6 +22,7 @@ public sealed class TicketQuestionService(
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
     IPipelineRunTracker pipelineRunTracker,
+    IProjectEventBroadcaster eventBroadcaster,
     IValidator<AnswerTicketQuestionRequest> answerValidator) : ITicketQuestionService
 {
     public async Task<TicketDto> AnswerAsync(Guid ticketId, Guid questionId, AnswerTicketQuestionRequest request, CancellationToken cancellationToken = default)
@@ -46,13 +48,15 @@ public sealed class TicketQuestionService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketQuestionAnswered, $"Question answered for ticket '{ticket.Title}' by {answeredBy}.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketQuestionChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
 
         // Kicked off detached (see IOrchestrationService.RunPipelineDetached) instead of
         // awaited: a re-run can take minutes (multiple LLM/Git calls per stage), and the status
         // change above already gives the caller everything it needs to show the ticket as In
         // Progress immediately - unlike awaiting inline, a client disconnecting (e.g. a page
         // refresh) can no longer abort the run mid-flight.
-        orchestrationService.RunPipelineDetached(ticket.Id);
+        orchestrationService.RunPipelineDetached(ticket.ProjectId, ticket.Id);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
@@ -74,8 +78,9 @@ public sealed class TicketQuestionService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketRetried, $"Pipeline retried for ticket '{ticket.Title}' after a blocking failure.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
 
-        orchestrationService.RunPipelineDetached(ticket.Id);
+        orchestrationService.RunPipelineDetached(ticket.ProjectId, ticket.Id);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }

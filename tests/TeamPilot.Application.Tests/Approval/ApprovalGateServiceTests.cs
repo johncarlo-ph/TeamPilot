@@ -2,12 +2,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using TeamPilot.Application.Approval;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Orchestration;
-using TeamPilot.Application.Pipelines;
-using TeamPilot.Application.Pipelines.Dtos;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Reviews.Validators;
@@ -25,12 +24,12 @@ public class ApprovalGateServiceTests
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IOrchestrationService> _orchestrationService = new();
-    private readonly Mock<IPipelineService> _pipelineService = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<ICurrentUserContext> _currentUser = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
+    private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly ApprovalGateService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
@@ -47,11 +46,6 @@ public class ApprovalGateServiceTests
         // the Analyst-specific tests override this per-test.
         _currentUser.Setup(c => c.IsInRole(UserRole.Developer)).Returns(true);
 
-        _pipelineService
-            .Setup(p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Guid projectId, Guid? ticketId, string reason, CancellationToken _) =>
-                new PipelineRunDto(Guid.NewGuid(), projectId, ticketId, PipelineRunStatus.Queued, reason, null, null, null, DateTime.UtcNow));
-
         // Default happy path: the live merge attempt succeeds with nothing left unresolved.
         // Tests exercising a failed merge (e.g. a conflict the live check still finds) override
         // this per-test.
@@ -65,7 +59,6 @@ public class ApprovalGateServiceTests
             _projectRepository.Object,
             _gitService.Object,
             _credentialProtector.Object,
-            _pipelineService.Object,
             _projectAccessGuard.Object,
             _currentUser.Object,
             _auditLogger.Object,
@@ -73,6 +66,7 @@ public class ApprovalGateServiceTests
             new SubmitReviewRequestValidator(),
             _orchestrationService.Object,
             _pipelineRunTracker.Object,
+            _eventBroadcaster.Object,
             NullLogger<ApprovalGateService>.Instance);
     }
 
@@ -110,9 +104,6 @@ public class ApprovalGateServiceTests
             Times.Once);
         _gitService.Verify(
             g => g.PushAsync(_project.RepositoryPath, _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
-            Times.Once);
-        _pipelineService.Verify(
-            p => p.TriggerAsync(_project.Id, ticket.Id, It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Once);
         _orchestrationService.Verify(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -197,10 +188,8 @@ public class ApprovalGateServiceTests
             g => g.MergeWithResolutionsAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, string>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        _pipelineService.Verify(
-            p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.Id), Times.Once);
+        _orchestrationService.Verify(o => o.RunPipelineDetached(ticket.ProjectId, ticket.Id), Times.Once);
+        _eventBroadcaster.Verify(b => b.Publish(ticket.ProjectId, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketChanged && e.TicketId == ticket.Id)), Times.Once);
     }
 
     [Fact]
@@ -266,9 +255,6 @@ public class ApprovalGateServiceTests
 
         var exception = await Assert.ThrowsAsync<UnresolvedConflictsException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         Assert.Equal(["src/OtherFile.cs"], exception.FilePaths);
-        _pipelineService.Verify(
-            p => p.TriggerAsync(It.IsAny<Guid>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Fact]

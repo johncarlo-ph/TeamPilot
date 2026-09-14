@@ -29,14 +29,13 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Orchestration/`](../src/TeamPilot.Application/Orchestration) | Running a ticket through its project's configured agent workflow (`Workflow/`), including jumping back to an earlier stage when one with a loop-back reports failure, and blocking the ticket when a stage asks a clarifying question, raises a proceed-or-cancel decision, or a known Git/LLM failure occurs |
 | [`TicketQuestions/`](../src/TeamPilot.Application/TicketQuestions) | Answering a blocked ticket's clarifying question or decision, or retrying after a blocking failure - either way, unblocks the ticket and re-invokes `Orchestration/` |
 | [`LiveAgentChat/`](../src/TeamPilot.Application/LiveAgentChat) | A project's chat sessions with its `LiveAgent` - any project member can start their own and every member sees the full list; each session persists its own conversation and runs a bounded Claude tool-use loop (read-only, sandboxed repo file access; ticket listing and per-ticket detail; ticket drafting) — see [LiveAgentChat / the Live Agent chat](#liveagentchat--the-live-agent-chat) below |
-| [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge, pipeline trigger |
+| [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
-| [`Pipelines/`](../src/TeamPilot.Application/Pipelines) | CI/CD status-tracking use cases |
 | [`AuditLog/`](../src/TeamPilot.Application/AuditLog) | Read-side of the audit log |
 | [`Git/`](../src/TeamPilot.Application/Git), [`Llm/`](../src/TeamPilot.Application/Llm) | `IGitService`/`ILlmConnector` port declarations (implemented in Infrastructure) |
 | [`Common/Interfaces/IGitCredentialProtector.cs`](../src/TeamPilot.Application/Common/Interfaces/IGitCredentialProtector.cs) | Encrypts/decrypts a project's remote access token for storage (implemented in Infrastructure via Data Protection) |
 | [`Reviews/`](../src/TeamPilot.Application/Reviews), [`Commits/`](../src/TeamPilot.Application/Commits) | Read-only repository interfaces for child records |
-| [`Common/`](../src/TeamPilot.Application/Common) | `IUnitOfWork`, `ICurrentUserContext`, `IProjectAccessGuard`, shared exceptions, validator extensions |
+| [`Common/`](../src/TeamPilot.Application/Common) | `IUnitOfWork`, `ICurrentUserContext`, `IProjectAccessGuard`, `IProjectEventBroadcaster`, shared exceptions, validator extensions |
 | [`DependencyInjection/`](../src/TeamPilot.Application/DependencyInjection) | `AddApplication()` DI registration |
 
 ## Architectural decisions
@@ -51,7 +50,7 @@ marginal code reduction, so it was rejected.
 
 **`IProjectAccessGuard` centralizes project-scoping instead of repeating it.** Every
 ticket-board-adjacent service (`TicketService`, `AgentService`, `InstructionService`,
-`OrchestrationService`, `ApprovalGateService`, `ConflictResolutionService`, `PipelineService`,
+`OrchestrationService`, `ApprovalGateService`, `ConflictResolutionService`,
 `ProjectService`) calls `projectAccessGuard.EnsureAccessAsync(projectId)` before acting.
 Admins bypass it; everyone else must have that project in their `UserProjectAssignment` set.
 This is enforced **in Application, not just at the controller** — a design decision made
@@ -511,6 +510,27 @@ ticket's action button as if nothing were happening. Deliberately in-memory, not
 actual background work dies with the process too, so an app restart can never leave this stuck
 reporting "running" for a run that no longer exists.
 
+**`IProjectEventBroadcaster` fans out a refetch signal, not state, over the SSE stream the board
+and ticket-detail pages now consume instead of fixed-interval polling.** `Common/Interfaces/IProjectEventBroadcaster.cs`
+(implemented by `Infrastructure/RealTime/ProjectEventBroadcaster.cs` - an in-process,
+`System.Threading.Channels`-backed fan-out, one bounded channel per open `GET
+/api/projects/{projectId}/events` connection, singleton like `IPipelineRunTracker` so it's
+reachable from both a normal request scope and `RunPipelineDetached`'s own background scope) is
+injected into every service that changes ticket/question state: `TicketService` (`CreateAsync`,
+`MoveToReviewAsync`, `CancelAsync`, `LinkBranchAsync`, `DeleteBranchAsync`), `OrchestrationService`
+(`RunPipelineAsync`'s `MoveToReview` exit, the three `Block*` methods, `BlockOnBackgroundFailureAsync`,
+and `RunPipelineDetached`'s `MarkRunning`/`MarkFinished` points - the latter resolved from the
+background scope's own `IServiceProvider`, same as every other dependency that method uses),
+`TicketQuestionService` (`AnswerAsync`, `RetryAsync`), and `ApprovalGateService` (`SubmitReviewAsync`).
+Each publish carries only a `ProjectEvent { Type, ProjectId, TicketId, OccurredAtUtc }` -
+`TicketChanged` or `TicketQuestionChanged` - deliberately no ticket/question state of its own, so
+a client reacts by re-issuing the same `GET` it already knows how to make rather than the event
+shape needing to stay in sync with `TicketDto`/`TicketQuestionDto`. `RunPipelineDetached`'s
+signature grew a `projectId` parameter (`RunPipelineDetached(Guid projectId, Guid ticketId)`)
+purely so its `MarkRunning`-time publish doesn't need an extra ticket fetch - every caller already
+has it from the ticket it just loaded. See [docs/api.md](api.md) for the endpoint itself and
+[docs/frontend.md](frontend.md) for the consumer side.
+
 **Each stage decides for itself whether the reviewer's feedback actually changes anything for its
 part of the work, instead of the re-run blindly redoing every stage from scratch.** This was
 deliberately not solved by having the orchestrator pick a "resume point" (e.g. "skip straight to
@@ -646,9 +666,6 @@ consequence worth knowing: two tickets in the *same* project now serialize on Gi
 rather than running fully in parallel - the cost of correctness, given the sandbox is one shared
 clone per project, not per ticket.
 
-Approving a ticket also triggers a `PipelineRun` via `IPipelineService.TriggerAsync` — the
-approval gate and CI/CD status tracking are connected at this one point.
-
 ## Auth
 
 Authentication *use cases* (not token mechanics — those are Infrastructure) live in
@@ -688,7 +705,7 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
     {
         throw new ForbiddenException("Only Developers or Admins may approve tickets.");
     }
-    // ... record the review, approve + merge inside a transaction, trigger a pipeline run
+    // ... record the review, approve + merge inside a transaction
 }
 ```
 
@@ -717,13 +734,10 @@ None of these are caught within Application — they propagate to the API's
 - **Mediator pattern:** as the number of use-case services grows, a mediator (e.g. MediatR)
   could reduce controller-to-service boilerplate — not adopted yet because the current number
   of use cases doesn't justify the extra indirection.
-- **Real pipeline execution:** `PipelineService` only tracks status today; wiring it to an
-  actual `ICiCdPipelineRunner` abstraction (mentioned as an option during Phase 2 planning but
-  deferred) is the natural next step once real CI needs exist.
 - **Async project cloning:** `ProjectService.CreateAsync` clones synchronously, which is fine
-  for typical dev-repo sizes but would block the request for a very large repository. Mirroring
-  `PipelineRun`'s Queued/Running/Succeeded/Failed status-tracking pattern for the clone itself
-  would be the natural next step if that becomes a real problem.
+  for typical dev-repo sizes but would block the request for a very large repository. A
+  Queued/Running/Succeeded/Failed status-tracking pattern for the clone itself would be the
+  natural next step if that becomes a real problem.
 - **Non-GitHub/GitLab credential conventions:** the PAT-as-username convention `IGitService`
   uses today is what GitHub and GitLab accept; Azure DevOps/Bitbucket/SSH deploy keys aren't
   supported yet.

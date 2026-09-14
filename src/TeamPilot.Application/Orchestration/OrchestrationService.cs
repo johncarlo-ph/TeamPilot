@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using TeamPilot.Application.Agents;
 using TeamPilot.Application.Auth;
 using TeamPilot.Application.Commits.Dtos;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -71,6 +72,7 @@ public sealed class OrchestrationService(
     IUnitOfWork unitOfWork,
     IBackgroundTaskRunner backgroundTaskRunner,
     IPipelineRunTracker pipelineRunTracker,
+    IProjectEventBroadcaster eventBroadcaster,
     ILogger<OrchestrationService> logger) : IOrchestrationService
 {
     private static readonly Regex VerdictPattern =
@@ -87,6 +89,12 @@ public sealed class OrchestrationService(
 
     private static readonly Regex FileBlockPattern =
         new(@"<file\s+path=[""'](?<path>[^""']+)[""']\s*>(?<content>.*?)</file>", RegexOptions.Singleline | RegexOptions.Compiled);
+
+    private void PublishTicketChanged(Ticket ticket) =>
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
+
+    private void PublishTicketQuestionChanged(Ticket ticket) =>
+        eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketQuestionChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
 
     /// <summary>
     /// Shared by every tool-loop stage call (Research, Design, Coding - see
@@ -296,6 +304,7 @@ public sealed class OrchestrationService(
 
             ticket.MoveToReview();
             await unitOfWork.SaveChangesAsync(cancellationToken);
+            PublishTicketChanged(ticket);
 
             return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, finalVerdictPassed, finalVerdictAttempts);
         }
@@ -312,21 +321,22 @@ public sealed class OrchestrationService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
-        RunPipelineDetached(ticketId);
+        RunPipelineDetached(ticket.ProjectId, ticketId);
 
         return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticketId));
     }
 
-    public void RunPipelineDetached(Guid ticketId)
+    public void RunPipelineDetached(Guid projectId, Guid ticketId)
     {
         // Marked synchronously, before the background work is even dispatched, so a TicketDto
         // built right after this call (see StartPipelineAsync and every other caller) already
         // reports PipelineRunning: true - a caller polling shortly after would otherwise have to
         // wait for a race-prone Task.Run continuation to actually start. Safe to reference
-        // pipelineRunTracker directly here (unlike the scoped dependencies below, which the
-        // delegate must resolve fresh from its own scope) since it's a true singleton with no
-        // scope of its own to outlive.
+        // pipelineRunTracker/eventBroadcaster directly here (unlike the scoped dependencies
+        // below, which the delegate must resolve fresh from its own scope) since both are true
+        // singletons with no scope of their own to outlive.
         pipelineRunTracker.MarkRunning(ticketId);
+        eventBroadcaster.Publish(projectId, new ProjectEvent(ProjectEventTypes.TicketChanged, projectId, ticketId, DateTime.UtcNow));
 
         backgroundTaskRunner.Run(async (services, backgroundCancellationToken) =>
         {
@@ -342,6 +352,7 @@ public sealed class OrchestrationService(
             finally
             {
                 pipelineRunTracker.MarkFinished(ticketId);
+                eventBroadcaster.Publish(projectId, new ProjectEvent(ProjectEventTypes.TicketChanged, projectId, ticketId, DateTime.UtcNow));
             }
         });
     }
@@ -383,6 +394,12 @@ public sealed class OrchestrationService(
 
         var backgroundUnitOfWork = services.GetRequiredService<IUnitOfWork>();
         await backgroundUnitOfWork.SaveChangesAsync(cancellationToken);
+
+        // Resolved from the background scope's services, not an instance field - this method is
+        // static since it may run after the request (and this instance's own scope) is long gone.
+        var backgroundEventBroadcaster = services.GetRequiredService<IProjectEventBroadcaster>();
+        backgroundEventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
+        backgroundEventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketQuestionChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
     }
 
     /// <summary>
@@ -398,6 +415,8 @@ public sealed class OrchestrationService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - an agent asked a clarifying question.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+        PublishTicketQuestionChanged(ticket);
 
         return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }
@@ -417,6 +436,8 @@ public sealed class OrchestrationService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - an agent raised a proceed-or-cancel decision.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+        PublishTicketQuestionChanged(ticket);
 
         return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }
@@ -439,6 +460,8 @@ public sealed class OrchestrationService(
 
         await auditLogger.LogActionAsync(AuditEventType.TicketBlocked, $"Ticket '{ticket.Title}' blocked - {exception.Message}", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+        PublishTicketQuestionChanged(ticket);
 
         return new TicketPipelineResultDto(TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id)), steps, TestingPassed: true, TestingAttempts: 0, Blocked: true, BlockingQuestionId: question.Id);
     }

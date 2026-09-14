@@ -8,8 +8,6 @@ public class TeamPilotDbContext(DbContextOptions<TeamPilotDbContext> options) : 
 {
     public DbSet<Project> Projects => Set<Project>();
 
-    public DbSet<PipelineRun> PipelineRuns => Set<PipelineRun>();
-
     public DbSet<Ticket> Tickets => Set<Ticket>();
 
     public DbSet<Agent> Agents => Set<Agent>();

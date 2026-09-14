@@ -43,7 +43,9 @@ public interface IOrchestrationService
     /// ticket and made their own synchronous domain transition (e.g.
     /// <c>ApprovalGateService.RequestChanges</c>, <c>TicketQuestionService.AnswerAsync</c>/
     /// <c>RetryAsync</c>) - <see cref="StartPipelineAsync"/> is the entry point when that
-    /// validation hasn't happened yet.
+    /// validation hasn't happened yet. <paramref name="projectId"/> is only needed to publish the
+    /// "pipeline running" <c>ProjectEvent</c> without an extra ticket fetch - every caller already
+    /// has it from the ticket it just loaded.
     /// </summary>
-    void RunPipelineDetached(Guid ticketId);
+    void RunPipelineDetached(Guid projectId, Guid ticketId);
 }

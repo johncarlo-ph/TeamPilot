@@ -50,8 +50,6 @@ create *two* converging paths from a common ancestor to the same descendant tabl
 hit twice in this codebase:
 - `Conflict → Commit` is `NoAction` (not `Cascade`), because `Ticket` already cascades to both
   `Commit` and `Conflict` directly — a second cascading path via `Commit` would converge.
-- `PipelineRun → Ticket` is likewise `NoAction` for the same reason (`Project` cascades to
-  both `Ticket` and `PipelineRun` directly).
 
 Any new FK you add between two tables that already share a cascading ancestor needs the same
 consideration.
@@ -239,6 +237,20 @@ specifically because it's a true singleton with no scope of its own to outlive, 
 dependencies (`ITicketRepository` etc.) the delegate must still resolve fresh. See
 [docs/application.md](application.md) for how `TicketDto.PipelineRunning` surfaces this to callers.
 
+**`IProjectEventBroadcaster` (`Infrastructure/RealTime/ProjectEventBroadcaster.cs`) is the third
+singleton in this group, backing the SSE stream `ProjectEventsController` exposes.** Internally a
+`ConcurrentDictionary<Guid /* projectId */, ConcurrentDictionary<Guid /* subscriptionId */,
+Channel<ProjectEvent>>>` - `Subscribe` creates a small bounded `Channel<ProjectEvent>`
+(`BoundedChannelFullMode.DropOldest`, capacity 16) per SSE connection, registers it under its
+project, and unregisters it in a `finally` once the connection's `CancellationToken` (the
+request's own `HttpContext.RequestAborted`) fires; `Publish` just fans a `ProjectEvent` out to
+every channel currently registered for that project via a non-blocking `TryWrite` - a stalled
+reader drops its own oldest queued event rather than a slow subscriber ever blocking a publisher.
+Deliberately not durable, same reasoning as `IPipelineRunTracker`: a subscriber that wasn't
+connected when an event fired just relies on its own next `GET` (or the client-side safety-net
+poll - see [docs/frontend.md](frontend.md)) to pick up current state, so there's nothing to
+replay after a restart.
+
 ## Code style notes
 
 - Repository classes are thin: a query or two per method, `AsNoTracking()` for anything not
@@ -409,5 +421,3 @@ the same `GitOperationException` it would have without this pipeline.
   access tokens independently.
 - **Multi-provider LLM support**: the `ILlmConnector` seam is ready; only `ClaudeLlmConnector`
   exists.
-- **Background job runner** for actually executing `PipelineRun`s, once CI/CD needs to do real
-  work instead of just tracking status.

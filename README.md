@@ -35,7 +35,7 @@ merges — with role-based access so people only see and act on the projects the
 - Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
   server-managed sandbox on creation, kept in sync via push/fetch), its own admin-configurable
   agent workflow (4 system-provisioned pipeline agents by default - Research/Design/Coding/Testing
-  - plus one standing **Live Agent**), ticket board, and CI/CD pipeline run history.
+  - plus one standing **Live Agent**), and ticket board.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the project's configured
   agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate. An
   `InProgress` ticket can also detour to `Blocked` if a pipeline agent asks a clarifying question
@@ -47,16 +47,16 @@ merges — with role-based access so people only see and act on the projects the
   explicit approval in the chat.
 - Identity: sign-in via Google or Microsoft only (no local passwords), JWT-based sessions with
   rotating refresh tokens, and three fixed roles (Admin, Analyst, Developer).
-- CI/CD: status tracking only (`PipelineRun` entities with a Queued → Running →
-  Succeeded/Failed lifecycle) — no real build/test/deploy execution yet.
 - Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the ticket board (with the Live Agent
   chat alongside it), ticket detail, and admin surfaces — see [docs/frontend.md](docs/frontend.md).
 
-**Out of scope (for now).** A real CI/CD runner, multi-provider LLM support beyond Claude,
-asymmetric JWT signing, and real-time updates via SSE/WebSockets — the board/ticket-detail pages
-poll instead (see each module's "Future considerations" for the reasoning behind these
-deferrals, including [docs/frontend.md](docs/frontend.md#future-considerations) for the
-polling trade-off specifically).
+**Out of scope (for now).** A real CI/CD runner, multi-provider LLM support beyond Claude, and
+asymmetric JWT signing (see each module's "Future considerations" for the reasoning behind these
+deferrals). The board and ticket-detail pages get real-time updates via an in-process SSE stream
+(`IProjectEventBroadcaster`, `GET /api/projects/{projectId}/events` — see
+[docs/application.md](docs/application.md) and [docs/frontend.md](docs/frontend.md)); the Live
+Agent chat panel doesn't yet — see
+[docs/frontend.md#future-considerations](docs/frontend.md#future-considerations).
 
 **Goals.**
 1. Keep business rules in the Domain layer, independent of any framework.
@@ -271,10 +271,6 @@ repository. Recommended first step: a GitHub Actions workflow that runs on every
 - dotnet test TeamPilot.slnx --no-build
 ```
 
-`PipelineRun` (see [docs/application.md](docs/application.md#pipelines)) already models a
-CI/CD status lifecycle at the *product* level (a project's own pipeline runs), which is a
-separate concern from the *repository's own* CI — don't conflate the two.
-
 ### Testing approach
 
 - **Unit tests only, today:** `tests/TeamPilot.Domain.Tests` (entity invariants/behavior) and
@@ -326,6 +322,6 @@ actually enforced (in Application services, not just `[Authorize]` attributes).
 ## User guide
 
 [docs/user-guide.md](docs/user-guide.md) is a field-by-field walkthrough of the web app for end
-users (sign-in, the ticket board, agents, pipeline runs, and the admin pages), as opposed to the
+users (sign-in, the ticket board, agents, and the admin pages), as opposed to the
 developer-facing architecture docs above. Keep it in sync with `TeamPilot.UI` the same way as
 the other module docs — see [Keeping documentation in sync](CLAUDE.md#keeping-documentation-in-sync).

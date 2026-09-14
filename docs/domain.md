@@ -119,7 +119,6 @@ automatic branch delete.
 | `Review` | A human approval-gate decision | *(immutable once created)* |
 | `Conflict` | A detected merge conflict, with an optional AI-suggested resolution | `RecordAiSuggestion`, `ResolveManually`, `AcceptAiSuggestion` |
 | `TicketAgentAssignment` | Join record: which agent is assigned to which ticket | *(created only via `Ticket.AssignAgent`)* |
-| `PipelineRun` | A CI/CD status-tracking record for a project | `Start`, `Complete` |
 | `User` | An authenticated principal | `UpdateName`, `SetRoles`, `Disable`, `Enable` |
 | `RefreshToken` | A rotatable session refresh token | `Revoke` |
 | `UserProjectAssignment` | Join record: which projects a user can access | *(managed by repository "set" semantics, not through `User`)* |

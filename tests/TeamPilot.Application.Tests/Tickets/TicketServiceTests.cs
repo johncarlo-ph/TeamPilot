@@ -1,5 +1,6 @@
 using Moq;
 using TeamPilot.Application.Auth;
+using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
@@ -24,6 +25,7 @@ public class TicketServiceTests
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
+    private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly TicketService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
 
@@ -41,6 +43,7 @@ public class TicketServiceTests
             _auditLogger.Object,
             _unitOfWork.Object,
             _pipelineRunTracker.Object,
+            _eventBroadcaster.Object,
             new CreateTicketRequestValidator(),
             new CreateBranchRequestValidator(),
             new CancelTicketRequestValidator());
@@ -58,6 +61,7 @@ public class TicketServiceTests
         Assert.Equal(TicketStatus.ToDo, result.Status);
         _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
         _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _eventBroadcaster.Verify(b => b.Publish(_project.Id, It.Is<ProjectEvent>(e => e.Type == ProjectEventTypes.TicketChanged)), Times.Once);
     }
 
     [Fact]

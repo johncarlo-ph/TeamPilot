@@ -131,9 +131,10 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
             cancellationToken);
 
     /// <summary>
-    /// Resolves and validates every path up front (via <see cref="ResolveSandboxedPath"/>) before writing
-    /// anything, so a bad path from a hallucinated file block can't leave a half-written sandbox on disk if
-    /// a later entry fails validation.
+    /// Resolves and validates every path up front (via <see cref="ResolveSandboxedPath"/> and
+    /// <see cref="IsBlockedWritePath"/>) before writing anything, so a bad path from a
+    /// hallucinated file block can't leave a half-written sandbox on disk if a later entry fails
+    /// validation.
     /// </summary>
     public Task<GitCommitResult> CommitFilesAsync(
         string repositoryPath,
@@ -145,6 +146,18 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
         Task.Run(
             () =>
             {
+                // Checked before anything else touches disk - a Coding-stage response is raw LLM
+                // output (see OrchestrationService.ParseFileChanges) that a prompt-injected ticket
+                // description or repo file could have steered toward rewriting CI config or
+                // Git-internal paths for persistence rather than the feature it was asked to
+                // implement. This is a coarse denylist, not a guarantee the model's file choices
+                // are otherwise safe - the human approval gate before merge is the real backstop.
+                var blockedPath = fileContentsByRelativePath.Keys.FirstOrDefault(IsBlockedWritePath);
+                if (blockedPath is not null)
+                {
+                    throw new GitOperationException($"Refusing to write to '{blockedPath}' - CI workflow definitions and Git-internal paths cannot be modified by an agent.");
+                }
+
                 using var repo = OpenRepository(repositoryPath);
                 var branch = GetOrCreateBranch(repo, branchName);
                 Commands.Checkout(repo, branch);
@@ -497,6 +510,27 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
         }
 
         return BlockedExtensions.Contains(Path.GetExtension(fileName), StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Denylist for <see cref="CommitFilesAsync"/> - unlike <see cref="IsBlockedPath"/> (secrets an
+    /// agent should never read), this blocks paths an agent should never be able to persist a
+    /// write to at all: Git's own internal directory, and GitHub Actions workflow definitions
+    /// (the one place a rewritten file in this repo could get itself executed by CI on push/PR,
+    /// independent of the human approval gate this ticket's own changes still go through).
+    /// </summary>
+    private static bool IsBlockedWritePath(string relativeFilePath)
+    {
+        var segments = relativeFilePath.Replace('\\', '/').TrimStart('/').Split('/');
+
+        if (segments.Any(s => string.Equals(s, ".git", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        return segments.Length >= 2 &&
+            string.Equals(segments[0], ".github", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(segments[1], "workflows", StringComparison.OrdinalIgnoreCase);
     }
 
     private string ResolveSandboxRoot() =>

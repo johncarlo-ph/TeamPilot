@@ -227,6 +227,23 @@ separately-timed poll. The panel renders whenever the ticket has at least one qu
 history, not only while currently `Blocked` - like the Reviews card, past questions stay visible
 as a record even after the ticket moves on.
 
+**`AgentEventLogPanel` (`features/ticket-detail/agent-event-log-panel`) is a passive, chronological
+timeline of every `TicketAgentEventDto` for the ticket - "Research agent started", "Coding agent
+completed" (with its result text), and so on - sitting directly below `TicketQuestionPanel` in the
+right column.** It follows the same `input<T[]>([])`/no-own-fetching shape as `TicketQuestionPanel`
+(`ticket-detail.ts` fetches via `TicketAgentEventsService.listForTicket` and passes the array down),
+computing each row's label client-side from `role` + `kind` (`"{Role} agent {verb}"`, or `"Pipeline
+{verb}"` when `role` is null - a pre-stage failure) rather than storing a canned string server-side.
+`result` (the agent's output, the question/decision text, or the failure message) renders in the
+same `white-space: pre-wrap` box `TicketQuestionPanel` uses for `prompt`/`answerText`, shown for
+every kind except `Started` (which has none yet). `ticket-detail.ts`'s `forkJoin` grew a third key,
+`agentEvents`, alongside `ticket`/`questions`, refetched on the same merged SSE+safety-poll+manual-
+refresh stream - reacting to the new `TicketAgentEventLogged` SSE type needs no extra filtering
+logic, since the page's SSE subscription already merges every project event by `ticketId` regardless
+of `type`. `StatusBadge`'s shared `BADGE_CLASS_BY_VALUE` map (`shared/components/status-badge`)
+gained `Started`/`Completed`/`Failed` entries for this panel's kind badges (`Blocked` already existed,
+reused from `TicketStatus`).
+
 **Linking a branch confirms before acting, because the same button means two different things.**
 `features/ticket-detail/branch-panel` calls `GET /api/git/branches/exists` when "Link Branch" is
 clicked, then opens a confirmation modal worded for whichever case came back — "an existing

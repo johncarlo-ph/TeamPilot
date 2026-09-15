@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using TeamPilot.Application.Approval;
-using TeamPilot.Application.Reviews;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -9,7 +8,7 @@ namespace TeamPilot.API.Controllers;
 
 [ApiController]
 [Route("api/tickets/{ticketId:guid}/reviews")]
-public class ReviewsController(IApprovalGateService approvalGateService, IReviewRepository reviewRepository) : ControllerBase
+public class ReviewsController(IApprovalGateService approvalGateService) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<TicketDto>> SubmitReview(Guid ticketId, [FromBody] SubmitReviewRequest request, CancellationToken cancellationToken)
@@ -21,7 +20,7 @@ public class ReviewsController(IApprovalGateService approvalGateService, IReview
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<ReviewDto>>> ListByTicket(Guid ticketId, CancellationToken cancellationToken)
     {
-        var reviews = await reviewRepository.ListByTicketAsync(ticketId, cancellationToken);
+        var reviews = await approvalGateService.ListByTicketAsync(ticketId, cancellationToken);
         return Ok(reviews.Select(ToDto));
     }
 

@@ -214,6 +214,13 @@ diff) — a retried Coding attempt shows up as an additional commit, unless it's
 *Request Changes* re-run and Coding itself decides no code change is actually needed for your
 feedback, in which case no new commit is added.
 
+**Agent Log** — a live, chronological history of every agent's activity on this ticket: "Research
+agent started", "Coding agent completed" (with the agent's full result shown underneath), and so
+on for every stage of every pipeline run, including a stage that paused the ticket with a question
+or hit an operational failure. It updates in real time while a pipeline run is in progress, so you
+can watch which stage is currently working instead of only seeing the outcome once the whole run
+finishes.
+
 **Cancel Ticket** — shown next to the status badge for any To Do, In Progress, For Review, or
 Blocked ticket (e.g. its goal no longer applies because a requirement changed). Asks for
 confirmation, then an optional reason, and sets the ticket to **Cancelled** — permanent, with no

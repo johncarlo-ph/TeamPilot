@@ -25,6 +25,16 @@ public sealed class TicketQuestionService(
     IProjectEventBroadcaster eventBroadcaster,
     IValidator<AnswerTicketQuestionRequest> answerValidator) : ITicketQuestionService
 {
+    public async Task<IReadOnlyList<TicketQuestion>> ListByTicketAsync(Guid ticketId, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Ticket), ticketId);
+
+        await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
+
+        return await ticketQuestionRepository.ListByTicketAsync(ticket.Id, cancellationToken);
+    }
+
     public async Task<TicketDto> AnswerAsync(Guid ticketId, Guid questionId, AnswerTicketQuestionRequest request, CancellationToken cancellationToken = default)
     {
         await answerValidator.EnsureValidAsync(request, cancellationToken);

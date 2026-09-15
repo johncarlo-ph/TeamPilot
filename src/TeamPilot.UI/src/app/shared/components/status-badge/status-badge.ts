@@ -15,6 +15,10 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   Decision: 'text-bg-info',
   Pending: 'text-bg-warning',
   Answered: 'text-bg-success',
+  // Ticket agent event kind
+  Started: 'text-bg-info',
+  Completed: 'text-bg-success',
+  Failed: 'text-bg-danger',
   // Agent / user status
   Active: 'text-bg-success',
   Inactive: 'text-bg-secondary',

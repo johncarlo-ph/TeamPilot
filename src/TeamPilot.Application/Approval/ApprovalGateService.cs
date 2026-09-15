@@ -8,6 +8,7 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Reviews;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
@@ -19,6 +20,7 @@ namespace TeamPilot.Application.Approval;
 public sealed class ApprovalGateService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
+    IReviewRepository reviewRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
     IProjectAccessGuard projectAccessGuard,
@@ -31,6 +33,16 @@ public sealed class ApprovalGateService(
     IProjectEventBroadcaster eventBroadcaster,
     ILogger<ApprovalGateService> logger) : IApprovalGateService
 {
+    public async Task<IReadOnlyList<Review>> ListByTicketAsync(Guid ticketId, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Ticket), ticketId);
+
+        await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
+
+        return await reviewRepository.ListByTicketAsync(ticket.Id, cancellationToken);
+    }
+
     public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewRequest request, CancellationToken cancellationToken = default)
     {
         await validator.EnsureValidAsync(request, cancellationToken);

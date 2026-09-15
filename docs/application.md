@@ -519,17 +519,40 @@ reachable from both a normal request scope and `RunPipelineDetached`'s own backg
 injected into every service that changes ticket/question state: `TicketService` (`CreateAsync`,
 `MoveToReviewAsync`, `CancelAsync`, `LinkBranchAsync`, `DeleteBranchAsync`), `OrchestrationService`
 (`RunPipelineAsync`'s `MoveToReview` exit, the three `Block*` methods, `BlockOnBackgroundFailureAsync`,
-and `RunPipelineDetached`'s `MarkRunning`/`MarkFinished` points - the latter resolved from the
-background scope's own `IServiceProvider`, same as every other dependency that method uses),
-`TicketQuestionService` (`AnswerAsync`, `RetryAsync`), and `ApprovalGateService` (`SubmitReviewAsync`).
-Each publish carries only a `ProjectEvent { Type, ProjectId, TicketId, OccurredAtUtc }` -
-`TicketChanged` or `TicketQuestionChanged` - deliberately no ticket/question state of its own, so
+`RunPipelineDetached`'s `MarkRunning`/`MarkFinished` points - the latter resolved from the
+background scope's own `IServiceProvider`, same as every other dependency that method uses -
+and every `TicketAgentEvent` recorded, see below), `TicketQuestionService` (`AnswerAsync`, `RetryAsync`),
+and `ApprovalGateService` (`SubmitReviewAsync`). Each publish carries only a
+`ProjectEvent { Type, ProjectId, TicketId, OccurredAtUtc }` - `TicketChanged`, `TicketQuestionChanged`,
+or `TicketAgentEventLogged` - deliberately no ticket/question/event state of its own, so
 a client reacts by re-issuing the same `GET` it already knows how to make rather than the event
-shape needing to stay in sync with `TicketDto`/`TicketQuestionDto`. `RunPipelineDetached`'s
-signature grew a `projectId` parameter (`RunPipelineDetached(Guid projectId, Guid ticketId)`)
-purely so its `MarkRunning`-time publish doesn't need an extra ticket fetch - every caller already
-has it from the ticket it just loaded. See [docs/api.md](api.md) for the endpoint itself and
-[docs/frontend.md](frontend.md) for the consumer side.
+shape needing to stay in sync with `TicketDto`/`TicketQuestionDto`/`TicketAgentEventDto`.
+`RunPipelineDetached`'s signature grew a `projectId` parameter
+(`RunPipelineDetached(Guid projectId, Guid ticketId)`) purely so its `MarkRunning`-time publish
+doesn't need an extra ticket fetch - every caller already has it from the ticket it just loaded.
+See [docs/api.md](api.md) for the endpoint itself and [docs/frontend.md](frontend.md) for the
+consumer side.
+
+**`TicketAgentEvent` (`Domain/Entities/TicketAgentEvent.cs`, via `ITicketAgentEventRepository`)
+gives the ticket detail page a live, per-stage timeline - not just the finished output `StageExecution`
+already records.** `OrchestrationService.RunPipelineAsync` writes a `Started` row (and saves +
+publishes it immediately, ahead of that stage's own LLM call, which can take minutes) the moment
+each stage begins, then one of `Completed` (alongside the existing `StageExecution.Create` call,
+`Result` = the stage's output), `Blocked` (inside `BlockOnQuestionAsync`/`BlockOnDecisionAsync`,
+`Result` = the question/decision text), or `Failed` (inside `BlockOnFailureAsync` and the static
+`BlockOnBackgroundFailureAsync`, `Result` = the exception message, `AgentId`/`Role` both null when
+the failure happened before any stage ran, e.g. linking the ticket's branch) once it ends. `Role`
+is a snapshot of the agent's role at event time, the same rationale as
+`TicketAgentAssignment.RoleAtAssignment`. Exposed read-only via `GET /api/tickets/{ticketId}/agent-events`
+(see [docs/api.md](api.md)), through `ITicketAgentEventService.ListByTicketAsync` -
+loads the ticket, calls `IProjectAccessGuard.EnsureAccessAsync(ticket.ProjectId)`, then defers to
+`ITicketAgentEventRepository.ListByTicketAsync`. This route (like `TicketQuestionsController.ListByTicket`,
+which now goes through the equivalent `ITicketQuestionService.ListByTicketAsync`) carries only a
+`ticketId`, not a `projectId`, so the access check has to happen inside the service rather than at
+the API boundary - both controllers used to call their repository directly with no such check at
+all, which meant any authenticated user who knew or guessed a ticket's id could read its full
+agent-event/question history regardless of project membership; both now follow the same
+load-then-guard pattern every other per-ticket service method in this file uses.
 
 **Each stage decides for itself whether the reviewer's feedback actually changes anything for its
 part of the work, instead of the re-run blindly redoing every stage from scratch.** This was

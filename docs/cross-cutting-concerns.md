@@ -100,6 +100,29 @@ case is handled explicitly).
   `Cors:AllowedOrigins` list rather than `AllowAnyOrigin()` — required because the refresh-token
   cookie flow is credentialed, and it also means an unlisted origin can't call the API from a
   browser at all, credentialed or not.
+- **Prompt-injection defense in depth for the agent pipeline**: a ticket's title/description,
+  review comments, a human's answer to a blocking question, and one stage's output handed to the
+  next are all untrusted text from an LLM's perspective, with no structural system/user separation
+  in `OrchestrationService.BuildStagePrompt` (everything lands in one prompt string — see
+  [docs/application.md](application.md#workflow-integration)). That text is wrapped in tags
+  (`<ticket_description>`, `<review_feedback>`, `<human_answer>`, `<previous_stage_output>`,
+  `<your_previous_output>`) with an explicit instruction to treat tagged content as data, never as
+  new instructions — a prompting-level mitigation, not a guarantee. The one path where a stage's
+  raw output becomes a real side effect without a human in the loop first — Coding's `<file>`
+  blocks being committed and pushed — is additionally constrained at the Git layer: `IGitService`
+  refuses to write to a `.git` path or under `.github/workflows/` (see
+  [docs/infrastructure.md](infrastructure.md)), so an injected instruction can't use that path to
+  persist itself into the target repository's CI. The real backstop for everything else a Coding
+  stage might rewrite remains the human approval gate before merge (`ApprovalGateService.ApproveAsync`).
+- **Every per-ticket `GET .../{ticketId}/...` listing endpoint checks project access in the
+  Application layer, not just authentication**: `ReviewsController`, `TicketQuestionsController`,
+  and `TicketAgentEventsController` each route on a bare `ticketId` (no `projectId` segment to
+  check against at the API boundary), so `IApprovalGateService.ListByTicketAsync`,
+  `ITicketQuestionService.ListByTicketAsync`, and `ITicketAgentEventService.ListByTicketAsync`
+  each load the ticket and call `IProjectAccessGuard.EnsureAccessAsync(ticket.ProjectId)` before
+  reading anything — closing a gap where all three controllers used to call their repository
+  directly, letting any authenticated user who knew or guessed a ticket's id read its reviews,
+  questions, or agent-event log regardless of project membership.
 
 ## Deployment workflow
 

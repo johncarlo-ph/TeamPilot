@@ -8,6 +8,7 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Reviews;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Reviews.Validators;
 using TeamPilot.Application.Tickets;
@@ -21,6 +22,7 @@ public class ApprovalGateServiceTests
 {
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<IReviewRepository> _reviewRepository = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
     private readonly Mock<IOrchestrationService> _orchestrationService = new();
@@ -57,6 +59,7 @@ public class ApprovalGateServiceTests
         _sut = new ApprovalGateService(
             _ticketRepository.Object,
             _projectRepository.Object,
+            _reviewRepository.Object,
             _gitService.Object,
             _credentialProtector.Object,
             _projectAccessGuard.Object,
@@ -77,6 +80,40 @@ public class ApprovalGateServiceTests
         ticket.LinkBranch(branchName);
         ticket.MoveToReview();
         return ticket;
+    }
+
+    [Fact]
+    public async Task ListByTicketAsync_ChecksProjectAccessAndReturnsTheRepositoryListing()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        var reviews = new List<Review> { Review.Create(ticket.Id, "Bob", ReviewDecision.Approve, "Looks good") };
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _reviewRepository.Setup(r => r.ListByTicketAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(reviews);
+
+        var result = await _sut.ListByTicketAsync(ticket.Id);
+
+        Assert.Same(reviews, result);
+        _projectAccessGuard.Verify(g => g.EnsureAccessAsync(ticket.ProjectId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ListByTicketAsync_WhenTicketDoesNotExist_ThrowsNotFoundException()
+    {
+        var ticketId = Guid.NewGuid();
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticketId, It.IsAny<CancellationToken>())).ReturnsAsync((Ticket?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.ListByTicketAsync(ticketId));
+    }
+
+    [Fact]
+    public async Task ListByTicketAsync_WhenCallerLacksProjectAccess_ThrowsForbiddenExceptionAndNeverQueriesReviews()
+    {
+        var ticket = CreateTicketInReview("feature/add-feature");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _projectAccessGuard.Setup(g => g.EnsureAccessAsync(ticket.ProjectId, It.IsAny<CancellationToken>())).ThrowsAsync(new ForbiddenException("No access."));
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => _sut.ListByTicketAsync(ticket.Id));
+        _reviewRepository.Verify(r => r.ListByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

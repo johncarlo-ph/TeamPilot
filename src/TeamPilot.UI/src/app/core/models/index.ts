@@ -8,6 +8,7 @@ export * from './instruction-template.model';
 export * from './commit.model';
 export * from './review.model';
 export * from './ticket-question.model';
+export * from './ticket-agent-event.model';
 export * from './conflict.model';
 export * from './user.model';
 export * from './audit-log.model';

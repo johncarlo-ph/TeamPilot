@@ -55,6 +55,40 @@ public class TicketQuestionServiceTests
     }
 
     [Fact]
+    public async Task ListByTicketAsync_ChecksProjectAccessAndReturnsTheRepositoryListing()
+    {
+        var ticket = CreateBlockedTicket();
+        var questions = new List<TicketQuestion> { TicketQuestion.CreateQuestion(ticket.Id, Guid.NewGuid(), "Which provider?") };
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _ticketQuestionRepository.Setup(r => r.ListByTicketAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(questions);
+
+        var result = await _sut.ListByTicketAsync(ticket.Id);
+
+        Assert.Same(questions, result);
+        _projectAccessGuard.Verify(g => g.EnsureAccessAsync(ticket.ProjectId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ListByTicketAsync_WhenTicketDoesNotExist_ThrowsNotFoundException()
+    {
+        var ticketId = Guid.NewGuid();
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticketId, It.IsAny<CancellationToken>())).ReturnsAsync((Ticket?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.ListByTicketAsync(ticketId));
+    }
+
+    [Fact]
+    public async Task ListByTicketAsync_WhenCallerLacksProjectAccess_ThrowsForbiddenExceptionAndNeverQueriesQuestions()
+    {
+        var ticket = CreateBlockedTicket();
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+        _projectAccessGuard.Setup(g => g.EnsureAccessAsync(ticket.ProjectId, It.IsAny<CancellationToken>())).ThrowsAsync(new ForbiddenException("No access."));
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => _sut.ListByTicketAsync(ticket.Id));
+        _ticketQuestionRepository.Verify(r => r.ListByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task AnswerAsync_WithAPendingQuestion_AnswersUnblocksAndKicksOffThePipelineDetached()
     {
         var ticket = CreateBlockedTicket();

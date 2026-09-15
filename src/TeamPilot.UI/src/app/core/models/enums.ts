@@ -9,6 +9,8 @@ export type TicketQuestionKind = 'Question' | 'Failure' | 'Decision';
 
 export type TicketQuestionStatus = 'Pending' | 'Answered';
 
+export type TicketAgentEventKind = 'Started' | 'Completed' | 'Blocked' | 'Failed';
+
 export type AgentRole = 'Research' | 'Design' | 'Coding' | 'Testing' | 'LiveAgent' | 'Custom';
 
 export const AGENT_ROLES: AgentRole[] = ['Research', 'Design', 'Coding', 'Testing', 'LiveAgent', 'Custom'];

@@ -17,6 +17,7 @@ import {
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { TicketQuestionsService } from '../../core/services/ticket-questions.service';
+import { TicketAgentEventsService } from '../../core/services/ticket-agent-events.service';
 import { ProjectsService } from '../../core/services/projects.service';
 import { ProjectEventsService } from '../../core/services/project-events.service';
 import { NotificationService } from '../../core/notification/notification.service';
@@ -24,6 +25,7 @@ import {
   ProjectDto,
   ReviewDecision,
   SubmitReviewRequest,
+  TicketAgentEventDto,
   TicketDetailDto,
   TicketQuestionDto,
 } from '../../core/models';
@@ -33,6 +35,7 @@ import { BranchPanel } from './branch-panel/branch-panel';
 import { ConflictsPanel } from './conflicts-panel/conflicts-panel';
 import { ReviewForm } from './review-form/review-form';
 import { TicketQuestionPanel } from './ticket-question-panel/ticket-question-panel';
+import { AgentEventLogPanel } from './agent-event-log-panel/agent-event-log-panel';
 import { buildBranchUrl } from '../../core/utils/git-url.util';
 
 // The SSE stream (see ProjectEventsService) now drives the primary refresh; this is only a
@@ -51,6 +54,7 @@ const DESCRIPTION_PREVIEW_LENGTH = 400;
     ConflictsPanel,
     ReviewForm,
     TicketQuestionPanel,
+    AgentEventLogPanel,
   ],
   templateUrl: './ticket-detail.html',
 })
@@ -59,12 +63,14 @@ export class TicketDetail {
   private readonly ticketsService = inject(TicketsService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly ticketQuestionsService = inject(TicketQuestionsService);
+  private readonly ticketAgentEventsService = inject(TicketAgentEventsService);
   private readonly projectsService = inject(ProjectsService);
   private readonly projectEventsService = inject(ProjectEventsService);
   private readonly notifications = inject(NotificationService);
 
   readonly ticket = signal<TicketDetailDto | null>(null);
   readonly questions = signal<TicketQuestionDto[]>([]);
+  readonly agentEvents = signal<TicketAgentEventDto[]>([]);
   readonly project = signal<ProjectDto | null>(null);
   readonly loading = signal(true);
   readonly reviewFormOpen = signal(false);
@@ -124,6 +130,7 @@ export class TicketDetail {
                   forkJoin({
                     ticket: this.ticketsService.getById(id),
                     questions: this.ticketQuestionsService.listForTicket(id),
+                    agentEvents: this.ticketAgentEventsService.listForTicket(id),
                   })
                 )
               )
@@ -133,10 +140,11 @@ export class TicketDetail {
         takeUntilDestroyed()
       )
       .subscribe({
-        next: ({ ticket, questions }) => {
+        next: ({ ticket, questions, agentEvents }) => {
           const isFirstLoad = this.ticket() === null;
           this.ticket.set(ticket);
           this.questions.set(questions);
+          this.agentEvents.set(agentEvents);
           this.loading.set(false);
           if (isFirstLoad) {
             this.loadProject(ticket.projectId);

@@ -8,12 +8,12 @@ namespace TeamPilot.API.Controllers;
 
 [ApiController]
 [Route("api/tickets/{ticketId:guid}/questions")]
-public class TicketQuestionsController(ITicketQuestionService ticketQuestionService, ITicketQuestionRepository ticketQuestionRepository) : ControllerBase
+public class TicketQuestionsController(ITicketQuestionService ticketQuestionService) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<TicketQuestionDto>>> ListByTicket(Guid ticketId, CancellationToken cancellationToken)
     {
-        var questions = await ticketQuestionRepository.ListByTicketAsync(ticketId, cancellationToken);
+        var questions = await ticketQuestionService.ListByTicketAsync(ticketId, cancellationToken);
         return Ok(questions.Select(ToDto));
     }
 

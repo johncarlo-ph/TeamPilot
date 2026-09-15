@@ -132,6 +132,19 @@ real, reproduced incident where a Research-stage tool-use loop burned most of it
 navigating six directory levels one `list_files` call at a time before ever reading a file,
 exhausting the loop before it could produce an answer.
 
+**`CommitFilesAsync` refuses to write to Git-internal or CI-workflow paths, independent of the
+sandbox-escape check.** The Coding stage's file blocks are raw LLM output (see
+[docs/application.md](application.md#workflow-integration)'s `BuildStagePrompt`/`ParseFileChanges`
+description) grounded in a ticket description and repo content that are both untrusted from a
+prompt-injection standpoint - `ResolveSandboxedPath` alone stops a path from escaping the clone,
+but says nothing about *which* path inside it gets rewritten. `IsBlockedWritePath` (mirroring
+`ReadFileAsync`'s own denylist, but for writes) rejects any path containing a `.git` segment or
+starting with `.github/workflows/`, throwing `GitOperationException` before any file in the batch
+is written - the one place a rewritten file in the target repository could get itself executed by
+CI on push/PR, independent of the human approval gate the ticket's own changes still go through.
+This is a coarse denylist, not a guarantee that every other file the model chooses to rewrite is
+safe; the approval gate before merge remains the real backstop.
+
 **Both are called by two different tool-use loops, not just the Live Agent chat.**
 `Application/Git/GitReadOnlyTools` defines the `list_files`/`read_file` tool schema and dispatch
 once and is shared by `LiveAgentChatService` (passing `branchName: null`) and by the
@@ -296,6 +309,11 @@ replay after a restart.
   as `Ticket.Status`/`Review.Decision`. The `AddTicketBlockedStatusAndQuestions` migration only
   adds the new table - `TicketStatus.Blocked` needed no schema change since `Ticket.Status` was
   already a `nvarchar(20)` string column.
+- `TicketAgentEventConfiguration` follows `TicketQuestionConfiguration`'s exact shape (cascade on
+  `TicketId`, restrict on nullable `AgentId`) with an added `Role` column, stored as a string like
+  `Kind`. An index on `(TicketId, CreatedAtUtc)` backs `TicketAgentEventRepository.ListByTicketAsync`'s
+  chronological listing. The `AddTicketAgentEvents` migration only adds the new table - no
+  backfill, same reasoning as `AddStageExecutions`.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

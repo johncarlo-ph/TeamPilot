@@ -1,4 +1,4 @@
-export type ProjectEventType = 'TicketChanged' | 'TicketQuestionChanged';
+export type ProjectEventType = 'TicketChanged' | 'TicketQuestionChanged' | 'TicketAgentEventLogged';
 
 /** A refetch signal from `GET /api/projects/{projectId}/events` (SSE) - carries no state of its
  * own beyond what changed; consumers react by re-issuing the GET they already know how to make. */

@@ -50,6 +50,16 @@ load a `Ticket`. **`TicketQuestion` follows this exact same pattern** - a ticket
 and resumed any number of times over its life (a clarifying question, or a Git/LLM operational
 failure - see [docs/application.md](application.md)), so it's queried standalone through
 `ITicketQuestionRepository` rather than being another eagerly-loaded `Ticket` collection.
+**`TicketAgentEvent` follows it too** - one row per stage lifecycle event (`Started` when a stage
+begins, then `Completed`/`Blocked`/`Failed` when it ends), so the ticket detail page's live agent
+log has something to show while a stage is still in flight, not just after `StageExecution`
+records its finished output. It's a separate entity from `StageExecution` rather than an
+extension of it because `StageExecution` is specifically "an agent's most recent output for
+review/answer feedback threading" (see `OrchestrationService`) and is never displayed; overloading
+it with in-flight `Started` rows (with no `Output` yet) would have complicated that lookup for no
+benefit. `TicketAgentEvent.Role` snapshots the agent's role the same way
+`TicketAgentAssignment.RoleAtAssignment` does, so a later role change doesn't rewrite a past
+event's label.
 
 **`Ticket.Block()`/`Unblock()` model a pipeline pausing mid-run, not a terminal state.** Unlike
 `Cancel`, `Block` only transitions from `InProgress` (the pipeline has to actually be running for
@@ -112,6 +122,7 @@ automatic branch delete.
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
 | `TicketQuestion` | A record of why a ticket was blocked - a clarifying question, a proceed-or-cancel decision point, or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateDecision`, `CreateFailure`, `Answer`, `MarkConsumed` |
+| `TicketAgentEvent` | A per-ticket agent lifecycle event (`Started`/`Completed`/`Blocked`/`Failed`) for the ticket detail page's live agent log - references its `Ticket` and (nullable) `Agent` by id only | `CreateStarted`, `CreateCompleted`, `CreateBlocked`, `CreateFailed` |
 | `Conversation` | One chat session with a project's `LiveAgent` - a project can have any number | `Create`, `Rename`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)*, `MarkTicketCreated`, `RejectTicket` |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |

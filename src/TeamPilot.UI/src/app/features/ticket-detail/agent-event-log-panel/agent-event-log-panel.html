@@ -1,0 +1,25 @@
+@if (events().length) {
+  <div class="card mb-3">
+    <div class="card-header">
+      <span aria-hidden="true">📋</span> Agent Log
+    </div>
+    <div class="card-body overflow-auto" style="max-height: 30rem">
+      @for (event of events(); track event.id) {
+        <div class="mb-3">
+          <div class="d-flex align-items-center justify-content-between mb-1">
+            <div class="d-flex align-items-center gap-2">
+              <app-status-badge [value]="event.kind"></app-status-badge>
+              <span>{{ label(event) }}</span>
+            </div>
+            <span class="small text-body-secondary">{{ event.createdAtUtc | date: 'short' }}</span>
+          </div>
+          @if (event.result) {
+            <div class="p-2 rounded bg-white border" style="white-space: pre-wrap">
+              {{ event.result }}
+            </div>
+          }
+        </div>
+      }
+    </div>
+  </div>
+}

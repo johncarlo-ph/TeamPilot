@@ -19,4 +19,8 @@ public static class ProjectEventTypes
 
     /// <summary>A <c>TicketQuestion</c> was created (question/decision/failure) or answered.</summary>
     public const string TicketQuestionChanged = "TicketQuestionChanged";
+
+    /// <summary>A <c>TicketAgentEvent</c> was recorded - a pipeline stage started, or ended
+    /// (completed/blocked/failed) - for the ticket detail page's live agent log.</summary>
+    public const string TicketAgentEventLogged = "TicketAgentEventLogged";
 }

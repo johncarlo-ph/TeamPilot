@@ -145,6 +145,8 @@
         (changed)="onQuestionsChanged()"
       ></app-ticket-question-panel>
 
+      <app-agent-event-log-panel [events]="agentEvents()"></app-agent-event-log-panel>
+
       <app-conflicts-panel
         [ticketId]="ticket.id"
         [conflicts]="ticket.conflicts"

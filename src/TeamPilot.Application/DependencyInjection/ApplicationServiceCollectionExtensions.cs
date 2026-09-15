@@ -12,6 +12,7 @@ using TeamPilot.Application.LiveAgentChat;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Tickets;
+using TeamPilot.Application.TicketAgentEvents;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Users;
 using TeamPilot.Application.Workflow;
@@ -39,6 +40,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IOrchestrationService, OrchestrationService>();
         services.AddScoped<IApprovalGateService, ApprovalGateService>();
         services.AddScoped<ITicketQuestionService, TicketQuestionService>();
+        services.AddScoped<ITicketAgentEventService, TicketAgentEventService>();
         services.AddScoped<IConflictResolutionService, ConflictResolutionService>();
         services.AddScoped<IWorkflowService, WorkflowService>();
 

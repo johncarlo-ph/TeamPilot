@@ -1,10 +1,18 @@
 using TeamPilot.Application.TicketQuestions.Dtos;
 using TeamPilot.Application.Tickets.Dtos;
+using TeamPilot.Domain.Entities;
 
 namespace TeamPilot.Application.TicketQuestions;
 
 public interface ITicketQuestionService
 {
+    /// <summary>
+    /// Lists a ticket's clarifying-question history (oldest first), after checking the caller
+    /// has access to the ticket's project - see <c>TicketQuestionsController</c>, whose route
+    /// carries only a <c>ticketId</c>, not a <c>projectId</c>, to check against directly.
+    /// </summary>
+    Task<IReadOnlyList<TicketQuestion>> ListByTicketAsync(Guid ticketId, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Answers the pending clarifying question that's blocking the ticket, unblocks it, and
     /// re-invokes the pipeline detached (mirroring how <c>ApprovalGateService</c>'s

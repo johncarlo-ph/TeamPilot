@@ -9,4 +9,7 @@ public sealed record TicketAgentEventDto(
     AgentRole? Role,
     TicketAgentEventKind Kind,
     string? Result,
+    int? InputTokens,
+    int? OutputTokens,
+    int? DurationMs,
     DateTime CreatedAtUtc);

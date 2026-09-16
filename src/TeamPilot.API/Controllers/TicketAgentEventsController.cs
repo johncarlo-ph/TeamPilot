@@ -23,5 +23,8 @@ public class TicketAgentEventsController(ITicketAgentEventService ticketAgentEve
         agentEvent.Role,
         agentEvent.Kind,
         agentEvent.Result,
+        agentEvent.InputTokens,
+        agentEvent.OutputTokens,
+        agentEvent.DurationMs,
         agentEvent.CreatedAtUtc);
 }

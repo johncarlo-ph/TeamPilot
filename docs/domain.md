@@ -59,7 +59,10 @@ review/answer feedback threading" (see `OrchestrationService`) and is never disp
 it with in-flight `Started` rows (with no `Output` yet) would have complicated that lookup for no
 benefit. `TicketAgentEvent.Role` snapshots the agent's role the same way
 `TicketAgentAssignment.RoleAtAssignment` does, so a later role change doesn't rewrite a past
-event's label.
+event's label. `Completed`/`Blocked` also carry `InputTokens`/`OutputTokens`/`DurationMs` for that
+stage attempt - `Failed` carries only `DurationMs` (a failure may never have called the LLM at
+all), and `Started` carries none of the three (nothing has happened yet) - see
+[docs/application.md](application.md) for exactly where these are measured.
 
 **`Ticket.Block()`/`Unblock()` model a pipeline pausing mid-run, not a terminal state.** Unlike
 `Cancel`, `Block` only transitions from `InProgress` (the pipeline has to actually be running for

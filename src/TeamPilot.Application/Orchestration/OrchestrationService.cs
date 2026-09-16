@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -147,6 +148,7 @@ public sealed class OrchestrationService(
         // any stage ran (e.g. linking the ticket's branch).
         Guid? currentAgentId = null;
         AgentRole? currentAgentRole = null;
+        Stopwatch? currentStageStopwatch = null;
 
         try
         {
@@ -202,6 +204,11 @@ public sealed class OrchestrationService(
 
                 await EnsureNotCancelledAsync(ticket.Id, cancellationToken);
 
+                // Read again at every exit point below (Completed/Blocked/Failed) for
+                // TicketAgentEvent.DurationMs - covers instruction lookup, the LLM call(s), and
+                // (for Coding) the git commit/push, i.e. everything this stage attempt does.
+                currentStageStopwatch = Stopwatch.StartNew();
+
                 // Persisted and published immediately (its own save, ahead of the stage's own LLM
                 // call below, which can take minutes) so the ticket detail page's agent log shows
                 // this stage as in-flight right away, rather than only after it finishes.
@@ -244,10 +251,14 @@ public sealed class OrchestrationService(
                 var prompt = BuildStagePrompt(ticket, agent, previousOutput, instructions, requiresVerdict, reviewFeedback, priorOwnOutput, questionContext);
 
                 string output;
+                int inputTokens;
+                int outputTokens;
                 if (agent.Role == AgentRole.Coding)
                 {
-                    var (codingOutput, commit) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, checkForNoChanges: priorOwnOutput is not null, cancellationToken);
+                    var (codingOutput, commit, codingInputTokens, codingOutputTokens) = await RunCodingStageAsync(ticket, project, agent, prompt, attempt, checkForNoChanges: priorOwnOutput is not null, cancellationToken);
                     output = codingOutput;
+                    inputTokens = codingInputTokens;
+                    outputTokens = codingOutputTokens;
                     steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, commit));
                 }
                 else
@@ -259,9 +270,21 @@ public sealed class OrchestrationService(
                     // Neither role ever writes back to Git, so this stays read-only in practice.
                     // Every other role (e.g. Testing, or a custom admin-added agent) gets no repo
                     // access and its prompt is unchanged.
-                    output = agent.Role is AgentRole.Research or AgentRole.Design
-                        ? await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken)
-                        : (await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken)).Content;
+                    if (agent.Role is AgentRole.Research or AgentRole.Design)
+                    {
+                        var (stageOutput, stageInputTokens, stageOutputTokens) = await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken);
+                        output = stageOutput;
+                        inputTokens = stageInputTokens;
+                        outputTokens = stageOutputTokens;
+                    }
+                    else
+                    {
+                        var response = await llmConnector.SendPromptAsync(new LlmRequest(prompt), cancellationToken);
+                        output = response.Content;
+                        inputTokens = response.InputTokens;
+                        outputTokens = response.OutputTokens;
+                    }
+
                     steps.Add(new AgentWorkResultDto(ticket.Id, agent.Id, agent.Role, output, null));
 
                     logger.LogInformation(
@@ -273,16 +296,18 @@ public sealed class OrchestrationService(
                         output);
                 }
 
+                var durationMs = (int)currentStageStopwatch.ElapsedMilliseconds;
+
                 var decision = ParseDecision(output);
                 if (decision is not null)
                 {
-                    return await BlockOnDecisionAsync(ticket, agent.Id, agent.Role, decision, steps, cancellationToken);
+                    return await BlockOnDecisionAsync(ticket, agent.Id, agent.Role, decision, inputTokens, outputTokens, durationMs, steps, cancellationToken);
                 }
 
                 var question = ParseQuestion(output);
                 if (question is not null)
                 {
-                    return await BlockOnQuestionAsync(ticket, agent.Id, agent.Role, question, steps, cancellationToken);
+                    return await BlockOnQuestionAsync(ticket, agent.Id, agent.Role, question, inputTokens, outputTokens, durationMs, steps, cancellationToken);
                 }
 
                 // Persisted so a later review-triggered re-run can hand this stage's agent its own
@@ -290,7 +315,7 @@ public sealed class OrchestrationService(
                 // iteration already changed (e.g. a new Commit), so it survives even if a later
                 // stage in this same run throws.
                 await stageExecutionRepository.AddAsync(StageExecution.Create(ticket.Id, agent.Id, output), cancellationToken);
-                await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateCompleted(ticket.Id, agent.Id, agent.Role, output), cancellationToken);
+                await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateCompleted(ticket.Id, agent.Id, agent.Role, output, inputTokens, outputTokens, durationMs), cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 PublishTicketAgentEventLogged(ticket);
 
@@ -328,7 +353,8 @@ public sealed class OrchestrationService(
         }
         catch (Exception ex) when (ex is GitOperationException or LlmOperationException)
         {
-            return await BlockOnFailureAsync(ticket, currentAgentId, currentAgentRole, steps, ex, cancellationToken);
+            var durationMs = currentStageStopwatch is null ? (int?)null : (int)currentStageStopwatch.ElapsedMilliseconds;
+            return await BlockOnFailureAsync(ticket, currentAgentId, currentAgentRole, durationMs, steps, ex, cancellationToken);
         }
     }
 
@@ -403,7 +429,7 @@ public sealed class OrchestrationService(
         await backgroundTicketQuestionRepository.AddAsync(question, cancellationToken);
 
         var backgroundTicketAgentEventRepository = services.GetRequiredService<ITicketAgentEventRepository>();
-        await backgroundTicketAgentEventRepository.AddAsync(TicketAgentEvent.CreateFailed(ticket.Id, agentId: null, role: null, exception.Message), cancellationToken);
+        await backgroundTicketAgentEventRepository.AddAsync(TicketAgentEvent.CreateFailed(ticket.Id, agentId: null, role: null, exception.Message, durationMs: null), cancellationToken);
 
         ticket.Block();
 
@@ -428,11 +454,11 @@ public sealed class OrchestrationService(
     /// Persists the clarifying question a stage asked, blocks the ticket, and returns an
     /// early-exit result instead of reaching <c>ForReview</c>.
     /// </summary>
-    private async Task<TicketPipelineResultDto> BlockOnQuestionAsync(Ticket ticket, Guid agentId, AgentRole agentRole, string questionText, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
+    private async Task<TicketPipelineResultDto> BlockOnQuestionAsync(Ticket ticket, Guid agentId, AgentRole agentRole, string questionText, int inputTokens, int outputTokens, int durationMs, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
     {
         var question = TicketQuestion.CreateQuestion(ticket.Id, agentId, questionText);
         await ticketQuestionRepository.AddAsync(question, cancellationToken);
-        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateBlocked(ticket.Id, agentId, agentRole, questionText), cancellationToken);
+        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateBlocked(ticket.Id, agentId, agentRole, questionText, inputTokens, outputTokens, durationMs), cancellationToken);
 
         ticket.Block();
 
@@ -451,11 +477,11 @@ public sealed class OrchestrationService(
     /// is the <see cref="TicketQuestionKind.Decision"/> kind, which the ticket detail page uses to
     /// point the human at the ticket's own Cancel action instead of a free-text reply.
     /// </summary>
-    private async Task<TicketPipelineResultDto> BlockOnDecisionAsync(Ticket ticket, Guid agentId, AgentRole agentRole, string questionText, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
+    private async Task<TicketPipelineResultDto> BlockOnDecisionAsync(Ticket ticket, Guid agentId, AgentRole agentRole, string questionText, int inputTokens, int outputTokens, int durationMs, List<AgentWorkResultDto> steps, CancellationToken cancellationToken)
     {
         var question = TicketQuestion.CreateDecision(ticket.Id, agentId, questionText);
         await ticketQuestionRepository.AddAsync(question, cancellationToken);
-        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateBlocked(ticket.Id, agentId, agentRole, questionText), cancellationToken);
+        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateBlocked(ticket.Id, agentId, agentRole, questionText, inputTokens, outputTokens, durationMs), cancellationToken);
 
         ticket.Block();
 
@@ -475,13 +501,13 @@ public sealed class OrchestrationService(
     /// <see cref="GitOperationException"/>/<see cref="LlmOperationException"/>'s doc comments;
     /// any other exception type still bubbles up unchanged.
     /// </summary>
-    private async Task<TicketPipelineResultDto> BlockOnFailureAsync(Ticket ticket, Guid? agentId, AgentRole? agentRole, List<AgentWorkResultDto> steps, Exception exception, CancellationToken cancellationToken)
+    private async Task<TicketPipelineResultDto> BlockOnFailureAsync(Ticket ticket, Guid? agentId, AgentRole? agentRole, int? durationMs, List<AgentWorkResultDto> steps, Exception exception, CancellationToken cancellationToken)
     {
         logger.LogWarning(exception, "Ticket {TicketId} blocked by an operational failure mid-pipeline.", ticket.Id);
 
         var question = TicketQuestion.CreateFailure(ticket.Id, agentId, exception.Message);
         await ticketQuestionRepository.AddAsync(question, cancellationToken);
-        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateFailed(ticket.Id, agentId, agentRole, exception.Message), cancellationToken);
+        await ticketAgentEventRepository.AddAsync(TicketAgentEvent.CreateFailed(ticket.Id, agentId, agentRole, exception.Message, durationMs), cancellationToken);
 
         ticket.Block();
 
@@ -514,7 +540,7 @@ public sealed class OrchestrationService(
     private Task<string?> GetInstructionsBlockAsync(Guid agentId, CancellationToken cancellationToken) =>
         AgentInstructionsFormatter.GetInstructionsBlockAsync(instructionRepository, agentId, cancellationToken);
 
-    private async Task<(string LlmOutput, CommitDto? Commit)> RunCodingStageAsync(
+    private async Task<(string LlmOutput, CommitDto? Commit, int InputTokens, int OutputTokens)> RunCodingStageAsync(
         Ticket ticket,
         Project project,
         Agent agent,
@@ -526,7 +552,7 @@ public sealed class OrchestrationService(
         // list_files/read_file tool calls (see RunStagePromptAsync) ground edits in the ticket
         // branch's real current files, on demand, instead of a capped static snapshot that could
         // silently drop a file this edit actually needs.
-        var responseContent = await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken);
+        var (responseContent, inputTokens, outputTokens) = await RunStagePromptAsync(prompt, project, ticket, StageToolLoopMaxTokens, cancellationToken);
 
         // A clarifying question or a proceed-or-cancel decision pre-empts everything else - no
         // commit/push, regardless of whether this is a reaffirm-style invocation. The outer
@@ -534,7 +560,7 @@ public sealed class OrchestrationService(
         // actually block the ticket.
         if (ParseDecision(responseContent) is not null || ParseQuestion(responseContent) is not null)
         {
-            return (responseContent, null);
+            return (responseContent, null, inputTokens, outputTokens);
         }
 
         // Only asked of - and only honored for - a Coding stage reaffirming its own prior output
@@ -543,7 +569,7 @@ public sealed class OrchestrationService(
         // usual, matching every other Coding invocation.
         if (checkForNoChanges && ParseChanges(responseContent) == false)
         {
-            return (responseContent, null);
+            return (responseContent, null, inputTokens, outputTokens);
         }
 
         var fileChanges = ParseFileChanges(responseContent);
@@ -556,7 +582,7 @@ public sealed class OrchestrationService(
                 "Coding agent {AgentId} produced no parseable <file> blocks for ticket {TicketId}; nothing committed.",
                 agent.Id,
                 ticket.Id);
-            return (responseContent, null);
+            return (responseContent, null, inputTokens, outputTokens);
         }
 
         var message = attempt == 1
@@ -582,7 +608,7 @@ public sealed class OrchestrationService(
             var currentStatus = await ticketRepository.GetStatusAsync(ticket.Id, cancellationToken);
             if (currentStatus == TicketStatus.Cancelled)
             {
-                return (responseContent, null);
+                return (responseContent, null, inputTokens, outputTokens);
             }
 
             var commitResult = await gitService.CommitFilesAsync(
@@ -603,7 +629,7 @@ public sealed class OrchestrationService(
 
             var commitDto = new CommitDto(commit.Id, commit.TicketId, commit.BranchName, commit.CommitHash, commit.Message, commit.DiffContent, commit.AuthorAgentId, commit.CreatedAtUtc);
 
-            return (responseContent, commitDto);
+            return (responseContent, commitDto, inputTokens, outputTokens);
         }
     }
 
@@ -627,8 +653,12 @@ public sealed class OrchestrationService(
     /// exhaustion blocks the ticket for a human to look at, instead of silently producing no
     /// commit and letting the run continue as if the stage had nothing to do.
     /// </summary>
-    private Task<string> RunStagePromptAsync(string prompt, Project project, Ticket ticket, int maxTokens, CancellationToken cancellationToken) =>
-        ToolLoopRunner.RunAsync(
+    private async Task<(string Output, int InputTokens, int OutputTokens)> RunStagePromptAsync(string prompt, Project project, Ticket ticket, int maxTokens, CancellationToken cancellationToken)
+    {
+        var inputTokens = 0;
+        var outputTokens = 0;
+
+        var output = await ToolLoopRunner.RunAsync(
             llmConnector,
             [LlmMessage.User(prompt)],
             system: null,
@@ -640,6 +670,11 @@ public sealed class OrchestrationService(
             fallbackText: "QUESTION: I couldn't finish exploring this ticket's branch and produce an answer within my available tool-call budget. Please retry, or narrow this ticket's scope.",
             onRound: (round, response) =>
             {
+                // Summed across every round of the tool-use loop, not just the final one - each
+                // round is its own LLM call with its own usage (see ToolLoopRunner.RunAsync).
+                inputTokens += response.InputTokens;
+                outputTokens += response.OutputTokens;
+
                 var toolNames = string.Join(", ", response.Content.OfType<LlmToolUseBlock>().Select(t => t.Name));
                 logger.LogInformation(
                     "Ticket {TicketId} tool-loop round {Round}: stop reason {StopReason}{ToolNames}",
@@ -648,6 +683,9 @@ public sealed class OrchestrationService(
                     response.StopReason,
                     string.IsNullOrEmpty(toolNames) ? string.Empty : $", tools requested: {toolNames}");
             });
+
+        return (output, inputTokens, outputTokens);
+    }
 
     private async Task<(string ResultText, bool IsError)> ExecuteGitToolAsync(
         Project project, Ticket ticket, LlmToolUseBlock toolUse, CancellationToken cancellationToken)

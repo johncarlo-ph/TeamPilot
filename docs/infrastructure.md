@@ -313,7 +313,10 @@ replay after a restart.
   `TicketId`, restrict on nullable `AgentId`) with an added `Role` column, stored as a string like
   `Kind`. An index on `(TicketId, CreatedAtUtc)` backs `TicketAgentEventRepository.ListByTicketAsync`'s
   chronological listing. The `AddTicketAgentEvents` migration only adds the new table - no
-  backfill, same reasoning as `AddStageExecutions`.
+  backfill, same reasoning as `AddStageExecutions`. `InputTokens`/`OutputTokens`/`DurationMs` are
+  plain nullable `int` columns added by the follow-up `AddTicketAgentEventUsage` migration, left to
+  EF's default conventions (no explicit Fluent API needed, same as `WorkflowStage.MaxLoopIterations`)
+  since a stage's token counts and duration need no string conversion or index of their own.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

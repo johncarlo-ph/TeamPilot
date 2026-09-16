@@ -13,6 +13,9 @@
             </div>
             <span class="small text-body-secondary">{{ event.createdAtUtc | date: 'short' }}</span>
           </div>
+          @if (meta(event); as metaText) {
+            <div class="small text-body-secondary mb-1">{{ metaText }}</div>
+          }
           @if (event.result) {
             <div class="p-2 rounded bg-white border" style="white-space: pre-wrap">
               {{ event.result }}

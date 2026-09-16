@@ -543,7 +543,22 @@ each stage begins, then one of `Completed` (alongside the existing `StageExecuti
 `BlockOnBackgroundFailureAsync`, `Result` = the exception message, `AgentId`/`Role` both null when
 the failure happened before any stage ran, e.g. linking the ticket's branch) once it ends. `Role`
 is a snapshot of the agent's role at event time, the same rationale as
-`TicketAgentAssignment.RoleAtAssignment`. Exposed read-only via `GET /api/tickets/{ticketId}/agent-events`
+`TicketAgentAssignment.RoleAtAssignment`.
+
+**`Completed`/`Blocked` also carry the stage's token usage and wall-clock duration; `Failed` only
+duration.** A `Stopwatch` (`currentStageStopwatch`) starts the moment `RunPipelineAsync` records a
+stage's `Started` row and is read at every exit - `DurationMs` on the resulting `Completed`,
+`Blocked`, or `Failed` event, covering instruction lookup, the LLM call(s), and (for Coding) the
+git commit/push, i.e. everything that one stage attempt actually did; `null` only when a failure
+happened before any stage started (`currentStageStopwatch` itself is still `null` then). Token
+counts (`InputTokens`/`OutputTokens`) come straight from `LlmResponse`/`LlmConversationResponse`'s
+own usage fields (see [docs/infrastructure.md](infrastructure.md)) - for Testing/Custom (plain
+`SendPromptAsync`) that's a single response's counts; for Research/Design/Coding (the
+`RunStagePromptAsync` tool-use loop) `RunStagePromptAsync` now returns
+`(Output, InputTokens, OutputTokens)` instead of a bare string, summing every round's usage via the
+loop's existing `onRound` callback - one Claude call per round, each with its own usage. `Failed`
+carries no token counts: a Git-only failure never calls the LLM at all, and an LLM-call failure has
+no usage to report from a call that didn't complete. Exposed read-only via `GET /api/tickets/{ticketId}/agent-events`
 (see [docs/api.md](api.md)), through `ITicketAgentEventService.ListByTicketAsync` -
 loads the ticket, calls `IProjectAccessGuard.EnsureAccessAsync(ticket.ProjectId)`, then defers to
 `ITicketAgentEventRepository.ListByTicketAsync`. This route (like `TicketQuestionsController.ListByTicket`,

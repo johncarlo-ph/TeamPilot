@@ -242,7 +242,10 @@ refresh stream - reacting to the new `TicketAgentEventLogged` SSE type needs no 
 logic, since the page's SSE subscription already merges every project event by `ticketId` regardless
 of `type`. `StatusBadge`'s shared `BADGE_CLASS_BY_VALUE` map (`shared/components/status-badge`)
 gained `Started`/`Completed`/`Failed` entries for this panel's kind badges (`Blocked` already existed,
-reused from `TicketStatus`).
+reused from `TicketStatus`). A row also shows a `meta()` line (e.g. "120 in / 340 out tokens ·
+5.5s") built client-side from `inputTokens`/`outputTokens`/`durationMs` when present - `null` on
+either pair suppresses that half of the line entirely, so a `Started` row (which has neither) shows
+nothing and a `Failed` row (duration only, no token counts) shows just the duration.
 
 **Linking a branch confirms before acting, because the same button means two different things.**
 `features/ticket-detail/branch-panel` calls `GET /api/git/branches/exists` when "Link Branch" is

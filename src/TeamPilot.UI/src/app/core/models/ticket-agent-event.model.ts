@@ -7,5 +7,8 @@ export interface TicketAgentEventDto {
   role: AgentRole | null;
   kind: TicketAgentEventKind;
   result: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number | null;
   createdAtUtc: string;
 }

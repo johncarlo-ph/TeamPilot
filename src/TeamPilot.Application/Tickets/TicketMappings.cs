@@ -49,7 +49,7 @@ internal static class TicketMappings
             .Select(r => new ReviewDto(r.Id, r.TicketId, r.ReviewerName, r.Decision, r.Comments, r.CreatedAtUtc))
             .ToList(),
         ticket.Conflicts
-            .Select(c => new ConflictDto(c.Id, c.TicketId, c.CommitId, c.FilePath, c.ConflictingDiffContent, c.AiSuggestedResolution, c.ResolvedContent, c.ResolutionNote, c.Status, c.ResolvedAtUtc, c.ResolvedBy, c.CreatedAtUtc))
+            .Select(c => new ConflictDto(c.Id, c.TicketId, c.CommitId, c.FilePath, c.ConflictingDiffContent, c.AiSuggestedResolution, c.ResolvedContent, c.ResolutionNote, c.Status, c.ResolvedAtUtc, c.ResolvedBy, c.BaseTipSha, c.CreatedAtUtc))
             .ToList(),
         ticket.CreatedAtUtc,
         ticket.UpdatedAtUtc,

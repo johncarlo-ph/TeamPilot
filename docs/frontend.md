@@ -75,18 +75,24 @@ clean close, and never errors its returned `Observable` — it's meant to be mer
 left running for the page's lifetime, the same way `interval(...)` used to be.
 
 Events carry no ticket/question state of their own — just `{ type: 'TicketChanged' |
-'TicketQuestionChanged', projectId, ticketId, occurredAtUtc }` (`ProjectEventDto`,
-`core/models/project-event.model.ts`). Both pages react to one by re-issuing the exact same GET(s)
-they used to poll with, rather than trying to apply the event's payload directly — this is why the
-event shape never needs to be kept in sync with `TicketDto`/`TicketQuestionDto` the way a full
-state-push design would. `board.ts` filters the stream to `TicketChanged` only; `ticket-detail.ts`
-reacts to both types, since a `TicketQuestionChanged` event (a new blocking question, or one just
-answered) needs the same `forkJoin({ ticket, questions })` refetch as a plain ticket change.
-`ticket-detail.ts` doesn't know its ticket's `projectId` until the first `GET /tickets/{id}`
-resolves (the route only carries the ticket id), so it fetches the ticket once up front purely to
-learn which project's event stream to open, then starts the merged refresh pipeline (which
-immediately re-fetches both ticket and questions again via `startWith(0)`) — one extra GET on
-initial page load, traded for not needing to thread `projectId` through the route.
+'TicketQuestionChanged' | 'TicketAgentEventLogged' | 'ProjectCloneProgress', projectId, ticketId,
+occurredAtUtc, cloneProgress }` (`ProjectEventDto`, `core/models/project-event.model.ts`). Both
+pages react to one by re-issuing the exact same GET(s) they used to poll with, rather than trying
+to apply the event's payload directly — this is why the event shape never needs to be kept in sync
+with `TicketDto`/`TicketQuestionDto` the way a full state-push design would. `board.ts` filters the
+stream to `TicketChanged` only; `ticket-detail.ts` reacts to both types, since a
+`TicketQuestionChanged` event (a new blocking question, or one just answered) needs the same
+`forkJoin({ ticket, questions })` refetch as a plain ticket change. `ticket-detail.ts` doesn't know
+its ticket's `projectId` until the first `GET /tickets/{id}` resolves (the route only carries the
+ticket id), so it fetches the ticket once up front purely to learn which project's event stream to
+open, then starts the merged refresh pipeline (which immediately re-fetches both ticket and
+questions again via `startWith(0)`) — one extra GET on initial page load, traded for not needing to
+thread `projectId` through the route.
+
+**`ProjectCloneProgress` is the one event type with a real payload** (`cloneProgress`, a
+`CloneProgressPayload`), rather than being a bare refetch signal like every other type — see
+"Project list" below and `ProjectEvent`'s own doc comment in `docs/application.md` for why this one
+case deliberately breaks from the rest of the design.
 
 Both pages also `merge` a private `Subject<void>` ("refresh trigger") into the merged
 stream/interval before the outer `switchMap`, and every local mutation (create ticket, start
@@ -387,6 +393,37 @@ this codebase's "avoid overfetching" convention (see `TicketRepository` in
 `BOARD_COLUMNS`' icon per status and `status-badge.ts`'s badge-color mapping, kept as its own
 small array rather than reusing either component directly, since it renders a count badge, not a
 ticket's own status label.
+
+**A `Cloning` project's card shows a live progress bar, driven by its own SSE subscription - not
+a poll.** `project-list.ts` opens `projectEventsService.stream(project.id)` for every project whose
+`status` is `Cloning` (both right after the initial `reload()` and right after creating a new
+one, since a freshly-created project's list entry already comes back `Cloning`), filtered to
+`ProjectCloneProgress`, and keeps that subscription open only for as long as the project stays
+`Cloning` - the final event (`status: 'Ready' | 'Failed'`) both unsubscribes and patches that one
+project's `status`/`cloneFailureReason` in place in the `projects` signal, rather than triggering a
+full `reload()` just to pick up one project's outcome. Progress numbers themselves
+(`receivedObjects`/`totalObjects`/`receivedBytes`) live in a separate `cloneProgress` signal keyed
+by project id, not folded into `ProjectDto`, since `ProjectDto` has no byte/object-count fields and
+never needs them once a clone finishes. The bar is indeterminate (Bootstrap's
+`progress-bar-striped`/`progress-bar-animated`) until Git reports a nonzero `totalObjects` - a
+repo's total object count isn't known until enough of the clone negotiation has happened - and a
+`Failed` card shows `cloneFailureReason` in an inline alert instead. "Open Board" is disabled
+(`[class.disabled]`, `routerLink` set to `null`) for any project that isn't `Ready`, since a
+ticket-creation attempt against a `Cloning`/`Failed` project's board would just fail with
+`ProjectNotReadyException` (see [docs/application.md](application.md)).
+
+**Remove is disabled up front, not just rejected after the click.** Each Admin-only card in
+`project-list.html` has a **Remove** button alongside **Edit**, gated by `canRemove(project)` -
+`true` only when `project.ticketStatusCounts.inProgress === 0 && ...forReview === 0`, reusing the
+same counts already on `ProjectDto` rather than a separate request. This mirrors, rather than
+replaces, the server-side check in `ProjectService.RemoveAsync`
+([docs/application.md](application.md)): the button being enabled is just a UX shortcut, since the
+counts backing it can go stale between renders (another user starting a ticket, an SSE-driven
+board update elsewhere) - the 409 the interceptor would surface from a stale click is still the
+real guard. `remove()` confirms via the browser's native `confirm()` (same pattern as
+`instruction-templates.ts`'s `delete()`), tracks in-flight removals in a `removingIds` signal so
+the clicked card's button reads "Removing..." and stays disabled, and on success just filters the
+project out of the local `projects` signal instead of a full `reload()`.
 
 **Branch names are links everywhere except the board card.** There is no backend "branch URL"
 field — `core/utils/git-url.util.ts`'s `buildBranchUrl(remoteUrl, branchName)` strips `.git` and

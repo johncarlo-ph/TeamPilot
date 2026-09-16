@@ -47,7 +47,7 @@ public sealed class ConflictResolutionService(
         }
 
         var conflicts = mergeCheck.ConflictingFiles
-            .Select(file => Conflict.Create(ticket.Id, file.FilePath, file.ConflictContent))
+            .Select(file => Conflict.Create(ticket.Id, file.FilePath, file.ConflictContent, mergeCheck.BaseTipSha))
             .ToList();
 
         foreach (var conflict in conflicts)
@@ -158,5 +158,6 @@ public sealed class ConflictResolutionService(
         conflict.Status,
         conflict.ResolvedAtUtc,
         conflict.ResolvedBy,
+        conflict.BaseTipSha,
         conflict.CreatedAtUtc);
 }

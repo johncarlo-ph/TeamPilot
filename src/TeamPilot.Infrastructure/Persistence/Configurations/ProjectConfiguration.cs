@@ -17,5 +17,7 @@ public class ProjectConfiguration : IEntityTypeConfiguration<Project>
         builder.Property(p => p.EncryptedAccessToken).IsRequired().HasMaxLength(2000);
         builder.Property(p => p.BaseBranch).IsRequired().HasMaxLength(200);
         builder.Property(p => p.RepositoryPath).IsRequired().HasMaxLength(1000);
+        builder.Property(p => p.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(p => p.CloneFailureReason).HasColumnType("nvarchar(max)");
     }
 }

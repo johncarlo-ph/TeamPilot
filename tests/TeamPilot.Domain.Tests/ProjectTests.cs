@@ -1,4 +1,5 @@
 using TeamPilot.Domain.Entities;
+using TeamPilot.Domain.Enums;
 using Xunit;
 
 namespace TeamPilot.Domain.Tests;
@@ -16,6 +17,15 @@ public class ProjectTests
         Assert.Equal("encrypted-token", project.EncryptedAccessToken);
         Assert.Equal("develop", project.BaseBranch);
         Assert.Equal(string.Empty, project.RepositoryPath);
+    }
+
+    [Fact]
+    public void Create_StartsInCloningStatusWithNoFailureReason()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+
+        Assert.Equal(ProjectStatus.Cloning, project.Status);
+        Assert.Null(project.CloneFailureReason);
     }
 
     [Fact]
@@ -45,13 +55,39 @@ public class ProjectTests
     }
 
     [Fact]
-    public void AssignSandboxPath_WithValidPath_SetsRepositoryPath()
+    public void MarkCloned_WithValidPath_SetsRepositoryPathAndReadyStatus()
     {
         var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
 
-        project.AssignSandboxPath("C:/git-sandboxes/" + project.Id);
+        project.MarkCloned("C:/git-sandboxes/" + project.Id);
 
         Assert.Equal("C:/git-sandboxes/" + project.Id, project.RepositoryPath);
+        Assert.Equal(ProjectStatus.Ready, project.Status);
+        Assert.Null(project.CloneFailureReason);
+    }
+
+    [Fact]
+    public void MarkCloned_AfterAPriorFailure_ClearsTheFailureReason()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+        project.MarkCloneFailed("Could not clone.");
+
+        project.MarkCloned("C:/git-sandboxes/" + project.Id);
+
+        Assert.Equal(ProjectStatus.Ready, project.Status);
+        Assert.Null(project.CloneFailureReason);
+    }
+
+    [Fact]
+    public void MarkCloneFailed_WithAReason_SetsFailedStatusAndReason()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+
+        project.MarkCloneFailed("Could not clone 'https://github.com/org/teampilot.git'.");
+
+        Assert.Equal(ProjectStatus.Failed, project.Status);
+        Assert.Equal("Could not clone 'https://github.com/org/teampilot.git'.", project.CloneFailureReason);
+        Assert.Equal(string.Empty, project.RepositoryPath);
     }
 
     [Fact]
@@ -85,6 +121,25 @@ public class ProjectTests
         project.RotateAccessToken("new-encrypted-token");
 
         Assert.Equal("new-encrypted-token", project.EncryptedAccessToken);
+        Assert.NotNull(project.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void Create_StartsNotRemoved()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+
+        Assert.False(project.IsRemoved);
+    }
+
+    [Fact]
+    public void Remove_SetsIsRemovedAndUpdatedAtUtc()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+
+        project.Remove();
+
+        Assert.True(project.IsRemoved);
         Assert.NotNull(project.UpdatedAtUtc);
     }
 }

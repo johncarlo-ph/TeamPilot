@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LibGit2Sharp;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -38,7 +39,12 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
         })
         .Build();
 
-    public Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, CancellationToken cancellationToken = default) =>
+    /// <summary>Throttles how often <see cref="GitCloneProgress"/> is reported during a clone -
+    /// LibGit2Sharp's <c>OnTransferProgress</c> can fire many times per second for a large repo,
+    /// far more often than an SSE-driven progress bar needs to redraw.</summary>
+    private static readonly TimeSpan CloneProgressReportInterval = TimeSpan.FromMilliseconds(250);
+
+    public Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, IProgress<GitCloneProgress>? progress = null, CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
             {
@@ -48,6 +54,38 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 {
                     var cloneOptions = new CloneOptions();
                     cloneOptions.FetchOptions.CredentialsProvider = (_, _, _) => BuildCredentials(accessToken);
+
+                    if (progress is not null)
+                    {
+                        var reportStopwatch = Stopwatch.StartNew();
+                        var lastCheckoutTotal = 0;
+
+                        cloneOptions.FetchOptions.OnTransferProgress = transferProgress =>
+                        {
+                            if (reportStopwatch.Elapsed >= CloneProgressReportInterval)
+                            {
+                                reportStopwatch.Restart();
+                                progress.Report(new GitCloneProgress(
+                                    transferProgress.ReceivedObjects,
+                                    transferProgress.TotalObjects,
+                                    transferProgress.ReceivedBytes,
+                                    CheckoutCompletedSteps: 0,
+                                    CheckoutTotalSteps: 0));
+                            }
+
+                            return !cancellationToken.IsCancellationRequested;
+                        };
+
+                        cloneOptions.OnCheckoutProgress = (_, completedSteps, totalSteps) =>
+                        {
+                            lastCheckoutTotal = totalSteps;
+                            if (reportStopwatch.Elapsed >= CloneProgressReportInterval || completedSteps == totalSteps)
+                            {
+                                reportStopwatch.Restart();
+                                progress.Report(new GitCloneProgress(0, 0, 0, completedSteps, lastCheckoutTotal));
+                            }
+                        };
+                    }
 
                     RemoteOperationResilience.Execute(() =>
                     {
@@ -69,6 +107,24 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 }
 
                 return localPath;
+            },
+            cancellationToken);
+
+    public Task<bool> RemoteBranchExistsAsync(string remoteUrl, string accessToken, string branchName, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                try
+                {
+                    var references = RemoteOperationResilience.Execute(() =>
+                        Repository.ListRemoteReferences(remoteUrl, (_, _, _) => BuildCredentials(accessToken)));
+
+                    return references.Any(reference => reference.CanonicalName == $"refs/heads/{branchName}");
+                }
+                catch (LibGit2SharpException ex)
+                {
+                    throw new GitOperationException($"Could not reach '{remoteUrl}' to verify branch '{branchName}'. Check the repository URL and access token.", ex);
+                }
             },
             cancellationToken);
 
@@ -218,7 +274,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 {
                     if (mergeResult.Status != MergeStatus.Conflicts)
                     {
-                        return new GitMergeConflictResult(false, Array.Empty<GitConflictingFile>());
+                        return new GitMergeConflictResult(false, Array.Empty<GitConflictingFile>(), target.Tip.Sha);
                     }
 
                     var conflictingFiles = repo.Index.Conflicts
@@ -231,7 +287,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                         })
                         .ToList();
 
-                    return new GitMergeConflictResult(true, conflictingFiles);
+                    return new GitMergeConflictResult(true, conflictingFiles, target.Tip.Sha);
                 }
                 finally
                 {
@@ -255,7 +311,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
         string repositoryPath,
         string sourceBranch,
         string targetBranch,
-        IReadOnlyDictionary<string, string> resolutions,
+        IReadOnlyDictionary<string, GitConflictResolution> resolutions,
         string mergerName,
         CancellationToken cancellationToken = default) =>
         Task.Run(
@@ -264,6 +320,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 using var repo = OpenRepository(repositoryPath);
                 var source = GetExistingBranch(repo, sourceBranch);
                 var target = GetExistingBranch(repo, targetBranch);
+                var liveBaseTipSha = target.Tip.Sha;
 
                 Commands.Checkout(repo, target);
 
@@ -276,7 +333,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 {
                     // Nothing left to commit - UpToDate means there was nothing to merge, and a
                     // fast-forward already moved the branch ref without needing a merge commit.
-                    return new GitMergeResolutionResult(true, Array.Empty<string>());
+                    return new GitMergeResolutionResult(true, Array.Empty<string>(), Array.Empty<string>());
                 }
 
                 if (mergeResult.Status != MergeStatus.Conflicts)
@@ -284,35 +341,47 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                     // NonFastForward, no conflicts: the index already reflects a clean merge
                     // (CommitOnSuccess: false just means it's waiting to be committed).
                     repo.Commit(message, merger, merger);
-                    return new GitMergeResolutionResult(true, Array.Empty<string>());
+                    return new GitMergeResolutionResult(true, Array.Empty<string>(), Array.Empty<string>());
                 }
 
                 var unresolvedFilePaths = new List<string>();
+                var staleFilePaths = new List<string>();
                 foreach (var conflict in repo.Index.Conflicts.ToList())
                 {
                     var path = conflict.Ours?.Path ?? conflict.Theirs?.Path ?? conflict.Ancestor?.Path ?? "unknown";
-                    if (resolutions.TryGetValue(path, out var resolvedContent))
-                    {
-                        var fullPath = Path.Combine(repo.Info.WorkingDirectory, path);
-                        File.WriteAllText(fullPath, resolvedContent);
-                        Commands.Stage(repo, path);
-                    }
-                    else
+                    if (!resolutions.TryGetValue(path, out var resolution))
                     {
                         unresolvedFilePaths.Add(path);
+                        continue;
                     }
+
+                    // A resolution prepared against an earlier base-branch tip can't be trusted
+                    // to still apply cleanly to the current one - see IGitService.MergeWithResolutionsAsync
+                    // and Domain.Entities.Conflict.BaseTipSha. Treated the same as "not resolved
+                    // at all" for the purposes of aborting this merge, but reported separately so
+                    // the caller can tell a reviewer *why* (base branch moved) rather than just
+                    // that a resolution is missing.
+                    if (resolution.BaseTipSha != liveBaseTipSha)
+                    {
+                        staleFilePaths.Add(path);
+                        continue;
+                    }
+
+                    var fullPath = Path.Combine(repo.Info.WorkingDirectory, path);
+                    File.WriteAllText(fullPath, resolution.ResolvedContent);
+                    Commands.Stage(repo, path);
                 }
 
-                if (unresolvedFilePaths.Count > 0)
+                if (unresolvedFilePaths.Count > 0 || staleFilePaths.Count > 0)
                 {
                     // Don't leave the shared sandbox mid-merge for another ticket's pipeline stage
                     // to trip over - abort exactly like DetectMergeConflictsAsync does.
                     repo.Reset(ResetMode.Hard, target.Tip);
-                    return new GitMergeResolutionResult(false, unresolvedFilePaths);
+                    return new GitMergeResolutionResult(false, unresolvedFilePaths, staleFilePaths);
                 }
 
                 repo.Commit(message, merger, merger);
-                return new GitMergeResolutionResult(true, Array.Empty<string>());
+                return new GitMergeResolutionResult(true, Array.Empty<string>(), Array.Empty<string>());
             },
             cancellationToken);
 

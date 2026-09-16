@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using TeamPilot.Application.Common.Interfaces;
@@ -15,7 +16,14 @@ namespace TeamPilot.API.Controllers;
 [ApiController]
 public class ProjectEventsController(IProjectAccessGuard projectAccessGuard, IProjectEventBroadcaster eventBroadcaster) : ControllerBase
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    // Mirrors the string-enum convention Program.cs registers for the rest of the API (see
+    // AddJsonOptions) - needed explicitly here since this controller writes raw SSE frames
+    // instead of going through MVC's own JSON formatting. Matters now that ProjectEvent can carry
+    // a real enum (CloneProgressPayload.Status), not just the plain string Type it used to.
+    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 
     // Comment lines (": ...") are valid, ignorable SSE frames - sent periodically so an
     // intermediary (reverse proxy, load balancer) that idle-times-out a connection with no

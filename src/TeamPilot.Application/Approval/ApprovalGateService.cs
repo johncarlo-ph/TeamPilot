@@ -161,11 +161,14 @@ public sealed class ApprovalGateService(
             throw new UnresolvedConflictsException(unresolvedFilePaths);
         }
 
-        // Every resolved conflict's content, ready to hand to the real merge attempt below - see
-        // IGitService.MergeWithResolutionsAsync.
-        var resolutions = ticket.Conflicts
+        // Every resolved conflict's content, plus the base-branch tip it was prepared against,
+        // ready to hand to the real merge attempt below - see IGitService.MergeWithResolutionsAsync
+        // and Domain.Entities.Conflict.BaseTipSha.
+        var resolvedConflicts = ticket.Conflicts
             .Where(c => c.Status is ConflictStatus.ResolvedManually or ConflictStatus.ResolvedWithAiSuggestion)
-            .ToDictionary(c => c.FilePath, c => c.ResolvedContent!);
+            .ToList();
+        var resolutions = resolvedConflicts
+            .ToDictionary(c => c.FilePath, c => new GitConflictResolution(c.ResolvedContent!, c.BaseTipSha));
 
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
@@ -180,19 +183,37 @@ public sealed class ApprovalGateService(
             // branch (e.g. if someone pushed to it directly, outside TeamPilot).
             await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
 
+            // The live, authoritative check: even if every known Conflict record says resolved,
+            // the base branch may have moved further since it was last checked, so this can still
+            // find (and reject on) a file with no resolution available, or one whose resolution
+            // is now stale - see IGitService.MergeWithResolutionsAsync. Deliberately outside the
+            // transaction below (no DB write happens before this returns), so a stale-resolution
+            // reset (see the StaleFilePaths branch) actually persists instead of rolling back
+            // together with the failed approval it's reported alongside.
+            var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
+            if (!mergeResult.Success)
+            {
+                if (mergeResult.StaleFilePaths.Count > 0)
+                {
+                    // Reset just the stale ones back to Detected so a reviewer sees them as
+                    // needing resolution again, instead of them silently staying marked resolved
+                    // while this exception is the only sign anything's wrong.
+                    var staleConflicts = resolvedConflicts.Where(c => mergeResult.StaleFilePaths.Contains(c.FilePath)).ToList();
+                    foreach (var staleConflict in staleConflicts)
+                    {
+                        staleConflict.MarkStale();
+                    }
+
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    throw new StaleConflictResolutionException(mergeResult.StaleFilePaths);
+                }
+
+                throw new UnresolvedConflictsException(mergeResult.UnresolvedFilePaths);
+            }
+
             await unitOfWork.ExecuteInTransactionAsync(
                 async () =>
                 {
-                    // The live, authoritative check: even if every known Conflict record says
-                    // resolved, the base branch may have moved further since it was last checked, so
-                    // this can still find (and reject on) a file with no resolution available - see
-                    // IGitService.MergeWithResolutionsAsync.
-                    var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
-                    if (!mergeResult.Success)
-                    {
-                        throw new UnresolvedConflictsException(mergeResult.UnresolvedFilePaths);
-                    }
-
                     ticket.Approve();
                     await unitOfWork.SaveChangesAsync(cancellationToken);
                 },

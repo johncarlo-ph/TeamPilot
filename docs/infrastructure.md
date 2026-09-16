@@ -97,15 +97,19 @@ touching every single-shot call site and every existing test for no benefit to t
 (`CloneAsync`, `PushAsync`, `FetchAsync`, `BranchExistsAsync`, `EnsureBranchAsync`,
 `CommitFilesAsync`, `GetDiffAsync`, `DetectMergeConflictsAsync`, `MergeWithResolutionsAsync`,
 `DeleteBranchAsync`, `ListFilesAsync`, `ReadFileAsync`) opens and disposes its own
-`LibGit2Sharp.Repository` handle per call (`CloneAsync` is the one exception — it creates the
-repository rather than opening an existing one). It also coordinates nothing between calls
-itself: two calls against the same sandbox running concurrently (every ticket in a project shares
-one clone — see `MergeWithResolutionsAsync` below) could corrupt the working directory or race on
-the same remote ref. `Application.Git.GitRepositoryLock` is the fix, one layer up — every
-Application call site acquires it, keyed by `repositoryPath`, around the git calls (and, where it
-matters, a status re-check) that must not interleave with another such block. See
-[docs/application.md](application.md) for the specific race (a cancelled ticket's branch delete
-racing an in-flight Coding stage's commit/push) this was added to close.
+`LibGit2Sharp.Repository` handle per call (`CloneAsync` and `RemoteBranchExistsAsync` are the two
+exceptions — `CloneAsync` creates the repository rather than opening an existing one, and
+`RemoteBranchExistsAsync` never opens a local repository at all: it takes a `remoteUrl` instead of
+a `repositoryPath` and calls `Repository.ListRemoteReferences(remoteUrl, credentialsProvider)` to
+list the remote's refs directly, so `ProjectService.CreateAsync` can validate the requested base
+branch before the project's sandbox clone exists — see [docs/application.md](application.md)).
+It also coordinates nothing between calls itself: two calls against the same sandbox running
+concurrently (every ticket in a project shares one clone — see `MergeWithResolutionsAsync` below)
+could corrupt the working directory or race on the same remote ref. `Application.Git.GitRepositoryLock`
+is the fix, one layer up — every Application call site acquires it, keyed by `repositoryPath`,
+around the git calls (and, where it matters, a status re-check) that must not interleave with
+another such block. See [docs/application.md](application.md) for the specific race (a cancelled
+ticket's branch delete racing an in-flight Coding stage's commit/push) this was added to close.
 
 **`ListFilesAsync`/`ReadFileAsync` are read-only, and both take an optional `branchName`.** Every
 other `IGitService` method either writes or talks to the remote; these two only ever read off
@@ -165,20 +169,31 @@ ordering silently dropping a file a stage actually needed) entirely.
 LibGit2Sharp's own merge-in-progress state, not by re-merging after the fact.** It runs the same
 trial merge `DetectMergeConflictsAsync` does (`repo.Merge(..., CommitOnSuccess: false,
 FailOnConflict: false)`), which updates the working tree/index and leaves `MERGE_HEAD` set but
-doesn't reset anything. For each `repo.Index.Conflicts` entry it finds, it looks up that file's
-path in the caller-supplied `resolutions` map; a hit gets written to disk and `Commands.Stage`d
-(clearing that index conflict), a miss gets collected as an unresolved path. Once every
-conflicting file is covered, `repo.Commit(...)` is called directly - LibGit2Sharp sees the
-still-set `MERGE_HEAD` and records it as a second parent automatically, exactly like completing a
-conflicted `git merge` by hand (edit the file, `git add`, `git commit`). If anything is left
-unresolved, the attempt is aborted (`repo.Reset(ResetMode.Hard, target.Tip)`, same as
-`DetectMergeConflictsAsync`'s cleanup) rather than left mid-merge, since every ticket in a project
-shares that project's one sandbox clone and a real other ticket's pipeline stage could touch it
-next. `MergeStatus.UpToDate`/`FastForward` short-circuit with nothing to commit (there's no merge
-state to finish), and a clean `NonFastForward` merge just needs the one explicit commit call since
-`CommitOnSuccess: false` only skips the auto-commit, not the merge itself. See
-[docs/application.md](application.md) for how `ApprovalGateService.ApproveAsync` builds the
-`resolutions` map from the ticket's `Conflict` records.
+doesn't reset anything. Before checking any file, it captures `target.Tip.Sha` (the base branch's
+*current, live* tip) once as `liveBaseTipSha`. Then, for each `repo.Index.Conflicts` entry it
+finds, it looks up that file's path in the caller-supplied `resolutions` map
+(`IReadOnlyDictionary<string, GitConflictResolution>`, content plus the base-tip SHA that
+resolution was prepared against): no entry at all is collected as an unresolved path; an entry
+whose `BaseTipSha` doesn't equal `liveBaseTipSha` is collected as a *stale* path instead - the
+resolution isn't written to disk, since it was prepared against a base branch that's since moved
+further; only a matching entry actually gets written and `Commands.Stage`d (clearing that index
+conflict). Once every conflicting file is covered (no unresolved or stale paths), `repo.Commit(...)`
+is called directly - LibGit2Sharp sees the still-set `MERGE_HEAD` and records it as a second parent
+automatically, exactly like completing a conflicted `git merge` by hand (edit the file, `git add`,
+`git commit`). If anything is left unresolved *or* stale, the attempt is aborted
+(`repo.Reset(ResetMode.Hard, target.Tip)`, same as `DetectMergeConflictsAsync`'s cleanup) rather
+than left mid-merge, since every ticket in a project shares that project's one sandbox clone and a
+real other ticket's pipeline stage could touch it next. `MergeStatus.UpToDate`/`FastForward`
+short-circuit with nothing to commit (there's no merge state to finish), and a clean
+`NonFastForward` merge just needs the one explicit commit call since `CommitOnSuccess: false` only
+skips the auto-commit, not the merge itself. See [docs/application.md](application.md) for how
+`ApprovalGateService.ApproveAsync` builds the `resolutions` map from the ticket's `Conflict`
+records, and what it does differently for a stale path vs. an unresolved one.
+
+**`DetectMergeConflictsAsync` also returns the base branch's tip** (`target.Tip.Sha`, read before
+the trial merge's own `finally` resets the working tree back to it) as `GitMergeConflictResult.BaseTipSha`
+- this is the SHA `ConflictResolutionService.DetectConflictsAsync` stamps onto each new `Conflict`
+it creates, and exactly what `MergeWithResolutionsAsync` later compares its live tip against.
 
 **`DeleteBranchAsync` pushes an empty source ref (`:refs/heads/{branchName}`) to delete the
 remote branch** — the standard Git protocol convention, supported directly by LibGit2Sharp's
@@ -190,13 +205,25 @@ succeeds; if it was never fetched/created locally in the first place, that's a s
 rather than an error.
 
 **Projects are cloned into a server-managed sandbox, not pointed at a path someone else prepared.**
-`LibGit2SharpGitService.CloneAsync(projectId, remoteUrl, accessToken, ct)` computes
+`LibGit2SharpGitService.CloneAsync(projectId, remoteUrl, accessToken, progress, ct)` computes
 `{Git:SandboxRoot}/{projectId}` (resolved against `IHostEnvironment.ContentRootPath` when
 `SandboxRoot` is relative), clones there with `Repository.Clone`, and returns the resulting
-path for `ProjectService` to store as `Project.RepositoryPath`. `PushAsync`/`FetchAsync` open
+path for `ProjectService` to store via `Project.MarkCloned`. `PushAsync`/`FetchAsync` open
 that same sandbox and talk to its `origin` remote. All three wrap `LibGit2SharpException` as
 the Application's `GitOperationException` (→ HTTP 422) instead of letting it bubble to a
 generic 500, since a bad URL/token is a client-facing, actionable error.
+
+**When `progress` is given, `CloneAsync` wires it into `CloneOptions.FetchOptions.OnTransferProgress`
+and `CloneOptions.OnCheckoutProgress`** - LibGit2Sharp callbacks that fire throughout the clone
+(object-transfer phase, then working-directory checkout), reporting a `GitCloneProgress` (received/
+total objects and bytes, checkout completed/total steps) each time. Both callbacks can fire many
+times a second for a large repo, far more often than a progress bar needs to redraw, so a
+`Stopwatch`-based throttle only actually calls `progress.Report(...)` at most every ~250ms (always
+letting the final checkout step through, so the bar visibly reaches 100%). `ProjectService`'s
+detached clone task wraps this in an `IProgress<GitCloneProgress>` that publishes each report as a
+`ProjectEventTypes.ProjectCloneProgress` SSE event (see [docs/application.md](application.md)) -
+`OnTransferProgress` also returns `!cancellationToken.IsCancellationRequested`, so a cancelled
+clone actually stops instead of running to completion regardless.
 
 **Credentials: PAT-over-HTTPS, GitHub/GitLab convention.** `BuildCredentials` builds a
 `UsernamePasswordCredentials { Username = accessToken, Password = "" }` for every remote
@@ -237,7 +264,12 @@ point (`TicketsController.Start`, `ApprovalGateService`'s `RequestChanges` branc
 own dependencies (`IOrchestrationService`, `ITicketRepository`, etc.) from the given
 `IServiceProvider`, never from fields injected into the caller itself, since the caller's own
 scope (and scoped `DbContext`, and its request's `CancellationToken`) is disposed/cancelled once
-its request returns, before the detached work runs.
+its request returns, before the detached work runs. **`ProjectService`'s private
+`StartCloneDetached` follows the exact same shape** for a project's initial clone (see
+[docs/application.md](application.md)) - the one difference is it has no analog to
+`IPipelineRunTracker`'s `MarkRunning`/`MarkFinished` pair, since `Project.Status` itself (persisted,
+not in-memory) is the running/finished signal here, and it's already saved as `Cloning` before
+`StartCloneDetached` even dispatches the background work.
 
 **`IPipelineRunTracker` (`Infrastructure/BackgroundTasks/PipelineRunTracker.cs`) is the second
 fire-and-forget-adjacent singleton, also `AddSingleton`** — a plain in-memory
@@ -387,10 +419,11 @@ operations (`CloneAsync`/`PushAsync`/`FetchAsync`/`DeleteBranchAsync`'s remote d
 `LibGit2SharpException` as `GitOperationException` (→ 422) — local-only Git operations
 (commit/diff/detect-conflicts/merge) still let `LibGit2SharpException`/`InvalidOperationException`
 bubble to 500/409, since those failures point at a server-side bug rather than bad user input.
-`MergeWithResolutionsAsync` finding conflicting files it can't resolve is not one of these cases -
-that's an expected, common outcome it reports back via its return value (`GitMergeResolutionResult`),
-not an exception; `ApprovalGateService` is the one that turns that into a client-facing
-`UnresolvedConflictsException` (→ 409).
+`MergeWithResolutionsAsync` finding conflicting files it can't resolve (or can't trust - see its
+own section above) is not one of these cases - that's an expected, common outcome it reports back
+via its return value (`GitMergeResolutionResult`'s separate `UnresolvedFilePaths`/`StaleFilePaths`
+lists), not an exception; `ApprovalGateService` is the one that turns those into a client-facing
+`UnresolvedConflictsException`/`StaleConflictResolutionException` (both → 409).
 A Claude API failure that survives the resilience pipeline below (an `HttpRequestException` or
 `TimeoutRejectedException`, or a non-success status via `EnsureSuccessStatusCode`) is now wrapped
 by `ClaudeLlmConnector` as the Application's own `LlmOperationException` (→ 422) - the same
@@ -422,7 +455,8 @@ race the resilience pipeline's own budget and cut a retry short.
 LibGit2Sharp isn't `HttpClient`-based, so this is a plain Polly `ResiliencePipeline` (3 retries,
 exponential backoff with jitter) wrapping only the calls that already talk to the remote and
 translate `LibGit2SharpException` → `GitOperationException`: `CloneAsync`, `PushAsync`,
-`FetchAsync`, and the remote-delete push inside `DeleteBranchAsync`. Local-only operations
+`FetchAsync`, `RemoteBranchExistsAsync`, and the remote-delete push inside `DeleteBranchAsync`.
+Local-only operations
 (commit/diff/detect-conflicts/merge) are deliberately not wrapped — they aren't subject to
 network transience, and blindly retrying a file write/commit risks duplicating side effects
 rather than just re-attempting a request. `CloneAsync`'s retried delegate also deletes any

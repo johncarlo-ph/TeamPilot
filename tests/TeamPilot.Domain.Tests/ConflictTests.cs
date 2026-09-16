@@ -59,4 +59,55 @@ public class ConflictTests
 
         Assert.Throws<InvalidConflictStateTransitionException>(() => conflict.ResolveManually("Kept theirs", null, "Bob"));
     }
+
+    [Fact]
+    public void Create_WithBaseTipSha_StampsItOnTheConflict()
+    {
+        var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<", baseTipSha: "sha-abc123");
+
+        Assert.Equal("sha-abc123", conflict.BaseTipSha);
+    }
+
+    [Fact]
+    public void MarkStale_AfterManualResolution_ResetsToDetectedAndClearsResolutionFieldsButKeepsBaseTipSha()
+    {
+        var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<", baseTipSha: "sha-old");
+        conflict.ResolveManually("final merged content", "Kept both changes", "Alice");
+
+        conflict.MarkStale();
+
+        Assert.Equal(ConflictStatus.Detected, conflict.Status);
+        Assert.Null(conflict.ResolvedContent);
+        Assert.Null(conflict.ResolutionNote);
+        Assert.Null(conflict.ResolvedBy);
+        Assert.Null(conflict.ResolvedAtUtc);
+        Assert.Equal("sha-old", conflict.BaseTipSha);
+    }
+
+    [Fact]
+    public void MarkStale_AfterAiSuggestionAccepted_KeepsTheAiSuggestionForReuse()
+    {
+        var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<", baseTipSha: "sha-old");
+        conflict.RecordAiSuggestion("Use theirs");
+        conflict.AcceptAiSuggestion("Alice");
+
+        conflict.MarkStale();
+
+        Assert.Equal(ConflictStatus.Detected, conflict.Status);
+        Assert.Null(conflict.ResolvedContent);
+        Assert.Equal("Use theirs", conflict.AiSuggestedResolution);
+    }
+
+    [Fact]
+    public void MarkStale_AllowsResolvingAgainAfterward()
+    {
+        var conflict = Conflict.Create(Guid.NewGuid(), "src/App.cs", "<<<<<<<", baseTipSha: "sha-old");
+        conflict.ResolveManually("first attempt", null, "Alice");
+        conflict.MarkStale();
+
+        conflict.ResolveManually("second attempt", null, "Alice");
+
+        Assert.Equal(ConflictStatus.ResolvedManually, conflict.Status);
+        Assert.Equal("second attempt", conflict.ResolvedContent);
+    }
 }

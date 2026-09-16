@@ -11,8 +11,18 @@ namespace TeamPilot.Application.Git;
 public interface IGitService
 {
     /// <summary>Clones <paramref name="remoteUrl"/> into a new server-managed sandbox folder
-    /// for the given project and returns the resulting local path.</summary>
-    Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, CancellationToken cancellationToken = default);
+    /// for the given project and returns the resulting local path. When given,
+    /// <paramref name="progress"/> is reported transfer/checkout progress throughout - see
+    /// <see cref="GitCloneProgress"/> - so a caller can surface a live progress bar; it's never
+    /// required for the clone to succeed.</summary>
+    Task<string> CloneAsync(Guid projectId, string remoteUrl, string accessToken, IProgress<GitCloneProgress>? progress = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Returns whether <paramref name="branchName"/> exists as a head on the remote
+    /// itself, without cloning it locally - used to validate a project's base branch before its
+    /// sandbox clone even exists (see <c>ProjectService.CreateAsync</c>). Throws
+    /// <see cref="TeamPilot.Application.Common.Exceptions.GitOperationException"/> if the remote
+    /// can't be reached at all (bad URL/token), same as <see cref="CloneAsync"/>.</summary>
+    Task<bool> RemoteBranchExistsAsync(string remoteUrl, string accessToken, string branchName, CancellationToken cancellationToken = default);
 
     /// <summary>Pushes a single branch to the sandbox's <c>origin</c> remote.</summary>
     Task PushAsync(string repositoryPath, string branchName, string accessToken, CancellationToken cancellationToken = default);
@@ -49,18 +59,22 @@ public interface IGitService
     /// <summary>
     /// Merges <paramref name="sourceBranch"/> into <paramref name="targetBranch"/> and commits the
     /// result - a real two-parent merge commit when the merge isn't a fast-forward. If Git reports
-    /// conflicts, <paramref name="resolutions"/> (file path -&gt; the complete content that file
-    /// should have) is applied to whichever conflicting files it covers; any conflicting file
-    /// <paramref name="resolutions"/> doesn't cover means the merge can't complete - the attempt is
-    /// aborted (nothing is committed or left in a mid-merge state) and the returned result lists
-    /// exactly which files are still unresolved. This is a live check against the real merge, not
-    /// a trust of whatever the caller already believes is resolved - see docs/application.md.
+    /// conflicts, <paramref name="resolutions"/> (file path -&gt; the resolved content plus the base
+    /// branch tip it was prepared against) is applied to whichever conflicting files it covers -
+    /// unless that file's <see cref="GitConflictResolution.BaseTipSha"/> no longer matches the
+    /// base branch's live tip, in which case it's treated as stale rather than applied (see
+    /// <paramref name="resolutions"/> vs. <see cref="GitMergeResolutionResult.StaleFilePaths"/>).
+    /// Any conflicting file <paramref name="resolutions"/> doesn't cover at all means the merge
+    /// can't complete. Either way the attempt is aborted (nothing is committed or left in a
+    /// mid-merge state) and the returned result lists exactly which files are unresolved vs.
+    /// stale. This is a live check against the real merge, not a trust of whatever the caller
+    /// already believes is resolved - see docs/application.md.
     /// </summary>
     Task<GitMergeResolutionResult> MergeWithResolutionsAsync(
         string repositoryPath,
         string sourceBranch,
         string targetBranch,
-        IReadOnlyDictionary<string, string> resolutions,
+        IReadOnlyDictionary<string, GitConflictResolution> resolutions,
         string mergerName,
         CancellationToken cancellationToken = default);
 
@@ -105,12 +119,37 @@ public sealed record GitDiffResult(string SourceBranch, string TargetBranch, IRe
 
 public sealed record GitConflictingFile(string FilePath, string ConflictContent);
 
-public sealed record GitMergeConflictResult(bool HasConflicts, IReadOnlyList<GitConflictingFile> ConflictingFiles);
+/// <param name="BaseTipSha">The base branch's (<paramref name="targetBranch"/>'s) commit SHA at
+/// the moment conflicts were detected - stamped onto each new <c>Conflict</c> so a later merge
+/// attempt can tell whether the base branch has moved since.</param>
+public sealed record GitMergeConflictResult(bool HasConflicts, IReadOnlyList<GitConflictingFile> ConflictingFiles, string BaseTipSha);
 
-/// <summary><paramref name="UnresolvedFilePaths"/> is empty whenever <paramref name="Success"/>
-/// is <see langword="true"/> - it's only populated to name which conflicting files had no
-/// resolution available when <paramref name="Success"/> is <see langword="false"/>.</summary>
-public sealed record GitMergeResolutionResult(bool Success, IReadOnlyList<string> UnresolvedFilePaths);
+/// <summary>A resolved conflicting file's content, plus the base branch tip it was prepared
+/// against (see <c>Domain.Entities.Conflict.BaseTipSha</c>) - <see cref="IGitService.MergeWithResolutionsAsync"/>
+/// re-checks <paramref name="BaseTipSha"/> against the live tip before applying
+/// <paramref name="ResolvedContent"/>.</summary>
+public sealed record GitConflictResolution(string ResolvedContent, string? BaseTipSha);
+
+/// <summary><paramref name="UnresolvedFilePaths"/> and <paramref name="StaleFilePaths"/> are both
+/// empty whenever <paramref name="Success"/> is <see langword="true"/>. <paramref name="UnresolvedFilePaths"/>
+/// names a conflicting file with no resolution available at all; <paramref name="StaleFilePaths"/>
+/// names one with a resolution that wasn't applied because its <see cref="GitConflictResolution.BaseTipSha"/>
+/// no longer matches the base branch's live tip.</summary>
+public sealed record GitMergeResolutionResult(bool Success, IReadOnlyList<string> UnresolvedFilePaths, IReadOnlyList<string> StaleFilePaths);
+
+/// <summary>Clone progress, reported throughout both the object-transfer phase
+/// (<paramref name="ReceivedObjects"/>/<paramref name="TotalObjects"/>/<paramref name="ReceivedBytes"/>,
+/// from LibGit2Sharp's <c>OnTransferProgress</c>) and the working-directory checkout phase that
+/// follows it (<paramref name="CheckoutCompletedSteps"/>/<paramref name="CheckoutTotalSteps"/>,
+/// from <c>OnCheckoutProgress</c>). <paramref name="TotalObjects"/> and
+/// <paramref name="CheckoutTotalSteps"/> are 0 until Git has negotiated enough with the remote to
+/// know them - a caller should treat that as "indeterminate" rather than "0% of 0".</summary>
+public sealed record GitCloneProgress(
+    long ReceivedObjects,
+    long TotalObjects,
+    long ReceivedBytes,
+    int CheckoutCompletedSteps,
+    int CheckoutTotalSteps);
 
 /// <summary><paramref name="Truncated"/> is <see langword="true"/> when <paramref name="Content"/>
 /// was cut short of the file's actual length to bound how much text reaches an LLM prompt.</summary>

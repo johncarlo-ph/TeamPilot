@@ -77,14 +77,48 @@ express "these steps are atomic" without importing an EF Core type.
 duplicate mapping layer; the trade-off is that Application DTOs are, by construction, also part
 of the public HTTP contract, so changing one is a breaking API change.
 
-**Projects are tied to a remote repository, not a pre-existing local one.** `ProjectService.CreateAsync`
-encrypts the submitted access token via `IGitCredentialProtector`, then calls
-`IGitService.CloneAsync` *before* persisting anything — a bad URL/token throws
-`GitOperationException` and nothing is saved, so there's no partial/orphaned project row to
-retry or clean up. The clone runs synchronously within the request; there's no background
-job/status-polling for it (see "Future considerations"). `Project.RemoteUrl` is immutable after
+**Projects are tied to a remote repository, not a pre-existing local one — and the clone runs
+detached, not inline.** `ProjectService.CreateAsync` encrypts the submitted access token via
+`IGitCredentialProtector`, persists the project immediately (`Project.Status: Cloning`,
+`RepositoryPath` still empty), and returns right away — the actual `IGitService.CloneAsync` call
+is dispatched via `IBackgroundTaskRunner`, the same detached-execution pattern
+`OrchestrationService.RunPipelineDetached` uses (see "Detached execution" below), instead of being
+awaited inline. This replaces the project's older invariant of "clone before persisting, so a bad
+URL/token leaves no row behind" — a failed clone now leaves the row visible as
+`Project.Status: Failed` with `CloneFailureReason` set, the same way a failed ticket pipeline run
+stays visible as `Blocked` rather than disappearing. `Project.RemoteUrl` is immutable after
 creation (re-pointing it would orphan the existing sandbox clone) — only `Name`/`Description`/
 `BaseBranch` and the access token (via `RotateAccessToken`) can be changed later.
+
+**The requested base branch is checked against the remote before either creating or updating a
+project.** Before persisting anything, `ProjectService.CreateAsync` resolves the base branch
+(`CreateProjectRequest.BaseBranch`, or `"main"` when omitted — mirrors `Project.Create`'s own
+default) and calls `IGitService.RemoteBranchExistsAsync(remoteUrl, accessToken, baseBranch)`,
+which lists the remote's refs directly (`Repository.ListRemoteReferences` in
+`LibGit2SharpGitService`) without cloning it locally. A branch that doesn't exist on the remote
+throws `GitOperationException` and no project row is created — unlike a bad URL/token surfacing
+only after the row exists and the detached clone fails (see above), a missing base branch is
+caught synchronously, before the request even returns. `ProjectService.UpdateAsync` runs the same
+check before calling `Project.UpdateDetails` — a rejected `BaseBranch` change leaves the project
+completely untouched (no rename, no description change, no token rotation either, even if the
+request also included those). Since `UpdateProjectRequest.AccessToken` blank means "keep the
+currently stored token" (see `UpdateProjectRequest`), the check authenticates with
+`IGitCredentialProtector.Unprotect(project.EncryptedAccessToken)` in that case, or the new token
+directly when one was supplied — either way the *plaintext* token the check ends up using is
+never persisted or logged, only handed to `RemoteBranchExistsAsync` for the one remote call.
+
+The detached clone reports progress via `IGitService.CloneAsync`'s optional `IProgress<GitCloneProgress>`
+parameter (object/byte counts during transfer, step counts during checkout — wired up in
+`LibGit2SharpGitService` from LibGit2Sharp's own `OnTransferProgress`/`OnCheckoutProgress`
+callbacks, throttled to at most 4 reports/second) — each report, and the final Ready/Failed
+outcome, is published as a `ProjectEventTypes.ProjectCloneProgress` event carrying a
+`CloneProgressPayload` on the same per-project SSE stream (`IProjectEventBroadcaster`,
+`GET /api/projects/{projectId}/events`) used for ticket refetch signals. This is a deliberate,
+narrow exception to that stream's usual "refetch signal, no state" design (see `ProjectEvent`'s
+own doc comment) — there's no persisted "current clone progress" a client could refetch from
+instead, since progress isn't stored anywhere once reported. A project created against a still-
+`Cloning`/`Failed` project's ticket-creation attempt is rejected with `ProjectNotReadyException`
+(`TicketService.CreateAsync`) rather than failing confusingly against an empty `RepositoryPath`.
 
 **`ProjectDto` carries each project's per-status ticket counts, not just its own fields.**
 `ProjectService.ListAsync`/`GetByIdAsync`/`UpdateAsync` all call
@@ -95,6 +129,18 @@ returned, not one query per project — and shape the result into `TicketStatusC
 brand-new project provably has no tickets yet. This exists so the UI's project list can show a
 per-project status summary (see [docs/frontend.md](frontend.md)) off the same `GET /api/projects`
 call it already makes, rather than fetching each project's tickets separately.
+
+**Removing a project hides it, it doesn't delete anything.** `ProjectService.RemoveAsync`
+(Admin-only, `DELETE /api/projects/{id}`) calls `Project.Remove()`, which just sets
+`Project.IsRemoved` - the remote repository, sandbox clone, and every ticket/agent/history record
+stay exactly as they were. `ListAsync`/`GetByIdAsync` both filter out a removed project (the
+latter as a 404, same as if the row didn't exist), so once removed a project simply stops
+appearing anywhere in the API's responses; there is no "restore" endpoint in this pass. Before
+calling `Remove()`, `RemoveAsync` sums `ITicketRepository.CountByStatusAsync` for
+`TicketStatus.InProgress` and `TicketStatus.ForReview` and throws
+`Common.Exceptions.ProjectHasActiveTicketsException` (409) if either is nonzero - narrower than
+`WorkflowLockedException`'s `InProgress`-or-`Blocked` lock, since a `Blocked` ticket's pipeline is
+merely paused and hiding the project doesn't touch the Git state it's paused against.
 
 **Every ticket branch is cut from, and merges back into, `Project.BaseBranch`** — not a
 hardcoded `"main"`. `TicketService.LinkBranchAsync` (manual) and `OrchestrationService`'s own
@@ -153,33 +199,51 @@ that into `Conflict.ResolvedContent`; `ResolveManuallyAsync` takes the same shap
 directly from the caller (`ResolveConflictManuallyRequest.ResolvedContent`, with an optional short
 `Note` kept separately for context) - the UI seeds its editable text area with the conflicting
 file's raw content so the user edits down to a final version rather than typing a whole file from
-scratch. Neither path touches `IGitService` at all.
+scratch. Neither path touches `IGitService` at all, and neither takes a base-branch tip from the
+caller either - `Conflict.BaseTipSha` (see next) is stamped once, at detection time, and both
+paths just leave it as-is.
 
-**`ApprovalGateService.ApproveAsync` applies every accepted resolution as part of completing a
-real, two-parent merge commit - not a best-effort guess.** Two checks guard this, in order:
+**Every `Conflict` remembers the base branch's tip at the moment it was detected, so a stale
+resolution can be told apart from a missing one.** `DetectConflictsAsync` passes
+`IGitService.DetectMergeConflictsAsync`'s returned `BaseTipSha` (the base branch's commit SHA at
+detection time) into `Conflict.Create` - it's never touched again by `ResolveManuallyAsync`/
+`AcceptAiSuggestionAsync`. `ApprovalGateService.ApproveAsync` applies every accepted resolution as
+part of completing a real, two-parent merge commit - not a best-effort guess. Three checks guard
+this, in order:
 1. A fast, cheap pre-check against the ticket's own `Conflict` records: any conflict still
    `Detected`/`AiResolutionSuggested` fails immediately with `UnresolvedConflictsException` (409),
    before touching Git at all.
-2. The real, authoritative check: `ApproveAsync` builds a `{FilePath: ResolvedContent}` map from
-   every conflict that *is* resolved and hands it to
+2. The real, authoritative check: `ApproveAsync` builds a `{FilePath: GitConflictResolution(ResolvedContent, BaseTipSha)}`
+   map from every conflict that *is* resolved and hands it to
    `IGitService.MergeWithResolutionsAsync(repositoryPath, sourceBranch, targetBranch, resolutions,
    mergerName, ct)`. That method performs the same trial merge `DetectMergeConflictsAsync` does
-   (`CommitOnSuccess: false`, so the merge-in-progress state isn't cleared), and for each file it
-   still finds conflicting, writes that file's entry in `resolutions` into the working tree and
-   stages it. If it finds a
-   conflicting file `resolutions` doesn't cover - e.g. a genuinely new conflict because the base
-   branch moved further since the ticket's `Conflict` records were last checked - it aborts (hard
-   reset, matching `DetectMergeConflictsAsync`) and returns the unresolved paths instead of
-   guessing; `ApproveAsync` turns that into a second `UnresolvedConflictsException` naming exactly
-   those files. Once every conflicting file is covered, it calls `repo.Commit(...)` directly:
-   LibGit2Sharp sees the merge-in-progress state left by the earlier `repo.Merge()` call and
-   records a real second parent automatically - the same mechanism as finishing a conflicted
-   `git merge` by hand (edit, `git add`, `git commit`). This is why the whole thing has to happen
-   in one atomic call rather than across the separate Suggest/Accept/ResolveManually requests: a
-   real in-progress merge can't be left open between requests without colliding with another
-   ticket's pipeline stage touching the same project's one shared sandbox clone, but a single
-   `ApproveAsync` call opens, resolves, and finishes (or aborts) it before returning - the same
-   pattern every other `IGitService` operation here already follows.
+   (`CommitOnSuccess: false`, so the merge-in-progress state isn't cleared). For each file it still
+   finds conflicting: no entry in `resolutions` at all means a genuinely new conflict (the base
+   branch moved further since the ticket's `Conflict` records were last checked) - reported as
+   `UnresolvedFilePaths`; an entry whose `BaseTipSha` no longer matches the base branch's *current*
+   tip means the resolution was prepared against an earlier version of the base branch and can't be
+   trusted to still apply cleanly - reported separately, as `StaleFilePaths`, rather than applied
+   blindly. Either way the attempt aborts (hard reset, matching `DetectMergeConflictsAsync`)
+   without committing anything.
+3. `ApproveAsync` turns `UnresolvedFilePaths` into `UnresolvedConflictsException`. For
+   `StaleFilePaths`, it instead loads those `Conflict` entities, calls `Conflict.MarkStale()` on
+   each (resets `Status` to `Detected`, clears the resolution fields - see docs/domain.md) and
+   saves that *before* throwing `StaleConflictResolutionException`, so a reviewer who reloads the
+   ticket sees those conflicts as needing resolution again instead of the exception being the only
+   sign anything changed. This save is deliberately outside the transaction that wraps the
+   eventual `ticket.Approve()` (see `ApproveAsync`'s implementation) - the merge attempt itself
+   isn't a database operation, so only the actual approval needs transactional atomicity, and the
+   stale-conflict reset must survive even though the approval it's reported alongside does not.
+
+   Once every conflicting file is covered (no unresolved or stale paths), `MergeWithResolutionsAsync`
+   calls `repo.Commit(...)` directly: LibGit2Sharp sees the merge-in-progress state left by the
+   earlier `repo.Merge()` call and records a real second parent automatically - the same mechanism
+   as finishing a conflicted `git merge` by hand (edit, `git add`, `git commit`). This is why the
+   whole thing has to happen in one atomic call rather than across the separate Suggest/Accept/
+   ResolveManually requests: a real in-progress merge can't be left open between requests without
+   colliding with another ticket's pipeline stage touching the same project's one shared sandbox
+   clone, but a single `ApproveAsync` call opens, resolves, and finishes (or aborts) it before
+   returning - the same pattern every other `IGitService` operation here already follows.
 
 **The agent workflow is admin-configurable per project, with Research → Design → Coding → Testing
 as the default a new project starts with.** `WorkflowService` owns a project's ordered
@@ -222,9 +286,9 @@ The default workflow's Testing stage loops back to Coding bounded at 3 total att
 numerically identical to the old hardcoded retry, just expressed as data instead of C#. Only a
 stage whose agent has the `Coding` role commits to Git; every other role (including every custom
 agent) is prompt-only. `RunPipelineAsync` itself still runs the whole sequence synchronously
-within one call (no background-job infra inside the method itself, matching
-`ProjectService.CreateAsync`'s synchronous clone) - every caller that reaches it from an HTTP
-request runs it detached instead, never awaiting it inline (see "Workflow integration" below).
+within one call (no background-job infra inside the method itself) - every caller that reaches
+it from an HTTP request runs it detached instead, never awaiting it inline (see "Workflow
+integration" below and `ProjectService.CreateAsync`'s own detached clone, described above).
 Always ends by moving the ticket to `ForReview` once the sequence runs out, whether or not its
 last loop-bounded stage ever passed - the retried commits and final verdict are the visible trail
 for a human reviewer.
@@ -761,6 +825,9 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.AgentInstructionsIncompleteException` | An agent without a current Constitution/Guideline/Requirement instruction was placed into a workflow | `WorkflowService.AddExistingAgentAsync` |
 | `Common.Exceptions.InvalidWorkflowOperationException` | A workflow change is invalid given the rest of the project's stage sequence (removing a loop-back target, reordering past one, a malformed reorder request) | `WorkflowService` |
 | `Common.Exceptions.UnresolvedConflictsException` | Approving a ticket while a conflict is still unresolved by its own status, or the live merge attempt finds a conflicting file with no resolution available | `ApprovalGateService.ApproveAsync` |
+| `Common.Exceptions.StaleConflictResolutionException` | The live merge attempt finds a resolved conflict whose `Conflict.BaseTipSha` no longer matches the base branch's current tip - the affected conflicts are reset to `Detected` (`Conflict.MarkStale`) before this is thrown | `ApprovalGateService.ApproveAsync` |
+| `Common.Exceptions.ProjectNotReadyException` | Creating a ticket against a project that's still `Cloning`, or whose clone `Failed` | `TicketService.CreateAsync` |
+| `Common.Exceptions.ProjectHasActiveTicketsException` | Removing a project while it has a ticket `InProgress` or `ForReview` | `ProjectService.RemoveAsync` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |
 
 None of these are caught within Application — they propagate to the API's
@@ -772,10 +839,6 @@ None of these are caught within Application — they propagate to the API's
 - **Mediator pattern:** as the number of use-case services grows, a mediator (e.g. MediatR)
   could reduce controller-to-service boilerplate — not adopted yet because the current number
   of use cases doesn't justify the extra indirection.
-- **Async project cloning:** `ProjectService.CreateAsync` clones synchronously, which is fine
-  for typical dev-repo sizes but would block the request for a very large repository. A
-  Queued/Running/Succeeded/Failed status-tracking pattern for the clone itself would be the
-  natural next step if that becomes a real problem.
 - **Non-GitHub/GitLab credential conventions:** the PAT-as-username convention `IGitService`
   uses today is what GitHub and GitLab accept; Azure DevOps/Bitbucket/SSH deploy keys aren't
   supported yet.
@@ -786,11 +849,9 @@ None of these are caught within Application — they propagate to the API's
   field rather than derived from `ICurrentUserContext` — the Approve role gate itself doesn't
   depend on it, but tightening this would improve audit-trail integrity (a user could type any
   name into the field today).
-- **Staleness of a prepared resolution:** neither `ResolveManuallyAsync` nor
-  `AcceptAiSuggestionAsync` records what the base branch looked like at the time, so a resolution
-  prepared against one version of the conflicting hunk is applied as-is even if the base branch
-  has since moved again in that same region - `MergeWithResolutionsAsync`'s live check only
-  catches an entirely *new* conflicting file, not a stale resolution for a file it already
-  believes is covered. Recording (and checking) the base branch's tip at resolution time would
-  close this, at the cost of occasionally asking a reviewer to re-resolve something they already
-  handled.
+- **Stale-resolution recovery still requires a manual re-detect for fresh content:** `Conflict.MarkStale`
+  resets a stale conflict back to `Detected` and un-resolves it, but doesn't refresh
+  `ConflictingDiffContent` - if the base branch changed the conflicting hunk itself (not just
+  moved elsewhere), a reviewer may see slightly stale diff content until they re-run "Detect
+  Conflicts" for that ticket. Re-resolving against stale content is still safe (the same
+  `BaseTipSha` check runs again at the next approval attempt), just possibly redundant.

@@ -31,6 +31,10 @@ public class TicketServiceTests
 
     public TicketServiceTests()
     {
+        // Ready by default - CreateAsync now rejects a project that's still cloning (or failed
+        // to). Tests exercising that guard set up their own not-Ready project instead.
+        _project.MarkCloned("C:/git-sandboxes/" + _project.Id);
+
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
         _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
 
@@ -70,6 +74,30 @@ public class TicketServiceTests
         var request = new CreateTicketRequest(string.Empty, null);
 
         await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(_project.Id, request));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenProjectIsStillCloning_ThrowsProjectNotReadyExceptionAndDoesNotAddTicket()
+    {
+        var cloningProject = Project.Create("Cloning Project", "desc", "https://github.com/org/cloning.git", "encrypted-token", "main");
+        _projectRepository.Setup(r => r.GetByIdAsync(cloningProject.Id, It.IsAny<CancellationToken>())).ReturnsAsync(cloningProject);
+
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow");
+
+        await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateAsync(cloningProject.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenProjectFailedToClone_ThrowsProjectNotReadyException()
+    {
+        var failedProject = Project.Create("Failed Project", "desc", "https://github.com/org/failed.git", "encrypted-token", "main");
+        failedProject.MarkCloneFailed("Could not clone.");
+        _projectRepository.Setup(r => r.GetByIdAsync(failedProject.Id, It.IsAny<CancellationToken>())).ReturnsAsync(failedProject);
+
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow");
+
+        await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateAsync(failedProject.Id, request));
     }
 
     [Fact]

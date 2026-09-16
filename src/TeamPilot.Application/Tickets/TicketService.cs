@@ -33,8 +33,13 @@ public sealed class TicketService(
         await createValidator.EnsureValidAsync(request, cancellationToken);
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        _ = await projectRepository.GetByIdAsync(projectId, cancellationToken)
+        var project = await projectRepository.GetByIdAsync(projectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), projectId);
+
+        if (project.Status != ProjectStatus.Ready)
+        {
+            throw new ProjectNotReadyException(project.Name);
+        }
 
         var ticket = Ticket.Create(projectId, request.Title, request.Description);
         await ticketRepository.AddAsync(ticket, cancellationToken);

@@ -118,7 +118,7 @@ automatic branch delete.
 
 | Entity | Represents | Key behavior methods |
 |---|---|---|
-| `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `AssignSandboxPath`, `UpdateDetails`, `RotateAccessToken` |
+| `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
 | `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
@@ -131,7 +131,7 @@ automatic branch delete.
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |
 | `Commit` | A fact record of a Git commit produced for a ticket | *(immutable once created)* |
 | `Review` | A human approval-gate decision | *(immutable once created)* |
-| `Conflict` | A detected merge conflict, with an optional AI-suggested resolution | `RecordAiSuggestion`, `ResolveManually`, `AcceptAiSuggestion` |
+| `Conflict` | A detected merge conflict, with an optional AI-suggested resolution | `RecordAiSuggestion`, `ResolveManually`, `AcceptAiSuggestion`, `MarkStale` |
 | `TicketAgentAssignment` | Join record: which agent is assigned to which ticket | *(created only via `Ticket.AssignAgent`)* |
 | `User` | An authenticated principal | `UpdateName`, `SetRoles`, `Disable`, `Enable` |
 | `RefreshToken` | A rotatable session refresh token | `Revoke` |
@@ -174,6 +174,43 @@ deliberately narrow: only an `AgentRole.Custom` agent, that isn't currently sche
 workflow, and has never been assigned to a ticket (so there's no history anywhere to lose), can
 actually be deleted. Every other agent - the 4 default roles, `LiveAgent`, or a custom agent
 that's ever actually run - stays permanent.
+
+## Project clone status
+
+`Project.Status` (`ProjectStatus`: `Cloning`/`Ready`/`Failed`) tracks the one real lifecycle a
+`Project` has, separate from its `Ticket`s' own. `Create` always starts a project `Cloning`, with
+`RepositoryPath` still empty - the row is persisted and visible immediately, before the actual
+clone (run detached; see [docs/application.md](application.md)) even starts. `MarkCloned(repositoryPath)`
+sets `RepositoryPath`, flips `Status` to `Ready`, and clears any prior `CloneFailureReason`;
+`MarkCloneFailed(reason)` instead sets `Status` to `Failed` and records `reason` - a failed clone
+leaves the project visible (with its remote URL and name intact) rather than the row disappearing,
+the same reasoning as a `Ticket` staying visible as `Blocked` instead of vanishing. Both methods
+can be called on a project of any status - `MarkCloned` after a prior `MarkCloneFailed` is exactly
+how a retried clone recovers.
+
+## Project removal
+
+`Project.IsRemoved` (set only by `Remove()`) hides a project from every UI listing without
+touching its remote repository, sandbox clone, tickets, or history - "remove" here means "stop
+showing it," not "delete it." `Remove()` itself performs no checks: whether it's actually safe to
+hide a project - specifically, that none of its tickets are `InProgress` or `ForReview` - depends
+on sibling `Ticket` rows this entity can't see, so that guard lives in
+`ProjectService.RemoveAsync` ([docs/application.md](application.md)), which throws
+`Application.Common.Exceptions.ProjectHasActiveTicketsException` before calling `Remove()` if the
+guard fails. There is no "unremove" in this pass - once `IsRemoved` is set, it stays set.
+
+## Conflict staleness
+
+`Conflict.BaseTipSha` records the base branch's commit SHA at the moment `Create` detected the
+conflict - it's the one field `ResolveManually`/`AcceptAiSuggestion` never touch, so it always
+reflects what the resolution was actually prepared against, however long ago that was.
+`MarkStale()` is the domain-side half of recovering from a resolution that's since gone stale
+(see [docs/application.md](application.md) for who calls it and when): it resets `Status` back to
+`Detected` and clears `ResolvedContent`/`ResolutionNote`/`ResolvedBy`/`ResolvedAtUtc`, but leaves
+`AiSuggestedResolution` and `BaseTipSha` alone - an AI suggestion is still a reasonable starting
+point to accept again, and re-stamping `BaseTipSha` is what a fresh "Detect Conflicts" call (not
+`MarkStale`) is for. A conflict `MarkStale` reset can be resolved again immediately, exactly like
+any other `Detected` conflict.
 
 ## Conversation and ChatMessage
 

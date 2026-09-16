@@ -12,6 +12,7 @@ export interface ConflictDto {
   status: ConflictStatus;
   resolvedAtUtc: string | null;
   resolvedBy: string | null;
+  baseTipSha: string | null;
   createdAtUtc: string;
 }
 

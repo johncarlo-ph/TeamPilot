@@ -62,9 +62,24 @@ showing name, description, the connected remote repository URL, and a row of cou
 per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked, 👀 For Review, ✅ Done) - so you can see
 where a project's tickets stand without opening its board, with an **Open Board** button.
 
-**New Project / Edit Project** — Admin only; the button and each card's Edit link are hidden
-for Analysts and Developers. Creating a project clones its remote repository right away, so the
-request can take a few seconds and fails if the URL or token is wrong.
+**New Project / Edit Project** — Admin only; the button and each card's Edit/Remove links are
+hidden for Analysts and Developers. Before saving — whether creating a new project or editing an
+existing one's base branch — the entered base branch is checked against the remote repository
+itself; if it doesn't exist there, the save is rejected outright with an error and nothing
+changes (unlike a bad URL/token, below, this check happens before anything is saved). On edit,
+that check reuses the project's already-stored access token unless a new one was also entered.
+Once the check passes, creating a project saves it immediately and starts cloning its remote
+repository in the background — the card shows a live progress bar (with an object/byte count
+once Git reports one) while cloning, and **Open Board** stays disabled until it finishes. A bad
+URL or token doesn't fail the creation itself; instead the card switches to a "Clone failed"
+banner with the error, and the project stays listed (not silently discarded) so the Admin can fix
+the details and re-create it.
+
+**Remove** — Admin only, next to **Edit** on each card. Hides the project from this list; it does
+**not** delete anything — the connected Git repository, its branches, and every ticket stay
+untouched, and there's no way to un-hide it from the UI afterward. Disabled (with an explanatory
+tooltip) while the project has any ticket **In Progress** or **For Review**; clicking it asks for
+confirmation, since it can't be undone from the UI.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
@@ -72,7 +87,7 @@ request can take a few seconds and fails if the URL or token is wrong.
 | Description | Text | No | Shown on the card; blank shows "No description." |
 | Remote URL | Text | Yes (create only) | The `https://` URL of the Git repository to connect, e.g. `https://github.com/org/repo.git`. Can't be changed after the project is created — shown as read-only text when editing. |
 | Access Token | Password | Yes on create, optional on edit | A Personal Access Token for that repository, with permission to read and write it. On edit, leave blank to keep the currently stored token (e.g. after rotating it on the host, paste the new one). Never shown again once saved. |
-| Base branch | Text | Yes (defaults to `main`) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. |
+| Base branch | Text | Yes (defaults to `main` on create) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. Must already exist on the remote repository, whether creating or editing — the save is rejected with an error otherwise. |
 
 ## Ticket board
 
@@ -279,6 +294,13 @@ Finds and resolves merge conflicts between the ticket's branch and its merge tar
 | Accept AI Suggestion | Applies the proposed fix and marks the conflict resolved. |
 | Resolution note + Resolve Manually | Optional free-text note paired with marking a conflict resolved by hand. |
 
+> **A resolved conflict can go stale.** TeamPilot remembers what the merge target looked like
+> when a conflict was resolved. If someone else's change lands on that branch before this
+> ticket is approved, the resolution is checked again at approval time — if it no longer applies
+> cleanly, approval fails, that conflict flips back to unresolved automatically, and you'll need
+> to resolve it again (re-running **Detect Conflicts** first is the safest way to see exactly
+> what changed).
+
 ### Reviews
 
 Every decision on a ticket (approve, request changes, reject, resolve a conflict) is recorded
@@ -451,11 +473,13 @@ versioned instructions at the time.
 - **Nothing updates instantly.** The board and ticket-detail pages poll every 8–10 seconds
   rather than pushing updates live.
 - **Almost nothing can be deleted.** Projects, tickets, and agents can be created and edited
-  (agents can also be deactivated), but not deleted through the UI. A ticket can be **Cancelled**
-  instead (see [Ticket detail](#ticket-detail)) — that's a permanent status, not a deletion; the
-  ticket and its history stay on record. Instruction templates and a Cancelled ticket's Git
-  branch are the two real exceptions — both genuinely, irreversibly deleted, the branch
-  automatically as part of cancelling (or manually via its **Delete Branch** button, for a ticket
+  (agents can also be deactivated), but not deleted through the UI. A project can be **Removed**
+  instead (see [Projects](#projects)) — that only hides it from the list; its repository, branches,
+  and tickets are untouched. A ticket can be **Cancelled** instead (see
+  [Ticket detail](#ticket-detail)) — that's a permanent status, not a deletion; the ticket and its
+  history stay on record. Instruction templates and a Cancelled ticket's Git branch are the two
+  real exceptions — both genuinely, irreversibly deleted, the branch automatically as part of
+  cancelling (or manually via its **Delete Branch** button, for a ticket
   cancelled before this was automatic). An agent's **Remove** button on the
   [Agent Pipeline](#agent-pipeline--instructions) page looks like a third exception but usually
   isn't: it only takes the agent out of the pipeline sequence — the agent itself, and its

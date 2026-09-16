@@ -62,12 +62,13 @@ public class ConflictResolutionServiceTests
         // have every conflict check run against the wrong (or a nonexistent) branch.
         _gitService
             .Setup(g => g.DetectMergeConflictsAsync(_project.RepositoryPath, "feature/build-feature", _project.BaseBranch, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new GitMergeConflictResult(true, [new GitConflictingFile("src/App.cs", "<<<<<<<")]));
+            .ReturnsAsync(new GitMergeConflictResult(true, [new GitConflictingFile("src/App.cs", "<<<<<<<")], "sha-base-tip"));
 
         var result = await _sut.DetectConflictsAsync(ticket.Id);
 
         Assert.Single(result);
         Assert.Single(ticket.Conflicts);
+        Assert.Equal("sha-base-tip", ticket.Conflicts.Single().BaseTipSha);
     }
 
     [Fact]

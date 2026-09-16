@@ -8,12 +8,18 @@ export interface TicketStatusCountsDto {
   done: number;
 }
 
+/** Where a project is in cloning its remote repository - see `ProjectCard`'s progress UI, driven
+ * by `ProjectEventType: 'ProjectCloneProgress'`. */
+export type ProjectStatus = 'Cloning' | 'Ready' | 'Failed';
+
 export interface ProjectDto {
   id: string;
   name: string;
   description: string;
   remoteUrl: string;
   baseBranch: string;
+  status: ProjectStatus;
+  cloneFailureReason: string | null;
   createdAtUtc: string;
   updatedAtUtc: string | null;
   ticketStatusCounts: TicketStatusCountsDto;

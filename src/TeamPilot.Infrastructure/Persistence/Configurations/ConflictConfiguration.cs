@@ -18,6 +18,7 @@ public class ConflictConfiguration : IEntityTypeConfiguration<Conflict>
         builder.Property(c => c.ResolutionNote).HasColumnType("nvarchar(max)");
         builder.Property(c => c.Status).HasConversion<string>().HasMaxLength(30).IsRequired();
         builder.Property(c => c.ResolvedBy).HasMaxLength(200);
+        builder.Property(c => c.BaseTipSha).HasMaxLength(64);
 
         // NoAction (not SetNull/Cascade) - Ticket already cascade-deletes Conflicts directly,
         // and SQL Server rejects a second cascading path to the same table via Commits.

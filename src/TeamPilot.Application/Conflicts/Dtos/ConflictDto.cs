@@ -14,4 +14,5 @@ public sealed record ConflictDto(
     ConflictStatus Status,
     DateTime? ResolvedAtUtc,
     string? ResolvedBy,
+    string? BaseTipSha,
     DateTime CreatedAtUtc);

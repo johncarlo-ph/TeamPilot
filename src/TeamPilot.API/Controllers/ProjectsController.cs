@@ -38,4 +38,12 @@ public class ProjectsController(IProjectService projectService) : ControllerBase
         var project = await projectService.UpdateAsync(id, request, cancellationToken);
         return Ok(project);
     }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<IActionResult> Remove(Guid id, CancellationToken cancellationToken)
+    {
+        await projectService.RemoveAsync(id, cancellationToken);
+        return NoContent();
+    }
 }

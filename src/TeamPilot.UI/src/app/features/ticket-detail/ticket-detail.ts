@@ -219,7 +219,14 @@ export class TicketDetail {
         this.reviewFormOpen.set(false);
         this.refresh();
       },
-      error: () => this.submittingReview.set(false),
+      error: () => {
+        this.submittingReview.set(false);
+        // Approving can fail because the server just reset one or more conflicts back to
+        // Detected (see StaleConflictResolutionException) - refresh so the conflicts panel shows
+        // that immediately instead of still displaying them as resolved until something else
+        // happens to trigger a refetch.
+        this.refresh();
+      },
     });
   }
 

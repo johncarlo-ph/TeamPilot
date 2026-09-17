@@ -27,6 +27,8 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
             StaleConflictResolutionException => (StatusCodes.Status409Conflict, "Stale conflict resolutions"),
             ProjectNotReadyException => (StatusCodes.Status409Conflict, "Project not ready"),
             ProjectHasActiveTicketsException => (StatusCodes.Status409Conflict, "Project has active tickets"),
+            SprintHasActiveTicketsException => (StatusCodes.Status409Conflict, "Sprint has active tickets"),
+            TicketNotAssignedToSprintException => (StatusCodes.Status409Conflict, "Ticket not assigned to a sprint"),
             GitOperationException => (StatusCodes.Status422UnprocessableEntity, "Git operation failed"),
             LlmOperationException => (StatusCodes.Status422UnprocessableEntity, "LLM operation failed"),
             DomainException => (StatusCodes.Status409Conflict, "Invalid operation for the current state"),

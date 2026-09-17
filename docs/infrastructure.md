@@ -385,6 +385,13 @@ replay after a restart.
   `SprintId` to `NOT NULL` and finally drops `BaseBranch`/`SprintStartDate`/`SprintEndDate`/
   `SprintGoal` from `Projects` - in that order, so every step has the source data it needs before
   the next one removes it.
+- `Tickets.SprintId` was relaxed back to nullable by the later `AllowTicketBacklog` migration (a
+  project-level ticket backlog - see [docs/domain.md](domain.md#backlog)) - a single
+  `AlterColumn(..., nullable: true)` with **no data backfill needed**, unlike
+  `IntroduceSprintAggregate` above: relaxing a column to nullable never breaks existing rows.
+  `TicketConfiguration`'s `HasOne<Sprint>().HasForeignKey(t => t.SprintId)` needed no code change
+  for this - it never called `.IsRequired()` explicitly, so EF Core already inferred "optional FK"
+  the moment the CLR property became `Guid?`.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

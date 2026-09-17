@@ -46,7 +46,7 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 | Capability | Admin | Developer | Analyst |
 |---|---|---|---|
 | View the board and tickets of an assigned project | ✓ | ✓ | ✓ |
-| Create tickets, start the agent pipeline, link branches, trigger pipeline runs | ✓ | ✓ | ✓ |
+| Create tickets (on a sprint's board or in the backlog), assign a backlog ticket to a sprint, start the agent pipeline, link branches, trigger pipeline runs | ✓ | ✓ | ✓ |
 | Edit an agent's instructions | ✓ | ✓ | ✓ |
 | Request changes or resolve a conflict on a review | ✓ | ✓ | ✓ |
 | **Approve** a ticket (merges its branch) | ✓ | ✓ | — |
@@ -86,13 +86,14 @@ it asks for confirmation, since it can't be undone from the UI.
 
 ## Sprints
 
-`/projects/:id/sprints` — opened via a project's **View Sprints** button. An **Agents** button in
-the header opens the project's [agent pipeline](#agent-pipeline--instructions) - the workflow is
-project-wide, not per-sprint, so it's reached from here rather than from any one sprint's board.
-Below that, one card per sprint in that project, showing its name, base branch, sprint dates/goal
-when set, and a row of count badges — one per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked,
-👀 For Review, ✅ Done) - so you can see where a sprint's tickets stand without opening its board,
-with an **Open Board** button.
+`/projects/:id/sprints` — opened via a project's **View Sprints** button. A **Backlog** button in
+the header opens the project's [backlog](#backlog) (tickets not yet assigned to a sprint), and an
+**Agents** button opens the project's [agent pipeline](#agent-pipeline--instructions) - the
+workflow is project-wide, not per-sprint, so it's reached from here rather than from any one
+sprint's board. Below that, one card per sprint in that project, showing its name, base branch,
+sprint dates/goal when set, and a row of count badges — one per board column (⏳ To Do,
+🔧 In Progress, 🚫 Blocked, 👀 For Review, ✅ Done) - so you can see where a sprint's tickets stand
+without opening its board, with an **Open Board** button.
 
 **New Sprint / Edit Sprint** — Admin only; the button and each card's Edit/Remove links are
 hidden for Analysts and Developers. Before saving — whether creating a new sprint or editing an
@@ -113,6 +114,23 @@ from the UI.
 | Sprint start date | Date | No | For framing this sprint's timeline. Purely informational — nothing in the app gates on it. |
 | Sprint end date | Date | No | Same as above. Rejected if set earlier than the sprint start date (when both are given). |
 | Sprint goal | Text (multi-line) | No | The sprint's objective, free text. |
+
+## Backlog
+
+`/projects/:id/backlog` — opened via a project's **Backlog** button (on the [Sprints](#sprints)
+page). A flat list of tickets that belong to the project but haven't been assigned to a sprint
+yet — useful for jotting down work before you've planned which sprint it belongs in. Each ticket
+shows its title, status, and description. Since a backlog ticket has no sprint, it has no branch
+and can't be started — it's stuck at **To Do** (or **Cancelled**, if you cancel it) until you
+assign it somewhere.
+
+**New Ticket** — same form as the board's (see [Ticket board](#ticket-board) below); creates the
+ticket directly into the backlog.
+
+**Assign to sprint** — next to each ticket, pick a sprint from the dropdown and click **Assign**.
+The ticket disappears from the backlog and appears on that sprint's board (in To Do) the next time
+it refreshes. This can only be done once per ticket — there's no way to move a ticket to a
+*different* sprint afterward from the UI.
 
 ## Ticket board
 
@@ -249,8 +267,9 @@ the top, then four panels. This page also polls for updates, roughly every 10 se
 **Agent assignments & commits** — lists every agent assigned to the ticket and when. While the
 ticket is To Do or In Progress, a **Start** (or **Run Pipeline**, once it's already In Progress)
 button runs the agent pipeline described above — the same action as dragging the card, available
-here for retrying a failed run or re-running after a review's *Request Changes*. Whenever a run is
-actually in progress — right after you click it, or because it was triggered another way (a
+here for retrying a failed run or re-running after a review's *Request Changes*. A [backlog](#backlog)
+ticket (no sprint assigned yet) rejects this with an error — assign it to a sprint first. Whenever
+a run is actually in progress — right after you click it, or because it was triggered another way (a
 *Request Changes* review, answering a question, retrying a failure) — the button is replaced with
 a "Pipeline running…" note instead of staying there to be clicked again. The Commits
 panel lists every commit the ticket has picked up (short hash, message, branch, line-by-line
@@ -527,6 +546,10 @@ versioned instructions at the time.
   and Rejecting both delete the ticket's branch; Approve merges code instead. Request Changes,
   Resolve Conflict, and comments just record a decision (though Request Changes does trigger a
   new pipeline run).
+- **A ticket is assigned to a sprint at most once.** A ticket starts either on a sprint's board
+  (created there directly) or in the project's [backlog](#backlog); assigning a backlog ticket
+  to a sprint moves it permanently — there's no UI to move it to a *different* sprint afterward,
+  or back to the backlog.
 - **New sign-ins start with nothing.** A first-time sign-in has zero roles and zero project
   assignments — see [Admin: Users](#admin-users).
 - **A project's remote URL is set once.** It can't be edited after the project is created — get

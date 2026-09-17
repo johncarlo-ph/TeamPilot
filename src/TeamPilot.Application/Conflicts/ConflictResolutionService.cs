@@ -42,8 +42,10 @@ public sealed class ConflictResolutionService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+        // Guaranteed non-null: the BranchName check above already rejected a ticket with no
+        // linked branch, and a branch only ever exists once a ticket has been assigned to a sprint.
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId!.Value, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
         GitMergeConflictResult mergeCheck;
         await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))

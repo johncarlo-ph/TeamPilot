@@ -1,0 +1,66 @@
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+  <div>
+    <a [routerLink]="['/projects', projectId, 'sprints']" class="small text-decoration-none"
+      >&larr; {{ project()?.name ?? 'Sprints' }}</a
+    >
+    <div class="mt-3">
+      <h1 class="h3">Backlog</h1>
+      <div class="text-body-secondary">Not yet assigned to a sprint</div>
+    </div>
+  </div>
+  <button type="button" class="btn btn-outline-primary" (click)="formOpen.set(true)">
+    New Ticket
+  </button>
+</div>
+
+@if (loading()) {
+  <div class="text-body-secondary">Loading backlog...</div>
+} @else if (!tickets().length) {
+  <p class="text-body-secondary">No backlog tickets yet.</p>
+} @else {
+  <div class="list-group">
+    @for (ticket of tickets(); track ticket.id) {
+      <div class="list-group-item">
+        <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+          <div class="flex-grow-1" style="min-width: 16rem">
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <a class="text-decoration-none" [routerLink]="['/tickets', ticket.id]">{{ ticket.title }}</a>
+              <app-status-badge [value]="ticket.status"></app-status-badge>
+            </div>
+            @if (ticket.description) {
+              <p class="small text-body-secondary mb-0 text-truncate" style="max-width: 40rem">
+                {{ ticket.description }}
+              </p>
+            }
+          </div>
+          @if (sprints().length) {
+            <div class="d-flex align-items-center gap-2">
+              <select #sprintSelect class="form-select form-select-sm" style="width: auto" [disabled]="isAssigning(ticket.id)">
+                @for (sprint of sprints(); track sprint.id) {
+                  <option [value]="sprint.id">{{ sprint.name }}</option>
+                }
+              </select>
+              <button
+                type="button"
+                class="btn btn-outline-secondary btn-sm"
+                [disabled]="isAssigning(ticket.id)"
+                (click)="assignToSprint(ticket, sprintSelect.value)"
+              >
+                {{ isAssigning(ticket.id) ? 'Assigning...' : 'Assign' }}
+              </button>
+            </div>
+          } @else {
+            <span class="small text-body-secondary">Create a sprint to assign this ticket.</span>
+          }
+        </div>
+      </div>
+    }
+  </div>
+}
+
+<app-create-ticket-form
+  [open]="formOpen()"
+  [creating]="creatingTicket()"
+  (closed)="formOpen.set(false)"
+  (created)="createTicket($event)"
+></app-create-ticket-form>

@@ -177,6 +177,16 @@ public class OrchestrationServiceTests
         $"{narrative}\n<file path=\"src/App.tsx\">\nexport const App = () => <div>Hi</div>;\n</file>";
 
     [Fact]
+    public async Task RunPipelineAsync_WhenTicketIsInBacklog_ThrowsTicketNotAssignedToSprintException()
+    {
+        var ticket = Ticket.Create(_project.Id, null, "Build feature", "desc", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<TicketNotAssignedToSprintException>(() => _sut.RunPipelineAsync(ticket.Id));
+        _llmConnector.Verify(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RunPipelineAsync_HappyPath_AssignsAllFourAgentsLinksBranchAndMovesToReview()
     {
         var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", "desc", "Acceptance criteria");

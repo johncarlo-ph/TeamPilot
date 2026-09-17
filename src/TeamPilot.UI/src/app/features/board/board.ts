@@ -245,6 +245,18 @@ export class Board {
     this.notifications.error(`Moving a ticket from ${ticket.status} to ${targetStatus} isn't supported.`);
   }
 
+  moveToBacklog(ticket: TicketDto): void {
+    if (!confirm(`Move "${ticket.title}" back to the project's backlog?`)) {
+      return;
+    }
+    this.ticketsService.moveToBacklog(ticket.id).subscribe({
+      next: () => {
+        this.notifications.success('Ticket moved to the backlog.');
+        this.tickets.update((tickets) => tickets.filter((t) => t.id !== ticket.id));
+      },
+    });
+  }
+
   confirmReview(request: { reviewerName: string; decision: ReviewDecision; comments: string | null }): void {
     const ticket = this.reviewTarget();
     if (!ticket) {

@@ -29,6 +29,10 @@ export const routes: Routes = [
         loadComponent: () => import('./features/board/board').then((m) => m.Board),
       },
       {
+        path: 'projects/:projectId/backlog',
+        loadComponent: () => import('./features/backlog/backlog').then((m) => m.Backlog),
+      },
+      {
         path: 'projects/:projectId/agents',
         loadComponent: () => import('./features/agents/agents').then((m) => m.Agents),
       },

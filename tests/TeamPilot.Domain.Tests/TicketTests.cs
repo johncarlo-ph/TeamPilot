@@ -46,6 +46,70 @@ public class TicketTests
     }
 
     [Fact]
+    public void Create_WithNoSprintId_LeavesItNull()
+    {
+        var ticket = Ticket.Create(ProjectId, null, "Fix login bug", "desc", "Acceptance criteria");
+
+        Assert.Null(ticket.SprintId);
+        Assert.Equal(ProjectId, ticket.ProjectId);
+    }
+
+    [Fact]
+    public void AssignToSprint_WhenNotYetAssigned_SetsSprintId()
+    {
+        var ticket = Ticket.Create(ProjectId, null, "Fix login bug", "desc", "Acceptance criteria");
+
+        ticket.AssignToSprint(SprintId);
+
+        Assert.Equal(SprintId, ticket.SprintId);
+        Assert.NotNull(ticket.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void AssignToSprint_WithEmptySprintId_ThrowsArgumentException()
+    {
+        var ticket = Ticket.Create(ProjectId, null, "Fix login bug", "desc", "Acceptance criteria");
+
+        Assert.Throws<ArgumentException>(() => ticket.AssignToSprint(Guid.Empty));
+    }
+
+    [Fact]
+    public void AssignToSprint_WhenAlreadyAssigned_ThrowsTicketAlreadyAssignedToSprintException()
+    {
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
+
+        Assert.Throws<TicketAlreadyAssignedToSprintException>(() => ticket.AssignToSprint(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void MoveToBacklog_WhenToDoWithNoBranch_ClearsSprintId()
+    {
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
+
+        ticket.MoveToBacklog();
+
+        Assert.Null(ticket.SprintId);
+    }
+
+    [Fact]
+    public void MoveToBacklog_WhenNotToDo_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
+        ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
+
+        Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.MoveToBacklog());
+    }
+
+    [Fact]
+    public void MoveToBacklog_WhenTicketHasLinkedBranch_ThrowsTicketHasLinkedBranchException()
+    {
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
+        ticket.LinkBranch("feature/fix-login-bug");
+
+        Assert.Throws<TicketHasLinkedBranchException>(() => ticket.MoveToBacklog());
+    }
+
+    [Fact]
     public void AssignAgent_FirstAssignment_MovesTicketToInProgress()
     {
         var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");

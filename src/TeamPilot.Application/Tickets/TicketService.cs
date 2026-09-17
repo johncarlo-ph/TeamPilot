@@ -26,7 +26,8 @@ public sealed class TicketService(
     IProjectEventBroadcaster eventBroadcaster,
     IValidator<CreateTicketRequest> createValidator,
     IValidator<CreateBranchRequest> createBranchValidator,
-    IValidator<CancelTicketRequest> cancelValidator) : ITicketService
+    IValidator<CancelTicketRequest> cancelValidator,
+    IValidator<AssignTicketToSprintRequest> assignToSprintValidator) : ITicketService
 {
     private void PublishTicketChanged(Ticket ticket) =>
         eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
@@ -52,6 +53,36 @@ public sealed class TicketService(
         await ticketRepository.AddAsync(ticket, cancellationToken);
 
         await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created.", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
+    }
+
+    /// <summary>
+    /// Creates a ticket in the project's backlog - not yet assigned to any sprint (see
+    /// <see cref="AssignToSprintAsync"/>). Otherwise identical to <see cref="CreateAsync"/>,
+    /// including requiring <see cref="ProjectStatus.Ready"/>: that keeps "every ticket that
+    /// exists was created against a Ready project" true without needing extra readiness checks
+    /// later, at pipeline-start/branch-link time.
+    /// </summary>
+    public async Task<TicketDto> CreateBacklogAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default)
+    {
+        await createValidator.EnsureValidAsync(request, cancellationToken);
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var project = await projectRepository.GetByIdAsync(projectId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Project), projectId);
+
+        if (project.Status != ProjectStatus.Ready)
+        {
+            throw new ProjectNotReadyException(project.Name);
+        }
+
+        var ticket = Ticket.Create(projectId, null, request.Title, request.Description, request.AcceptanceCriteria);
+        await ticketRepository.AddAsync(ticket, cancellationToken);
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created in backlog.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         PublishTicketChanged(ticket);
 
@@ -85,6 +116,56 @@ public sealed class TicketService(
 
         var tickets = await ticketRepository.ListByProjectAsync(projectId, status, cancellationToken);
         return tickets.Select(t => TicketMappings.ToDto(t, pipelineRunTracker.IsRunning(t.Id))).ToList();
+    }
+
+    public async Task<IReadOnlyList<TicketDto>> ListBacklogAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default)
+    {
+        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+
+        var tickets = await ticketRepository.ListBacklogAsync(projectId, status, cancellationToken);
+        return tickets.Select(t => TicketMappings.ToDto(t, pipelineRunTracker.IsRunning(t.Id))).ToList();
+    }
+
+    public async Task<TicketDto> AssignToSprintAsync(Guid ticketId, AssignTicketToSprintRequest request, CancellationToken cancellationToken = default)
+    {
+        await assignToSprintValidator.EnsureValidAsync(request, cancellationToken);
+
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Ticket), ticketId);
+
+        await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
+
+        var sprint = await sprintRepository.GetByIdAsync(request.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), request.SprintId);
+
+        if (sprint.ProjectId != ticket.ProjectId)
+        {
+            throw new NotFoundException(nameof(Sprint), request.SprintId);
+        }
+
+        ticket.AssignToSprint(request.SprintId);
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketAssignedToSprint, $"Ticket '{ticket.Title}' assigned to sprint '{sprint.Name}'.", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
+    }
+
+    public async Task<TicketDto> MoveToBacklogAsync(Guid ticketId, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Ticket), ticketId);
+
+        await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
+
+        ticket.MoveToBacklog();
+
+        await auditLogger.LogActionAsync(AuditEventType.TicketMovedToBacklog, $"Ticket '{ticket.Title}' moved to the backlog.", cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        PublishTicketChanged(ticket);
+
+        return TicketMappings.ToDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<TicketDto> MoveToReviewAsync(Guid id, CancellationToken cancellationToken = default)
@@ -180,8 +261,10 @@ public sealed class TicketService(
         var branchName = ticket.BranchName!;
         ticket.UnlinkBranch();
 
-        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+        // A ticket can only have a branch once it's been assigned to a sprint (LinkBranchAsync
+        // below guards that), so SprintId is guaranteed non-null here.
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId!.Value, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
         await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, sprint.BaseBranch, accessToken, cancellationToken);
@@ -198,11 +281,16 @@ public sealed class TicketService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
+        if (ticket.SprintId is null)
+        {
+            throw new TicketNotAssignedToSprintException(ticket.Title);
+        }
+
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId.Value, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
         var otherTicketWithBranch = await ticketRepository.GetByBranchNameAsync(ticket.ProjectId, branchName, cancellationToken);
         if (otherTicketWithBranch is not null && otherTicketWithBranch.Id != ticket.Id)

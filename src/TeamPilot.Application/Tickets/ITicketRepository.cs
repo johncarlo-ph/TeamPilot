@@ -23,6 +23,11 @@ public interface ITicketRepository
     /// </summary>
     Task<IReadOnlyList<Ticket>> ListByProjectAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Lean, read-only listing of a project's backlog - tickets with no <c>SprintId</c> yet.
+    /// </summary>
+    Task<IReadOnlyList<Ticket>> ListBacklogAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
+
     Task AddAsync(Ticket ticket, CancellationToken cancellationToken = default);
 
     /// <summary>

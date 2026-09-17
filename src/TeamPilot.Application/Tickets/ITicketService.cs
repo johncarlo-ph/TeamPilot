@@ -7,6 +7,12 @@ public interface ITicketService
 {
     Task<TicketDto> CreateAsync(Guid sprintId, CreateTicketRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Creates a ticket in the project's backlog, not yet assigned to any sprint - see
+    /// <see cref="AssignToSprintAsync"/>.
+    /// </summary>
+    Task<TicketDto> CreateBacklogAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default);
+
     Task<TicketDetailDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<TicketDto>> ListAsync(Guid sprintId, TicketStatus? status, CancellationToken cancellationToken = default);
@@ -17,6 +23,26 @@ public interface ITicketService
     /// the Live Agent chat's ticket tool.
     /// </summary>
     Task<IReadOnlyList<TicketDto>> ListByProjectAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lean, read-only listing of a project's backlog - tickets not yet assigned to any sprint.
+    /// </summary>
+    Task<IReadOnlyList<TicketDto>> ListBacklogAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves a backlog ticket into a sprint - only allowed once, from no sprint currently
+    /// assigned (see <see cref="TeamPilot.Domain.Entities.Ticket.AssignToSprint"/>). Throws
+    /// <see cref="Common.Exceptions.NotFoundException"/> if <paramref name="sprintId"/> doesn't
+    /// belong to the ticket's own project.
+    /// </summary>
+    Task<TicketDto> AssignToSprintAsync(Guid ticketId, AssignTicketToSprintRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Moves a ticket back out of its sprint into the project's backlog - only allowed while
+    /// still <c>ToDo</c> and with no linked branch (see
+    /// <see cref="TeamPilot.Domain.Entities.Ticket.MoveToBacklog"/>).
+    /// </summary>
+    Task<TicketDto> MoveToBacklogAsync(Guid ticketId, CancellationToken cancellationToken = default);
 
     Task<TicketDto> MoveToReviewAsync(Guid id, CancellationToken cancellationToken = default);
 

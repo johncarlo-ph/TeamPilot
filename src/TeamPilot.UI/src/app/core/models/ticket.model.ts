@@ -6,7 +6,8 @@ import { ConflictDto } from './conflict.model';
 export interface TicketDto {
   id: string;
   projectId: string;
-  sprintId: string;
+  // Null while the ticket sits in the project's backlog, not yet assigned to a sprint.
+  sprintId: string | null;
   title: string;
   description: string;
   acceptanceCriteria: string;
@@ -30,7 +31,7 @@ export interface TicketAgentAssignmentDto {
 export interface TicketDetailDto {
   id: string;
   projectId: string;
-  sprintId: string;
+  sprintId: string | null;
   title: string;
   description: string;
   acceptanceCriteria: string;
@@ -59,4 +60,8 @@ export interface CreateBranchRequest {
 
 export interface CancelTicketRequest {
   reason: string | null;
+}
+
+export interface AssignTicketToSprintRequest {
+  sprintId: string;
 }

@@ -125,6 +125,14 @@ public sealed class OrchestrationService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
+        // A backlog ticket (no sprint assigned yet) has no base branch to cut its own branch
+        // from - reject before touching the project/workflow at all, rather than failing deep
+        // inside the branch-link step below.
+        if (ticket.SprintId is null)
+        {
+            throw new TicketNotAssignedToSprintException(ticket.Title);
+        }
+
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
@@ -698,8 +706,10 @@ public sealed class OrchestrationService(
 
     private async Task LinkBranchAsync(Ticket ticket, Project project, CancellationToken cancellationToken)
     {
-        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+        // Guaranteed non-null: RunPipelineAsync (this method's only caller) rejects a backlog
+        // ticket with TicketNotAssignedToSprintException before reaching here.
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId!.Value, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
         var branchName = GenerateBranchName(ticket);
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);

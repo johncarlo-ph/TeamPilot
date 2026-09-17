@@ -121,8 +121,10 @@ public sealed class ApprovalGateService(
             var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-            var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-                ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+            // A branch only ever exists once a ticket has been assigned to a sprint, so SprintId
+            // is guaranteed non-null here.
+            var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId!.Value, cancellationToken)
+                ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
             var branchName = ticket.BranchName;
 
@@ -184,8 +186,10 @@ public sealed class ApprovalGateService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
-        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+        // Guaranteed non-null: this method already rejected a ticket with no linked branch
+        // above, and a branch only ever exists once a ticket has been assigned to a sprint.
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId!.Value, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId.Value);
 
         var branchName = ticket.BranchName;
         var targetBranch = sprint.BaseBranch;

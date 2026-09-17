@@ -56,7 +56,8 @@ public class TicketServiceTests
             _eventBroadcaster.Object,
             new CreateTicketRequestValidator(),
             new CreateBranchRequestValidator(),
-            new CancelTicketRequestValidator());
+            new CancelTicketRequestValidator(),
+            new AssignTicketToSprintRequestValidator());
     }
 
     [Fact]
@@ -125,6 +126,127 @@ public class TicketServiceTests
         var request = new CreateTicketRequest("Implement login", null, "User can log in via OAuth.");
 
         await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateAsync(Guid.NewGuid(), request));
+    }
+
+    [Fact]
+    public async Task CreateBacklogAsync_WithValidRequest_AddsTicketWithNoSprintAndSavesChanges()
+    {
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", "User can log in via OAuth.");
+
+        var result = await _sut.CreateBacklogAsync(_project.Id, request);
+
+        Assert.Equal("Implement login", result.Title);
+        Assert.Equal(_project.Id, result.ProjectId);
+        Assert.Null(result.SprintId);
+        Assert.Equal(TicketStatus.ToDo, result.Status);
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateBacklogAsync_WhenProjectIsStillCloning_ThrowsProjectNotReadyException()
+    {
+        var cloningProject = Project.Create("Cloning Project", "desc", "https://github.com/org/cloning.git", "encrypted-token");
+        _projectRepository.Setup(r => r.GetByIdAsync(cloningProject.Id, It.IsAny<CancellationToken>())).ReturnsAsync(cloningProject);
+
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateBacklogAsync(cloningProject.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ListBacklogAsync_ReturnsTicketsFromRepository()
+    {
+        var ticket = Ticket.Create(_project.Id, null, "Fix bug", "desc", "Acceptance criteria");
+        _ticketRepository
+            .Setup(r => r.ListBacklogAsync(_project.Id, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([ticket]);
+
+        var result = await _sut.ListBacklogAsync(_project.Id, null);
+
+        Assert.Single(result);
+        Assert.Equal(ticket.Id, result[0].Id);
+    }
+
+    [Fact]
+    public async Task AssignToSprintAsync_WhenTicketIsInBacklog_AssignsItToTheSprint()
+    {
+        var ticket = Ticket.Create(_project.Id, null, "Fix bug", "desc", "Acceptance criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.AssignToSprintAsync(ticket.Id, new AssignTicketToSprintRequest(_sprint.Id));
+
+        Assert.Equal(_sprint.Id, result.SprintId);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task AssignToSprintAsync_WhenAlreadyAssigned_ThrowsTicketAlreadyAssignedToSprintException()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Fix bug", "desc", "Acceptance criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<TicketAlreadyAssignedToSprintException>(
+            () => _sut.AssignToSprintAsync(ticket.Id, new AssignTicketToSprintRequest(_sprint.Id)));
+    }
+
+    [Fact]
+    public async Task AssignToSprintAsync_WhenSprintBelongsToADifferentProject_ThrowsNotFoundException()
+    {
+        var otherProject = Project.Create("Other", "desc", "https://github.com/org/other.git", "encrypted-token");
+        var otherSprint = Sprint.Create(otherProject.Id, "Other Sprint", "main");
+        _sprintRepository.Setup(r => r.GetByIdAsync(otherSprint.Id, It.IsAny<CancellationToken>())).ReturnsAsync(otherSprint);
+
+        var ticket = Ticket.Create(_project.Id, null, "Fix bug", "desc", "Acceptance criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<NotFoundException>(
+            () => _sut.AssignToSprintAsync(ticket.Id, new AssignTicketToSprintRequest(otherSprint.Id)));
+    }
+
+    [Fact]
+    public async Task MoveToBacklogAsync_WhenTicketIsToDoWithNoBranch_ClearsSprintId()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Fix bug", "desc", "Acceptance criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        var result = await _sut.MoveToBacklogAsync(ticket.Id);
+
+        Assert.Null(result.SprintId);
+        _unitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task MoveToBacklogAsync_WhenTicketIsInProgress_ThrowsInvalidTicketStateTransitionException()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Fix bug", "desc", "Acceptance criteria");
+        ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<InvalidTicketStateTransitionException>(() => _sut.MoveToBacklogAsync(ticket.Id));
+    }
+
+    [Fact]
+    public async Task MoveToBacklogAsync_WhenTicketHasLinkedBranch_ThrowsTicketHasLinkedBranchException()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Fix bug", "desc", "Acceptance criteria");
+        ticket.LinkBranch("feature/fix-bug");
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<TicketHasLinkedBranchException>(() => _sut.MoveToBacklogAsync(ticket.Id));
     }
 
     [Fact]
@@ -235,6 +357,19 @@ public class TicketServiceTests
             .ReturnsAsync(otherTicket);
 
         await Assert.ThrowsAsync<BranchAlreadyLinkedException>(() => _sut.LinkBranchAsync(ticket.Id, "feature/shared"));
+        _gitService.Verify(g => g.EnsureBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task LinkBranchAsync_WhenTicketIsInBacklog_ThrowsTicketNotAssignedToSprintException()
+    {
+        var ticket = Ticket.Create(_project.Id, null, "Fix bug", "desc", "Acceptance criteria");
+
+        _ticketRepository
+            .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ticket);
+
+        await Assert.ThrowsAsync<TicketNotAssignedToSprintException>(() => _sut.LinkBranchAsync(ticket.Id, "feature/fix-bug"));
         _gitService.Verify(g => g.EnsureBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 

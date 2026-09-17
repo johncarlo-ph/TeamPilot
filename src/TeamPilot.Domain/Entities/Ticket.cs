@@ -21,7 +21,9 @@ public class Ticket : Entity
     /// without a join through Sprint on every check.</summary>
     public Guid ProjectId { get; private set; }
 
-    public Guid SprintId { get; private set; }
+    /// <summary>Null while the ticket sits in the project's backlog, not yet assigned to a
+    /// sprint - see <see cref="AssignToSprint"/>.</summary>
+    public Guid? SprintId { get; private set; }
 
     public string Title { get; private set; } = string.Empty;
 
@@ -51,7 +53,7 @@ public class Ticket : Entity
     {
     }
 
-    public static Ticket Create(Guid projectId, Guid sprintId, string title, string? description, string acceptanceCriteria)
+    public static Ticket Create(Guid projectId, Guid? sprintId, string title, string? description, string acceptanceCriteria)
     {
         if (projectId == Guid.Empty)
         {
@@ -60,7 +62,7 @@ public class Ticket : Entity
 
         if (sprintId == Guid.Empty)
         {
-            throw new ArgumentException("Sprint id is required.", nameof(sprintId));
+            throw new ArgumentException("Sprint id, when given, can't be empty.", nameof(sprintId));
         }
 
         if (string.IsNullOrWhiteSpace(title))
@@ -82,6 +84,49 @@ public class Ticket : Entity
             AcceptanceCriteria = acceptanceCriteria.Trim(),
             Status = TicketStatus.ToDo,
         };
+    }
+
+    /// <summary>
+    /// Moves the ticket out of the project's backlog into a sprint - only allowed once, from
+    /// <see cref="SprintId"/> being <see langword="null"/>. Re-assigning an already-scheduled
+    /// ticket to a different sprint isn't supported.
+    /// </summary>
+    public void AssignToSprint(Guid sprintId)
+    {
+        if (sprintId == Guid.Empty)
+        {
+            throw new ArgumentException("Sprint id is required.", nameof(sprintId));
+        }
+
+        if (SprintId is not null)
+        {
+            throw new TicketAlreadyAssignedToSprintException(Title);
+        }
+
+        SprintId = sprintId;
+        MarkUpdated();
+    }
+
+    /// <summary>
+    /// Moves the ticket back out of its sprint into the project's backlog - only allowed while
+    /// still <see cref="TicketStatus.ToDo"/> (nothing has started yet) and with no linked branch
+    /// (one would have been cut from this sprint's base branch, so it'd be left pointing at the
+    /// wrong sprint once unassigned).
+    /// </summary>
+    public void MoveToBacklog()
+    {
+        if (Status != TicketStatus.ToDo)
+        {
+            throw new InvalidTicketStateTransitionException(Status, "move to the backlog");
+        }
+
+        if (!string.IsNullOrWhiteSpace(BranchName))
+        {
+            throw new TicketHasLinkedBranchException(Title, "moved to the backlog");
+        }
+
+        SprintId = null;
+        MarkUpdated();
     }
 
     /// <summary>

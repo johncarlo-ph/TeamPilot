@@ -33,6 +33,8 @@ public enum AuditEventType
     InstructionTemplateUpdated,
     InstructionTemplateDeleted,
     TicketCreated,
+    TicketAssignedToSprint,
+    TicketMovedToBacklog,
     TicketPipelineStarted,
     TicketMovedToReview,
     TicketCancelled,

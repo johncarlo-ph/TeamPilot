@@ -120,7 +120,7 @@ automatic branch delete.
 |---|---|---|
 | `Project` | A project tied to a remote Git repo, with its own agents and one or more `Sprint`s | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
 | `Sprint` | A time-boxed unit of work inside a `Project` - its own branch and sprint details (start/end date, goal), owning its own ticket board | `Create`, `UpdateDetails`, `Remove` |
-| `Ticket` | A unit of work on a sprint's Kanban board (a "user story"), with required `AcceptanceCriteria` alongside its free-text `Description` | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
+| `Ticket` | A unit of work on a sprint's Kanban board (a "user story"), with required `AcceptanceCriteria` alongside its free-text `Description` - may sit in the project's backlog (no `SprintId`) until assigned | `AssignToSprint`, `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
@@ -214,8 +214,28 @@ alongside the real parent FK, `Ticket.SprintId`. This is a deliberate shortcut: 
 lets `IProjectAccessGuard` and the `(ProjectId, BranchName)` git-branch-uniqueness index stay
 keyed on project id exactly as before, without a join through `Sprint` on every check - branch
 names must be unique across a project's one physical sandbox clone regardless of which sprint a
-ticket belongs to. `Ticket.Create(projectId, sprintId, title, description?, acceptanceCriteria)`
-requires both ids non-empty.
+ticket belongs to.
+
+## Backlog
+
+`Ticket.SprintId` is nullable - a ticket can be created directly under a project's **backlog**
+(no sprint yet) via `Ticket.Create(projectId, sprintId: null, title, description?, acceptanceCriteria)`,
+then moved into a sprint later via `Ticket.AssignToSprint(sprintId)`. `Ticket.ProjectId` is still
+always required, even in the backlog - a ticket always belongs to exactly one project, just not
+always to a sprint yet. `AssignToSprint` is one-directional and one-shot: it throws
+`Exceptions.TicketAlreadyAssignedToSprintException` if `SprintId` is already set, so an
+already-scheduled ticket can't be silently reassigned to a different sprint - that's a distinct
+feature this doesn't attempt.
+
+A backlog ticket can still reach `POST /tickets/{id}/start` or the manual "Link Branch" flow
+directly (nothing routes those through "assign to sprint" first); both need a sprint's
+`BaseBranch` to cut a branch from, so `Application.Tickets.TicketService.LinkBranchAsync` and
+`Application.Orchestration.OrchestrationService.RunPipelineAsync` both reject a `SprintId == null`
+ticket up front with `Application.Common.Exceptions.TicketNotAssignedToSprintException` (409)
+rather than failing confusingly on a null sprint lookup deeper in. Every other ticket action
+(`Cancel`, `GetById`, and anything already gated behind `InProgress`/`ForReview`, which a backlog
+ticket can never reach) needs no such guard, since it either doesn't depend on `SprintId` at all
+or is already unreachable without one.
 
 ## Project removal
 

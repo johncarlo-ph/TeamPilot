@@ -31,6 +31,34 @@ public class TicketsController(ITicketService ticketService, IOrchestrationServi
         return Ok(tickets);
     }
 
+    [HttpPost("api/projects/{projectId:guid}/tickets/backlog")]
+    public async Task<ActionResult<TicketDto>> CreateBacklog(Guid projectId, [FromBody] CreateTicketRequest request, CancellationToken cancellationToken)
+    {
+        var ticket = await ticketService.CreateBacklogAsync(projectId, request, cancellationToken);
+        return CreatedAtAction(nameof(GetById), new { id = ticket.Id }, ticket);
+    }
+
+    [HttpGet("api/projects/{projectId:guid}/tickets/backlog")]
+    public async Task<ActionResult<IReadOnlyList<TicketDto>>> ListBacklog(Guid projectId, [FromQuery] TicketStatus? status, CancellationToken cancellationToken)
+    {
+        var tickets = await ticketService.ListBacklogAsync(projectId, status, cancellationToken);
+        return Ok(tickets);
+    }
+
+    [HttpPost("api/tickets/{id:guid}/assign-sprint")]
+    public async Task<ActionResult<TicketDto>> AssignToSprint(Guid id, [FromBody] AssignTicketToSprintRequest request, CancellationToken cancellationToken)
+    {
+        var ticket = await ticketService.AssignToSprintAsync(id, request, cancellationToken);
+        return Ok(ticket);
+    }
+
+    [HttpPost("api/tickets/{id:guid}/move-to-backlog")]
+    public async Task<ActionResult<TicketDto>> MoveToBacklog(Guid id, CancellationToken cancellationToken)
+    {
+        var ticket = await ticketService.MoveToBacklogAsync(id, cancellationToken);
+        return Ok(ticket);
+    }
+
     [HttpGet("api/tickets/{id:guid}")]
     public async Task<ActionResult<TicketDetailDto>> GetById(Guid id, CancellationToken cancellationToken)
     {

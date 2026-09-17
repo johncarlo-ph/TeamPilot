@@ -36,7 +36,8 @@ merges — with role-based access so people only see and act on the projects the
   server-managed sandbox on creation, kept in sync via push/fetch) and its own admin-configurable
   agent workflow (4 system-provisioned pipeline agents by default - Research/Design/Coding/Testing
   - plus one standing **Live Agent**). A project holds one or more `Sprint`s, each with its own
-  branch and sprint details (start/end date, goal) and its own ticket board.
+  branch and sprint details (start/end date, goal) and its own ticket board; a ticket can also sit
+  in the project's backlog, unassigned to any sprint, until it's ready to be scheduled.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the project's configured
   agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate. An
   `InProgress` ticket can also detour to `Blocked` if a pipeline agent asks a clarifying question

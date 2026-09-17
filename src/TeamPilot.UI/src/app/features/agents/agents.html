@@ -1,7 +1,7 @@
 <a [routerLink]="['/projects', projectId, 'sprints']" class="small text-decoration-none">&larr; Back to sprints</a>
 
-<div class="d-flex align-items-center justify-content-between mt-2 mb-2">
-  <h1 class="h3 mb-0">Agent Pipeline</h1>
+<div class="d-flex align-items-center justify-content-between mt-3">
+  <h1 class="h3">Agent Pipeline</h1>
   @if (authService.isAdmin()) {
     <button type="button" class="btn btn-outline-primary btn-sm" (click)="openNewAgentModal()">+ Add custom agent</button>
   }

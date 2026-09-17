@@ -440,6 +440,32 @@ success just filters the sprint out of the local `sprints` signal instead of a f
 all - a project with an active ticket in any sprint just surfaces the 409 as a toast, same as a
 stale sprint-list click would.
 
+**`features/backlog/backlog.ts`** (route `projects/:projectId/backlog`, reached via a **Backlog**
+button in `sprint-list.html`'s header, alongside **Agents**) **lists a project's tickets that have
+no sprint yet** (`TicketDto.sprintId: string | null`, `TicketsService.listBacklog(projectId)`).
+Unlike the board, it's a flat `list-group`, not columns - a backlog ticket can only ever be `ToDo`
+or `Cancelled` (nothing can move it to `InProgress` without a sprint - see
+[docs/application.md](application.md)), so there's no drag-and-drop, and no separate "Cancelled"
+modal the way the board has one. **"New Ticket"** reuses the board's own `CreateTicketForm`
+component wired to `TicketsService.createBacklog` instead of the board's `create`. Each row has an
+inline `<select>` of the project's sprints (`SprintsService.list(projectId)`) plus an **Assign**
+button calling `TicketsService.assignToSprint(ticketId, { sprintId })`; on success the ticket is
+filtered out of the local `tickets` signal (same optimistic-remove pattern as `sprint-list.ts`'s
+own `remove()`) rather than a full `reload()`, since it's no longer part of this list once
+assigned. The `<select>`'s value is read via a template reference variable
+(`#sprintSelect`/`sprintSelect.value`) rather than a `FormGroup` - the same "ad-hoc filter input"
+exception the git-diff branch pickers already use (see "Code style notes" below), since it's one
+plain value read on a button click, not a form with its own validation. Deliberately **not**
+reusing `TicketCard` for these rows: `TicketCard`'s whole card is a Bootstrap `stretched-link`
+(see "Branch names are links..." below), which would sit on top of - and swallow clicks meant for
+- the inline sprint `<select>`/**Assign** button; a plain row with an ordinary `<a>` avoids that
+z-index fight entirely.
+
+`features/ticket-detail/ticket-detail.ts` gained a `backLink()`/`backLabel()` computed pair: a
+ticket with a `sprintId` still links back to its sprint's board (as before), but a backlog ticket
+(`sprintId: null`) has no board to return to, so it links back to `/projects/:projectId/backlog`
+instead, labeled "Back to backlog" rather than "Back to board".
+
 **Branch names are links everywhere except the board card.** There is no backend "branch URL"
 field — `core/utils/git-url.util.ts`'s `buildBranchUrl(remoteUrl, branchName)` strips `.git` and
 appends `/tree/{branch}` (the GitHub/GitLab convention; matches the two providers `IGitService`

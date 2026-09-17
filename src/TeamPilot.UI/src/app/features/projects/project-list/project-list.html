@@ -1,5 +1,5 @@
-<div class="d-flex align-items-center justify-content-between mb-4">
-  <h1 class="h3 mb-0">Projects</h1>
+<div class="d-flex align-items-center justify-content-between mt-3">
+  <h1 class="h3">Projects</h1>
   @if (authService.isAdmin()) {
     <button type="button" class="btn btn-outline-primary" (click)="openCreate()">
       New Project
@@ -53,8 +53,14 @@
                 class="btn btn-outline-primary btn-sm flex-grow-1"
                 [class.disabled]="project.status !== 'Ready'"
                 [attr.aria-disabled]="project.status !== 'Ready' ? 'true' : null"
-                [routerLink]="project.status === 'Ready' ? ['/projects', project.id, 'sprints'] : null"
-                [title]="project.status !== 'Ready' ? 'Available once the repository has finished cloning.' : ''"
+                [routerLink]="
+                  project.status === 'Ready' ? ['/projects', project.id, 'sprints'] : null
+                "
+                [title]="
+                  project.status !== 'Ready'
+                    ? 'Available once the repository has finished cloning.'
+                    : ''
+                "
               >
                 View Sprints
               </a>

@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import {
+  AssignTicketToSprintRequest,
   CancelTicketRequest,
   CreateTicketRequest,
   TicketDetailDto,
@@ -35,6 +36,28 @@ export class TicketsService {
 
   create(sprintId: string, request: CreateTicketRequest): Observable<TicketDto> {
     return this.http.post<TicketDto>(`${this.apiBaseUrl}/sprints/${sprintId}/tickets`, request);
+  }
+
+  /** Every ticket in a project's backlog - not yet assigned to any sprint. */
+  listBacklog(projectId: string, status?: TicketStatus): Observable<TicketDto[]> {
+    let params = new HttpParams();
+    if (status) {
+      params = params.set('status', status);
+    }
+    return this.http.get<TicketDto[]>(`${this.apiBaseUrl}/projects/${projectId}/tickets/backlog`, { params });
+  }
+
+  createBacklog(projectId: string, request: CreateTicketRequest): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/projects/${projectId}/tickets/backlog`, request);
+  }
+
+  assignToSprint(ticketId: string, request: AssignTicketToSprintRequest): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${ticketId}/assign-sprint`, request);
+  }
+
+  /** Moves a To Do ticket with no linked branch back to the project's backlog. */
+  moveToBacklog(id: string): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/tickets/${id}/move-to-backlog`, null);
   }
 
   getById(id: string): Observable<TicketDetailDto> {

@@ -98,6 +98,20 @@ export class TicketDetail {
     return description.slice(0, DESCRIPTION_PREVIEW_LENGTH).trimEnd() + '…';
   });
 
+  // A backlog ticket (no sprintId yet) has no board to go back to - route to the project's
+  // backlog list instead.
+  readonly backLink = computed(() => {
+    const ticket = this.ticket();
+    if (!ticket) {
+      return null;
+    }
+    return ticket.sprintId
+      ? ['/projects', ticket.projectId, 'sprints', ticket.sprintId, 'board']
+      : ['/projects', ticket.projectId, 'backlog'];
+  });
+
+  readonly backLabel = computed(() => (this.ticket()?.sprintId ? 'Back to board' : 'Back to backlog'));
+
   readonly sortedReviews = computed(() => {
     const reviews = this.ticket()?.reviews ?? [];
     return [...reviews].sort(

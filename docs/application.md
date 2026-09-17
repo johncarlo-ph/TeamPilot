@@ -22,7 +22,7 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Users/`](../src/TeamPilot.Application/Users) | Admin user management: roles, enable/disable, project assignment |
 | [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD (identity + Git connection only), project-scoped listing for non-admins |
 | [`Sprints/`](../src/TeamPilot.Application/Sprints) | Sprint CRUD within a project - branch and sprint details (start/end date, goal); owns the ticket-status-count rollup for the sprint list |
-| [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking - a ticket's parent is a `Sprint` |
+| [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking - a ticket's parent is a `Sprint`, or `null` for a project's backlog until assigned |
 | [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 default pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate. Custom-agent creation and pipeline placement live in `Workflow/`, not here |
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
@@ -163,6 +163,23 @@ the base branch's current tip, and push it; the Coding stage pushes after every 
 pushes the base branch — a push failure at that last step surfaces as an error but does not roll
 back the already-committed local approval (a deliberate simplification, not a full saga/outbox
 pattern).
+
+**A project's backlog is just tickets with `SprintId == null`, and creating one still requires
+`Project.Status == Ready`.** `TicketService.CreateBacklogAsync` is `CreateAsync`'s sibling —
+same validation and `ProjectNotReadyException` gate, just `Ticket.Create(projectId, sprintId: null, ...)`
+instead of resolving a sprint first. Requiring `Ready` here (rather than letting a backlog exist
+ahead of a still-`Cloning` project) is deliberate: `Project.Status` only ever moves forward, once,
+from `Cloning` to `Ready`/`Failed` (see "Project clone status" in [docs/domain.md](domain.md)), so
+gating backlog creation the same way `CreateAsync` always has preserves "every ticket that exists
+was created against a `Ready` project" without needing new readiness checks anywhere downstream -
+`LinkBranchAsync`/`RunPipelineAsync` don't re-check it, exactly as before this feature.
+`TicketService.AssignToSprintAsync` moves a backlog ticket into a sprint - it 404s if the given
+sprint doesn't belong to the ticket's own project, and the domain layer itself
+(`Ticket.AssignToSprint`) rejects re-assigning a ticket that already has one (see
+[docs/domain.md](domain.md#backlog)). Both `LinkBranchAsync` and `OrchestrationService.RunPipelineAsync`
+reject a still-backlog ticket up front with `Common.Exceptions.TicketNotAssignedToSprintException`
+(409) - reachable directly via `POST /tickets/{id}/start` or the manual "Link Branch" flow, since
+neither routes through "assign to sprint" first.
 
 **A branch belongs to at most one ticket per project, permanently** — project-wide, not
 sprint-scoped, since every sprint in a project shares the same physical sandbox clone.
@@ -868,7 +885,9 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.InvalidWorkflowOperationException` | A workflow change is invalid given the rest of the project's stage sequence (removing a loop-back target, reordering past one, a malformed reorder request) | `WorkflowService` |
 | `Common.Exceptions.UnresolvedConflictsException` | Approving a ticket while a conflict is still unresolved by its own status, or the live merge attempt finds a conflicting file with no resolution available | `ApprovalGateService.ApproveAsync` |
 | `Common.Exceptions.StaleConflictResolutionException` | The live merge attempt finds a resolved conflict whose `Conflict.BaseTipSha` no longer matches the base branch's current tip - the affected conflicts are reset to `Detected` (`Conflict.MarkStale`) before this is thrown | `ApprovalGateService.ApproveAsync` |
-| `Common.Exceptions.ProjectNotReadyException` | Creating a ticket against a project that's still `Cloning`, or whose clone `Failed` | `TicketService.CreateAsync` |
+| `Common.Exceptions.ProjectNotReadyException` | Creating a ticket against a project that's still `Cloning`, or whose clone `Failed` | `TicketService.CreateAsync`/`CreateBacklogAsync` |
+| `Common.Exceptions.TicketNotAssignedToSprintException` | Starting the pipeline or manually linking a branch on a backlog ticket (`SprintId == null`) | `TicketService.LinkBranchAsync`, `OrchestrationService.RunPipelineAsync` |
+| `Domain.Exceptions.TicketAlreadyAssignedToSprintException` | Assigning a ticket to a sprint when it's already assigned to one | `Ticket.AssignToSprint` (via `TicketService.AssignToSprintAsync`) |
 | `Common.Exceptions.ProjectHasActiveTicketsException` | Removing a project while any of its sprints has a ticket `InProgress` or `ForReview` | `ProjectService.RemoveAsync` |
 | `Common.Exceptions.SprintHasActiveTicketsException` | Removing a sprint while it has a ticket `InProgress` or `ForReview` | `SprintService.RemoveAsync` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |

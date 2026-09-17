@@ -40,6 +40,18 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
         return await query.OrderByDescending(t => t.CreatedAtUtc).ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Ticket>> ListBacklogAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default)
+    {
+        var query = dbContext.Tickets.AsNoTracking().Where(t => t.ProjectId == projectId && t.SprintId == null);
+
+        if (status is not null)
+        {
+            query = query.Where(t => t.Status == status);
+        }
+
+        return await query.OrderByDescending(t => t.CreatedAtUtc).ToListAsync(cancellationToken);
+    }
+
     public async Task AddAsync(Ticket ticket, CancellationToken cancellationToken = default) =>
         await dbContext.Tickets.AddAsync(ticket, cancellationToken);
 
@@ -70,13 +82,13 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
     {
         var counts = await dbContext.Tickets
             .AsNoTracking()
-            .Where(t => sprintIds.Contains(t.SprintId))
+            .Where(t => t.SprintId != null && sprintIds.Contains(t.SprintId.Value))
             .GroupBy(t => new { t.SprintId, t.Status })
             .Select(g => new { g.Key.SprintId, g.Key.Status, Count = g.Count() })
             .ToListAsync(cancellationToken);
 
         return counts
-            .GroupBy(c => c.SprintId)
+            .GroupBy(c => c.SprintId!.Value)
             .ToDictionary(
                 g => g.Key,
                 g => (IReadOnlyDictionary<TicketStatus, int>)g.ToDictionary(c => c.Status, c => c.Count));

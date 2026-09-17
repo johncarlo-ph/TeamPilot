@@ -28,6 +28,7 @@ public class TicketQuestionServiceTests
     private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly TicketQuestionService _sut;
     private readonly Guid _projectId = Guid.NewGuid();
+    private readonly Guid _sprintId = Guid.NewGuid();
 
     public TicketQuestionServiceTests()
     {
@@ -48,7 +49,7 @@ public class TicketQuestionServiceTests
 
     private Ticket CreateBlockedTicket()
     {
-        var ticket = Ticket.Create(_projectId, "Build feature", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(_projectId, _sprintId, "Build feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_projectId, "Coder", AgentRole.Coding));
         ticket.Block();
         return ticket;

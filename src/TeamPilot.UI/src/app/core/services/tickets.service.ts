@@ -15,6 +15,16 @@ export class TicketsService {
   private readonly http = inject(HttpClient);
   private readonly apiBaseUrl = environment.apiBaseUrl;
 
+  listForSprint(sprintId: string, status?: TicketStatus): Observable<TicketDto[]> {
+    let params = new HttpParams();
+    if (status) {
+      params = params.set('status', status);
+    }
+    return this.http.get<TicketDto[]>(`${this.apiBaseUrl}/sprints/${sprintId}/tickets`, { params });
+  }
+
+  /** Every ticket across a project's sprints - used by the Agents page's workflow-lock check,
+   * a project-wide concern rather than one sprint's board. */
   listForProject(projectId: string, status?: TicketStatus): Observable<TicketDto[]> {
     let params = new HttpParams();
     if (status) {
@@ -23,8 +33,8 @@ export class TicketsService {
     return this.http.get<TicketDto[]>(`${this.apiBaseUrl}/projects/${projectId}/tickets`, { params });
   }
 
-  create(projectId: string, request: CreateTicketRequest): Observable<TicketDto> {
-    return this.http.post<TicketDto>(`${this.apiBaseUrl}/projects/${projectId}/tickets`, request);
+  create(sprintId: string, request: CreateTicketRequest): Observable<TicketDto> {
+    return this.http.post<TicketDto>(`${this.apiBaseUrl}/sprints/${sprintId}/tickets`, request);
   }
 
   getById(id: string): Observable<TicketDetailDto> {

@@ -13,6 +13,7 @@ using TeamPilot.Application.Instructions;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration.Dtos;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.TicketAgentEvents;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
@@ -63,6 +64,7 @@ public sealed class OrchestrationService(
     IAgentRepository agentRepository,
     IWorkflowService workflowService,
     IProjectRepository projectRepository,
+    ISprintRepository sprintRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
     ILlmConnector llmConnector,
@@ -696,6 +698,9 @@ public sealed class OrchestrationService(
 
     private async Task LinkBranchAsync(Ticket ticket, Project project, CancellationToken cancellationToken)
     {
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
         var branchName = GenerateBranchName(ticket);
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
@@ -710,7 +715,7 @@ public sealed class OrchestrationService(
             // Fetch first so the new branch is cut from the remote's current tip of the base
             // branch, not a possibly-stale local one.
             await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
-            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
+            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, sprint.BaseBranch, cancellationToken);
             await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
         }
 

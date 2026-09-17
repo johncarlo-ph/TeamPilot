@@ -11,6 +11,7 @@ using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
 using TeamPilot.Application.Reviews.Dtos;
 using TeamPilot.Application.Reviews.Validators;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
@@ -22,6 +23,7 @@ public class ApprovalGateServiceTests
 {
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<ISprintRepository> _sprintRepository = new();
     private readonly Mock<IReviewRepository> _reviewRepository = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<IGitCredentialProtector> _credentialProtector = new();
@@ -33,15 +35,19 @@ public class ApprovalGateServiceTests
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
     private readonly ApprovalGateService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token");
+    private readonly Sprint _sprint;
 
     public ApprovalGateServiceTests()
     {
+        _sprint = Sprint.Create(_project.Id, "Sprint 1", "develop");
+
         _unitOfWork
             .Setup(u => u.ExecuteInTransactionAsync(It.IsAny<Func<Task>>(), It.IsAny<CancellationToken>()))
             .Returns((Func<Task> action, CancellationToken _) => action());
 
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _sprintRepository.Setup(r => r.GetByIdAsync(_sprint.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_sprint);
         _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
 
         // Default to Developer so the existing Approve-path tests exercise the happy path;
@@ -59,6 +65,7 @@ public class ApprovalGateServiceTests
         _sut = new ApprovalGateService(
             _ticketRepository.Object,
             _projectRepository.Object,
+            _sprintRepository.Object,
             _reviewRepository.Object,
             _gitService.Object,
             _credentialProtector.Object,
@@ -75,7 +82,7 @@ public class ApprovalGateServiceTests
 
     private Ticket CreateTicketInReview(string branchName)
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.LinkBranch(branchName);
         ticket.MoveToReview();
@@ -138,13 +145,13 @@ public class ApprovalGateServiceTests
             g => g.MergeWithResolutionsAsync(
                 _project.RepositoryPath,
                 "feature/add-feature",
-                _project.BaseBranch,
+                _sprint.BaseBranch,
                 It.Is<IReadOnlyDictionary<string, GitConflictResolution>>(d => d.Count == 0),
                 "Alice",
                 It.IsAny<CancellationToken>()),
             Times.Once);
         _gitService.Verify(
-            g => g.PushAsync(_project.RepositoryPath, _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
+            g => g.PushAsync(_project.RepositoryPath, _sprint.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
             Times.Once);
         _orchestrationService.Verify(o => o.RunPipelineAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -162,7 +169,7 @@ public class ApprovalGateServiceTests
         Assert.Equal(TicketStatus.Cancelled, result.Status);
         Assert.Null(ticket.BranchName);
         _gitService.Verify(
-            g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/add-feature", _project.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
+            g => g.DeleteBranchAsync(_project.RepositoryPath, "feature/add-feature", _sprint.BaseBranch, "plaintext-token", It.IsAny<CancellationToken>()),
             Times.Once);
         _gitService.Verify(
             g => g.MergeWithResolutionsAsync(
@@ -174,7 +181,7 @@ public class ApprovalGateServiceTests
     [Fact]
     public async Task SubmitReviewAsync_WhenDecisionIsRejectWithNoLinkedBranch_CancelsTicketWithoutTouchingGit()
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
@@ -271,7 +278,7 @@ public class ApprovalGateServiceTests
             g => g.MergeWithResolutionsAsync(
                 _project.RepositoryPath,
                 "feature/add-feature",
-                _project.BaseBranch,
+                _sprint.BaseBranch,
                 It.Is<IReadOnlyDictionary<string, GitConflictResolution>>(d => d.Count == 1 && d["src/File.cs"].ResolvedContent == "final merged content"),
                 "Alice",
                 It.IsAny<CancellationToken>()),
@@ -334,7 +341,7 @@ public class ApprovalGateServiceTests
     [Fact]
     public async Task SubmitReviewAsync_WhenApprovingWithoutLinkedBranch_ThrowsInvalidOperationException()
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
 

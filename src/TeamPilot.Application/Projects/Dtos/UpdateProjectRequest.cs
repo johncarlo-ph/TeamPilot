@@ -5,8 +5,4 @@ namespace TeamPilot.Application.Projects.Dtos;
 public sealed record UpdateProjectRequest(
     string Name,
     string? Description,
-    string? AccessToken,
-    string BaseBranch,
-    DateTime? SprintStartDate = null,
-    DateTime? SprintEndDate = null,
-    string? SprintGoal = null);
+    string? AccessToken);

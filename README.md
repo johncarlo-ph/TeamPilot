@@ -33,22 +33,24 @@ merges — with role-based access so people only see and act on the projects the
 
 **Scope (current).**
 - Multi-project support: each `Project` connects to its own remote Git repository (cloned into a
-  server-managed sandbox on creation, kept in sync via push/fetch), its own admin-configurable
+  server-managed sandbox on creation, kept in sync via push/fetch) and its own admin-configurable
   agent workflow (4 system-provisioned pipeline agents by default - Research/Design/Coding/Testing
-  - plus one standing **Live Agent**), and ticket board.
+  - plus one standing **Live Agent**). A project holds one or more `Sprint`s, each with its own
+  branch and sprint details (start/end date, goal) and its own ticket board.
 - Ticket lifecycle: `ToDo → InProgress → ForReview → Done`, driven by the project's configured
   agent workflow, Git commits, merge-conflict detection/resolution, and an approval gate. An
   `InProgress` ticket can also detour to `Blocked` if a pipeline agent asks a clarifying question
   or a known Git/LLM failure occurs mid-run - a human answers the question (or retries the
   failure) on the ticket detail page to resume the pipeline.
 - Live Agent: a per-project chat you can ask about the project - questions, code explanations,
-  business rules - with bounded, read-only access to the project's repository and its own
-  tickets. It can draft a new ticket for you to review, but never creates one without your
-  explicit approval in the chat.
+  business rules - with bounded, read-only access to the project's repository and its tickets
+  across every sprint. It can draft a new ticket for you to review, but never creates one without
+  your explicit approval in the chat.
 - Identity: sign-in via Google or Microsoft only (no local passwords), JWT-based sessions with
   rotating refresh tokens, and three fixed roles (Admin, Analyst, Developer).
-- Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the ticket board (with the Live Agent
-  chat alongside it), ticket detail, and admin surfaces — see [docs/frontend.md](docs/frontend.md).
+- Frontend: an Angular 21 SPA (`TeamPilot.UI`) covering the project list, sprint list, ticket
+  board (with the Live Agent chat alongside it), ticket detail, and admin surfaces — see
+  [docs/frontend.md](docs/frontend.md).
 
 **Out of scope (for now).** A real CI/CD runner, multi-provider LLM support beyond Claude, and
 asymmetric JWT signing (see each module's "Future considerations" for the reasoning behind these

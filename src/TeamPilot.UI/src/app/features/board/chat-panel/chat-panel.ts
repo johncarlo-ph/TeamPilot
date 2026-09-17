@@ -17,6 +17,11 @@ export class ChatPanel {
   private readonly fb = inject(FormBuilder);
 
   readonly projectId = input.required<string>();
+  // The sprint whose board this chat panel is rendered alongside - used only to tell the server
+  // which sprint a drafted-and-approved ticket should be created in (see approveTicket). The
+  // conversation itself stays project-scoped (see ConversationDto.projectId): Live Agent chat
+  // sessions aren't tied to one sprint, only where an approved draft lands is.
+  readonly sprintId = input.required<string>();
   // Layout state (collapsed to a thin strip so the board can expand) lives in the parent Board,
   // not here - collapsing is a board-layout concern, and this component already takes its data
   // scope (projectId) as an input the same way.
@@ -282,7 +287,12 @@ export class ChatPanel {
 
     this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
     this.chatService
-      .approveTicket(this.projectId(), conversationId, message.id, { title, description: description || null, acceptanceCriteria })
+      .approveTicket(this.projectId(), conversationId, message.id, {
+        sprintId: this.sprintId(),
+        title,
+        description: description || null,
+        acceptanceCriteria,
+      })
       .subscribe({
         next: (updated) => {
           this.notifications.success('Ticket created.');

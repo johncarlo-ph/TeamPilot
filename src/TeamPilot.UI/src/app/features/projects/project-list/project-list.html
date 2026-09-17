@@ -25,21 +25,6 @@
               <code>{{ project.remoteUrl }}</code>
             </p>
 
-            @if (project.sprintStartDate || project.sprintEndDate || project.sprintGoal) {
-              <div class="small text-body-secondary mb-3">
-                @if (project.sprintStartDate || project.sprintEndDate) {
-                  <div>
-                    {{ project.sprintStartDate ? (project.sprintStartDate | date: 'mediumDate') : '?' }}
-                    &ndash;
-                    {{ project.sprintEndDate ? (project.sprintEndDate | date: 'mediumDate') : '?' }}
-                  </div>
-                }
-                @if (project.sprintGoal) {
-                  <div class="fst-italic">{{ project.sprintGoal }}</div>
-                }
-              </div>
-            }
-
             @if (project.status === 'Cloning') {
               <div class="mb-3" role="status">
                 <div class="small text-body-secondary mb-1">
@@ -63,26 +48,15 @@
               </div>
             }
 
-            <div class="d-flex flex-wrap gap-1 mb-3">
-              @for (summary of statusSummaries(project); track summary.status) {
-                <span
-                  class="badge rounded-pill status-badge badge-outline"
-                  [class]="summary.badgeClass"
-                  [title]="summary.title + ': ' + summary.count"
-                >
-                  <span aria-hidden="true">{{ summary.icon }}</span> {{ summary.count }}
-                </span>
-              }
-            </div>
             <div class="d-flex gap-2">
               <a
                 class="btn btn-outline-primary btn-sm flex-grow-1"
                 [class.disabled]="project.status !== 'Ready'"
                 [attr.aria-disabled]="project.status !== 'Ready' ? 'true' : null"
-                [routerLink]="project.status === 'Ready' ? ['/projects', project.id, 'board'] : null"
+                [routerLink]="project.status === 'Ready' ? ['/projects', project.id, 'sprints'] : null"
                 [title]="project.status !== 'Ready' ? 'Available once the repository has finished cloning.' : ''"
               >
-                Open Board
+                View Sprints
               </a>
               @if (authService.isAdmin()) {
                 <button
@@ -96,8 +70,7 @@
                 <button
                   type="button"
                   class="btn btn-outline-danger btn-sm"
-                  [disabled]="!canRemove(project) || isRemoving(project.id)"
-                  [title]="!canRemove(project) ? 'Cannot remove while a ticket is In Progress or For Review.' : ''"
+                  [disabled]="isRemoving(project.id)"
                   (click)="remove(project)"
                 >
                   {{ isRemoving(project.id) ? 'Removing...' : 'Remove' }}

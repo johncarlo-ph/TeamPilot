@@ -7,12 +7,7 @@ public sealed record ProjectDto(
     string Name,
     string Description,
     string RemoteUrl,
-    string BaseBranch,
     ProjectStatus Status,
     string? CloneFailureReason,
     DateTime CreatedAtUtc,
-    DateTime? UpdatedAtUtc,
-    TicketStatusCountsDto TicketStatusCounts,
-    DateTime? SprintStartDate,
-    DateTime? SprintEndDate,
-    string? SprintGoal);
+    DateTime? UpdatedAtUtc);

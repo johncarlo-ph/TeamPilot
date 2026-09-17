@@ -6,6 +6,7 @@ using TeamPilot.Application.Common.Extensions;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
@@ -15,6 +16,7 @@ namespace TeamPilot.Application.Tickets;
 public sealed class TicketService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
+    ISprintRepository sprintRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
     IProjectAccessGuard projectAccessGuard,
@@ -28,20 +30,25 @@ public sealed class TicketService(
 {
     private void PublishTicketChanged(Ticket ticket) =>
         eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
-    public async Task<TicketDto> CreateAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default)
+
+    public async Task<TicketDto> CreateAsync(Guid sprintId, CreateTicketRequest request, CancellationToken cancellationToken = default)
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
-        await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        var project = await projectRepository.GetByIdAsync(projectId, cancellationToken)
-            ?? throw new NotFoundException(nameof(Project), projectId);
+        var sprint = await sprintRepository.GetByIdAsync(sprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), sprintId);
+
+        await projectAccessGuard.EnsureAccessAsync(sprint.ProjectId, cancellationToken);
+
+        var project = await projectRepository.GetByIdAsync(sprint.ProjectId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Project), sprint.ProjectId);
 
         if (project.Status != ProjectStatus.Ready)
         {
             throw new ProjectNotReadyException(project.Name);
         }
 
-        var ticket = Ticket.Create(projectId, request.Title, request.Description, request.AcceptanceCriteria);
+        var ticket = Ticket.Create(sprint.ProjectId, sprintId, request.Title, request.Description, request.AcceptanceCriteria);
         await ticketRepository.AddAsync(ticket, cancellationToken);
 
         await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created.", cancellationToken);
@@ -61,11 +68,22 @@ public sealed class TicketService(
         return TicketMappings.ToDetailDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
-    public async Task<IReadOnlyList<TicketDto>> ListAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<TicketDto>> ListAsync(Guid sprintId, TicketStatus? status, CancellationToken cancellationToken = default)
+    {
+        var sprint = await sprintRepository.GetByIdAsync(sprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), sprintId);
+
+        await projectAccessGuard.EnsureAccessAsync(sprint.ProjectId, cancellationToken);
+
+        var tickets = await ticketRepository.ListAsync(sprintId, status, cancellationToken);
+        return tickets.Select(t => TicketMappings.ToDto(t, pipelineRunTracker.IsRunning(t.Id))).ToList();
+    }
+
+    public async Task<IReadOnlyList<TicketDto>> ListByProjectAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default)
     {
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
-        var tickets = await ticketRepository.ListAsync(projectId, status, cancellationToken);
+        var tickets = await ticketRepository.ListByProjectAsync(projectId, status, cancellationToken);
         return tickets.Select(t => TicketMappings.ToDto(t, pipelineRunTracker.IsRunning(t.Id))).ToList();
     }
 
@@ -162,8 +180,11 @@ public sealed class TicketService(
         var branchName = ticket.BranchName!;
         ticket.UnlinkBranch();
 
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
-        await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
+        await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, sprint.BaseBranch, accessToken, cancellationToken);
 
         await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for ticket '{ticket.Title}'.", cancellationToken);
     }
@@ -180,6 +201,9 @@ public sealed class TicketService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
         var otherTicketWithBranch = await ticketRepository.GetByBranchNameAsync(ticket.ProjectId, branchName, cancellationToken);
         if (otherTicketWithBranch is not null && otherTicketWithBranch.Id != ticket.Id)
         {
@@ -193,7 +217,7 @@ public sealed class TicketService(
             // Fetch first so the new branch is cut from the remote's current tip of the base
             // branch, not a possibly-stale local one.
             await gitService.FetchAsync(project.RepositoryPath, accessToken, cancellationToken);
-            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, cancellationToken);
+            await gitService.EnsureBranchAsync(project.RepositoryPath, branchName, sprint.BaseBranch, cancellationToken);
             await gitService.PushAsync(project.RepositoryPath, branchName, accessToken, cancellationToken);
         }
 

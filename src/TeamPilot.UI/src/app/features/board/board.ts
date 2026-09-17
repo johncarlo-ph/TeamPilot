@@ -6,9 +6,10 @@ import { Subject, distinctUntilChanged, filter, interval, map, merge, startWith,
 import { TicketsService } from '../../core/services/tickets.service';
 import { ReviewsService } from '../../core/services/reviews.service';
 import { ProjectsService } from '../../core/services/projects.service';
+import { SprintsService } from '../../core/services/sprints.service';
 import { ProjectEventsService } from '../../core/services/project-events.service';
 import { NotificationService } from '../../core/notification/notification.service';
-import { CreateTicketRequest, ProjectDto, ReviewDecision, TicketDto, TicketStatus } from '../../core/models';
+import { CreateTicketRequest, ProjectDto, ReviewDecision, SprintDto, TicketDto, TicketStatus } from '../../core/models';
 import { TicketCard } from './ticket-card/ticket-card';
 import { CreateTicketForm } from './create-ticket-form/create-ticket-form';
 import { ReviewForm } from '../ticket-detail/review-form/review-form';
@@ -60,6 +61,7 @@ export class Board {
   private readonly ticketsService = inject(TicketsService);
   private readonly reviewsService = inject(ReviewsService);
   private readonly projectsService = inject(ProjectsService);
+  private readonly sprintsService = inject(SprintsService);
   private readonly projectEventsService = inject(ProjectEventsService);
   private readonly notifications = inject(NotificationService);
 
@@ -68,6 +70,7 @@ export class Board {
 
   readonly tickets = signal<TicketDto[]>([]);
   readonly project = signal<ProjectDto | null>(null);
+  readonly sprint = signal<SprintDto | null>(null);
   readonly loading = signal(true);
 
   readonly chatCollapsed = signal(false);
@@ -117,19 +120,23 @@ export class Board {
     return this.route.snapshot.paramMap.get('projectId')!;
   }
 
+  protected get sprintId(): string {
+    return this.route.snapshot.paramMap.get('sprintId')!;
+  }
+
   constructor() {
     this.route.paramMap
       .pipe(
-        map((params) => params.get('projectId')!),
+        map((params) => params.get('sprintId')!),
         distinctUntilChanged(),
-        switchMap((projectId) =>
+        switchMap((sprintId) =>
           merge(
-            this.projectEventsService.stream(projectId).pipe(filter((e) => e.type === 'TicketChanged')),
+            this.projectEventsService.stream(this.projectId).pipe(filter((e) => e.type === 'TicketChanged')),
             interval(SAFETY_POLL_INTERVAL_MS),
             this.refreshTrigger$
           ).pipe(
             startWith(0),
-            switchMap(() => this.ticketsService.listForProject(projectId))
+            switchMap(() => this.ticketsService.listForSprint(sprintId))
           )
         ),
         takeUntilDestroyed()
@@ -150,6 +157,15 @@ export class Board {
         takeUntilDestroyed()
       )
       .subscribe((project) => this.project.set(project));
+
+    this.route.paramMap
+      .pipe(
+        map((params) => params.get('sprintId')!),
+        distinctUntilChanged(),
+        switchMap((sprintId) => this.sprintsService.getById(sprintId)),
+        takeUntilDestroyed()
+      )
+      .subscribe((sprint) => this.sprint.set(sprint));
   }
 
   columnIdFor(status: TicketStatus): string {
@@ -162,7 +178,7 @@ export class Board {
 
   createTicket(request: CreateTicketRequest): void {
     this.creatingTicket.set(true);
-    this.ticketsService.create(this.projectId, request).subscribe({
+    this.ticketsService.create(this.sprintId, request).subscribe({
       next: (ticket) => {
         this.creatingTicket.set(false);
         this.tickets.update((tickets) => [...tickets, ticket]);

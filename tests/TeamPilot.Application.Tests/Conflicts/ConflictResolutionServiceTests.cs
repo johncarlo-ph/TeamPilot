@@ -7,6 +7,7 @@ using TeamPilot.Application.Conflicts.Validators;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
@@ -18,6 +19,7 @@ public class ConflictResolutionServiceTests
 {
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<ISprintRepository> _sprintRepository = new();
     private readonly Mock<IConflictRepository> _conflictRepository = new();
     private readonly Mock<IGitService> _gitService = new();
     private readonly Mock<ILlmConnector> _llmConnector = new();
@@ -25,15 +27,19 @@ public class ConflictResolutionServiceTests
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly ConflictResolutionService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "develop");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token");
+    private readonly Sprint _sprint;
 
     public ConflictResolutionServiceTests()
     {
+        _sprint = Sprint.Create(_project.Id, "Sprint 1", "develop");
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _sprintRepository.Setup(r => r.GetByIdAsync(_sprint.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_sprint);
 
         _sut = new ConflictResolutionService(
             _ticketRepository.Object,
             _projectRepository.Object,
+            _sprintRepository.Object,
             _conflictRepository.Object,
             _gitService.Object,
             _llmConnector.Object,
@@ -46,7 +52,7 @@ public class ConflictResolutionServiceTests
 
     private Ticket CreateTicket()
     {
-        var ticket = Ticket.Create(_project.Id, "Build feature", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", "desc", "Acceptance criteria");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         return ticket;
     }
@@ -61,7 +67,7 @@ public class ConflictResolutionServiceTests
         // hardcoded "main" - a project whose base branch isn't literally "main" would otherwise
         // have every conflict check run against the wrong (or a nonexistent) branch.
         _gitService
-            .Setup(g => g.DetectMergeConflictsAsync(_project.RepositoryPath, "feature/build-feature", _project.BaseBranch, It.IsAny<CancellationToken>()))
+            .Setup(g => g.DetectMergeConflictsAsync(_project.RepositoryPath, "feature/build-feature", _sprint.BaseBranch, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitMergeConflictResult(true, [new GitConflictingFile("src/App.cs", "<<<<<<<")], "sha-base-tip"));
 
         var result = await _sut.DetectConflictsAsync(ticket.Id);

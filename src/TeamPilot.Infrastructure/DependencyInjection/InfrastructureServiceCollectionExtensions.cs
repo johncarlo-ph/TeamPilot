@@ -15,6 +15,7 @@ using TeamPilot.Application.Llm;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.TicketAgentEvents;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
@@ -41,6 +42,7 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IProjectRepository, ProjectRepository>();
+        services.AddScoped<ISprintRepository, SprintRepository>();
         services.AddScoped<ITicketRepository, TicketRepository>();
         services.AddScoped<IAgentRepository, AgentRepository>();
         services.AddScoped<IWorkflowStageRepository, WorkflowStageRepository>();

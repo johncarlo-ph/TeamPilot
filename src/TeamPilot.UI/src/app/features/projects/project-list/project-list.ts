@@ -1,5 +1,4 @@
 import { Component, DestroyRef, inject, signal } from '@angular/core';
-import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
 import { AuthService } from '../../../core/services/auth.service';
@@ -10,32 +9,13 @@ import {
   CloneProgressPayload,
   CreateProjectRequest,
   ProjectDto,
-  TicketStatusCountsDto,
   UpdateProjectRequest,
 } from '../../../core/models';
 import { ProjectForm } from '../project-form/project-form';
 
-// Same 5 board-relevant statuses/icons as BOARD_COLUMNS (features/board/board.ts), but outlined
-// rather than solid-filled like app-status-badge's ticket badges - a solid fill (esp. the warning
-// yellow) was hard to read at this small badge size, so these use badge-outline-* (see
-// styles.scss) instead of text-bg-*. Kept as its own array rather than reusing either component
-// directly, since this renders a count, not a ticket's own status label.
-const STATUS_SUMMARIES: {
-  status: keyof TicketStatusCountsDto;
-  title: string;
-  icon: string;
-  badgeClass: string;
-}[] = [
-  { status: 'toDo', title: 'To Do', icon: '⏳', badgeClass: 'badge-outline-todo' },
-  { status: 'inProgress', title: 'In Progress', icon: '🔧', badgeClass: 'badge-outline-inprogress' },
-  { status: 'blocked', title: 'Blocked', icon: '🚫', badgeClass: 'badge-outline-blocked' },
-  { status: 'forReview', title: 'For Review', icon: '👀', badgeClass: 'badge-outline-forreview' },
-  { status: 'done', title: 'Done', icon: '✅', badgeClass: 'badge-outline-done' },
-];
-
 @Component({
   selector: 'app-project-list',
-  imports: [RouterLink, DatePipe, ProjectForm],
+  imports: [RouterLink, ProjectForm],
   templateUrl: './project-list.html',
 })
 export class ProjectList {
@@ -163,13 +143,6 @@ export class ProjectList {
     return this.removingIds().has(projectId);
   }
 
-  /** A project can only be removed while none of its tickets are actively running or awaiting
-   * approval - mirrors the server-side check in `ProjectService.RemoveAsync`, so the button is
-   * disabled up front instead of only failing after the click. */
-  canRemove(project: ProjectDto): boolean {
-    return project.ticketStatusCounts.inProgress === 0 && project.ticketStatusCounts.forReview === 0;
-  }
-
   remove(project: ProjectDto): void {
     if (!confirm(`Remove project "${project.name}"? This only hides it - its Git repository and branches are untouched.`)) {
       return;
@@ -188,13 +161,6 @@ export class ProjectList {
           return next;
         }),
     });
-  }
-
-  statusSummaries(project: ProjectDto) {
-    return STATUS_SUMMARIES.map((summary) => ({
-      ...summary,
-      count: project.ticketStatusCounts[summary.status],
-    }));
   }
 
   save(request: CreateProjectRequest | UpdateProjectRequest): void {

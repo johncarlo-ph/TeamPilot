@@ -191,7 +191,7 @@ a dedicated modal. `board.ts`'s `ticketsByStatus` grouping filters `Cancelled` t
 entirely, so a cancelled ticket simply disappears from the board's kanban columns. It's not lost,
 though: a **Cancelled Tickets** button in the board header
 (`features/board/cancelled-tickets-modal`) opens a modal that fetches
-`listForProject(projectId, 'Cancelled')` (the same `TicketsService` method the board itself uses,
+`listForSprint(sprintId, 'Cancelled')` (the same `TicketsService` method the board itself uses,
 just with the API's existing `status` query filter) on open and lists each cancelled ticket's
 title, last-updated time, and cancellation reason (if any), linking through to its detail page.
 
@@ -272,9 +272,12 @@ different mutations, not one.
 `board.html` wraps both in one `.row g-3` (`.col-12 col-lg-4` / `.col-12 col-lg-8`), the same
 Bootstrap grid split `ticket-detail.html` already used for its main-content/side-panel layout -
 no new layout primitive introduced. `features/board/chat-panel` (`ChatPanel`) owns its own state
-entirely: it takes only `projectId` as input, and loads the project's list of Live Agent chat
-sessions itself via `LiveAgentChatService.listConversations` on init (an `effect()` reacting to
-the `projectId` signal input). A project can have any number of sessions - anyone with project
+entirely: it takes `projectId` as input (the conversation itself stays project-scoped - see
+[docs/application.md](application.md#liveagentchat--the-live-agent-chat)) and loads the project's
+list of Live Agent chat sessions itself via `LiveAgentChatService.listConversations` on init (an
+`effect()` reacting to the `projectId` signal input). It also takes a `sprintId` input - used only
+when approving a drafted ticket (see below), since the sprint whose board this panel happens to be
+rendered alongside is where an approved draft lands. A project can have any number of sessions - anyone with project
 access can start their own via **+ New chat** (`createConversation`, with a blank title so the
 backend falls back to `"New chat"`), and everyone with project access sees the same list and can
 select any session from it (a native `<select>` in the header, each option showing the session's
@@ -295,8 +298,10 @@ it with the sender's name (`ChatMessageDto.senderName`, falling back to `'You'` 
 missing) for a user message, or `'Live Agent'` for an assistant one. An assistant message
 carrying `proposedTicketTitle`/`proposedTicketDescription` renders as an approval card with
 **"Create ticket"** and **"Reject"** buttons side by side in the chat thread - clicking either
-calls `LiveAgentChatService.approveTicket(projectId, conversationId, messageId, { title, description })`/
-`rejectTicket(projectId, conversationId, messageId)`, which returns the updated `ChatMessageDto`
+calls `LiveAgentChatService.approveTicket(projectId, conversationId, messageId, { sprintId, title, description })`/
+`rejectTicket(projectId, conversationId, messageId)` - `sprintId` is always the panel's own
+`sprintId()` input, sent automatically with no picker UI, since the panel is only ever shown
+alongside one sprint's board - which returns the updated `ChatMessageDto`
 (now carrying `createdTicketId` or `ticketRejected: true`); `ChatPanel` splices that updated
 message back into its `messages` signal in place, which is what swaps the button pair for a
 "Ticket created" or "Ticket rejected" badge. Because that decision is persisted on the message
@@ -352,10 +357,13 @@ a short conversation and cut a long one off early regardless of viewport size. `
 keeps `min-height: 0` so the message list (`flex-grow-1 overflow-auto`) actually scrolls within
 that fixed card height instead of growing past it, a common flexbox-scroll-container gotcha.
 
-**The board's project name, column colors/icons, and column set are two different concerns kept
-separate on purpose.** The header shows `project().name` (loaded the same way `ticket-detail`
-loads its project — a separate subscription alongside the tickets poll) so a board reached from a
-bookmark or a shared link is unambiguous about which project it belongs to; `BOARD_COLUMNS` in
+**The board's sprint name, column colors/icons, and column set are two different concerns kept
+separate on purpose.** The header shows `sprint().name` (the board's actual title now — a sprint
+is what owns the ticket board) with a back-link to `project().name`'s sprint list; both are loaded
+the same way `ticket-detail` loads its project — separate subscriptions alongside the tickets poll,
+one keyed off the route's `projectId`, one off `sprintId` — so a board reached from a bookmark or a
+shared link (`/projects/:projectId/sprints/:sprintId/board`) is unambiguous about which project
+*and* sprint it belongs to. `BOARD_COLUMNS` in
 `board.ts` carries a per-status `icon` and `accentClass` (⏳/🔧/🚫/👀/✅, one accent color each)
 purely for visual scannability of the 5 pipeline stages/states. `status-badge.ts`'s ticket-status
 badge colors (`ToDo`/`InProgress`/`Blocked`/`ForReview`/`Done`, used in ticket detail, reviews,
@@ -381,18 +389,21 @@ picks black text for a filled `.btn-danger` instead of white. `styles.scss` over
 raising `$min-contrast-ratio` globally, which would also affect `$warning`/`$board-forreview-color`
 button and badge text this codebase already relies on.
 
-**The project list's per-status count badges reuse the board's icon/color mapping, computed
-server-side, not fetched per project.** `ProjectDto.ticketStatusCounts` (`TicketStatusCountsDto`
-- one int per board-relevant status, `Cancelled` excluded like `BOARD_COLUMNS`) is populated by
-`ProjectService` from a single grouped `ITicketRepository.GetStatusCountsByProjectAsync` query
-across every listed project, so `features/projects/project-list` renders its badge row straight
-off the existing `ProjectsService.list()` response - no extra per-card request, consistent with
-this codebase's "avoid overfetching" convention (see `TicketRepository` in
-[docs/infrastructure.md](infrastructure.md) and `ProjectService` in
-[docs/application.md](application.md)). `project-list.ts`'s `STATUS_SUMMARIES` constant mirrors
+**The sprint list's per-status count badges reuse the board's icon/color mapping, computed
+server-side, not fetched per sprint - the project list carries no ticket counts at all now.**
+`SprintDto.ticketStatusCounts` (`TicketStatusCountsDto` - one int per board-relevant status,
+`Cancelled` excluded like `BOARD_COLUMNS`) is populated by `SprintService` from a single grouped
+`ITicketRepository.GetStatusCountsBySprintAsync` query across every listed sprint, so
+`features/sprints/sprint-list` renders its badge row straight off the existing
+`SprintsService.list(projectId)` response - no extra per-card request, consistent with this
+codebase's "avoid overfetching" convention (see `TicketRepository` in
+[docs/infrastructure.md](infrastructure.md) and `SprintService` in
+[docs/application.md](application.md)). `sprint-list.ts`'s `STATUS_SUMMARIES` constant mirrors
 `BOARD_COLUMNS`' icon per status and `status-badge.ts`'s badge-color mapping, kept as its own
 small array rather than reusing either component directly, since it renders a count badge, not a
-ticket's own status label.
+ticket's own status label. `features/projects/project-list` dropped this badge row entirely along
+with the sprint-date fields it used to show, since a project's tickets are now spread across
+however many sprints it has - its card is just name/description/remote URL/clone status.
 
 **A `Cloning` project's card shows a live progress bar, driven by its own SSE subscription - not
 a poll.** `project-list.ts` opens `projectEventsService.stream(project.id)` for every project whose
@@ -407,23 +418,27 @@ by project id, not folded into `ProjectDto`, since `ProjectDto` has no byte/obje
 never needs them once a clone finishes. The bar is indeterminate (Bootstrap's
 `progress-bar-striped`/`progress-bar-animated`) until Git reports a nonzero `totalObjects` - a
 repo's total object count isn't known until enough of the clone negotiation has happened - and a
-`Failed` card shows `cloneFailureReason` in an inline alert instead. "Open Board" is disabled
+`Failed` card shows `cloneFailureReason` in an inline alert instead. "View Sprints" is disabled
 (`[class.disabled]`, `routerLink` set to `null`) for any project that isn't `Ready`, since a
-ticket-creation attempt against a `Cloning`/`Failed` project's board would just fail with
+ticket-creation attempt under a `Cloning`/`Failed` project's sprint would just fail with
 `ProjectNotReadyException` (see [docs/application.md](application.md)).
 
-**Remove is disabled up front, not just rejected after the click.** Each Admin-only card in
-`project-list.html` has a **Remove** button alongside **Edit**, gated by `canRemove(project)` -
-`true` only when `project.ticketStatusCounts.inProgress === 0 && ...forReview === 0`, reusing the
-same counts already on `ProjectDto` rather than a separate request. This mirrors, rather than
-replaces, the server-side check in `ProjectService.RemoveAsync`
-([docs/application.md](application.md)): the button being enabled is just a UX shortcut, since the
-counts backing it can go stale between renders (another user starting a ticket, an SSE-driven
-board update elsewhere) - the 409 the interceptor would surface from a stale click is still the
-real guard. `remove()` confirms via the browser's native `confirm()` (same pattern as
-`instruction-templates.ts`'s `delete()`), tracks in-flight removals in a `removingIds` signal so
-the clicked card's button reads "Removing..." and stays disabled, and on success just filters the
-project out of the local `projects` signal instead of a full `reload()`.
+**Remove is disabled up front on the sprint list, not just rejected after the click - the project
+list no longer has this pre-check.** Each Admin-only card in `sprint-list.html` has a **Remove**
+button alongside **Edit**, gated by `canRemove(sprint)` - `true` only when
+`sprint.ticketStatusCounts.inProgress === 0 && ...forReview === 0`, reusing the same counts already
+on `SprintDto` rather than a separate request. This mirrors, rather than replaces, the server-side
+check in `SprintService.RemoveAsync` ([docs/application.md](application.md)): the button being
+enabled is just a UX shortcut, since the counts backing it can go stale between renders (another
+user starting a ticket, an SSE-driven board update elsewhere) - the 409 the interceptor would
+surface from a stale click is still the real guard. `remove()` confirms via the browser's native
+`confirm()` (same pattern as `instruction-templates.ts`'s `delete()`), tracks in-flight removals in
+a `removingIds` signal so the clicked card's button reads "Removing..." and stays disabled, and on
+success just filters the sprint out of the local `sprints` signal instead of a full `reload()`.
+`project-list.ts`'s own `remove()` follows the same confirm/track/filter shape, but since
+`ProjectDto` no longer carries ticket counts, its **Remove** button has no client-side pre-check at
+all - a project with an active ticket in any sprint just surfaces the 409 as a toast, same as a
+stale sprint-list click would.
 
 **Branch names are links everywhere except the board card.** There is no backend "branch URL"
 field — `core/utils/git-url.util.ts`'s `buildBranchUrl(remoteUrl, branchName)` strips `.git` and
@@ -569,21 +584,23 @@ follow-up work, not fixed as part of this frontend change.
 - Forms are typed Reactive Forms (`FormBuilder.nonNullable.group({...})`) everywhere a form
   exists — no template-driven forms except a couple of ad-hoc filter inputs (`FormsModule`
   `[(ngModel)]`) where a full `FormGroup` would be overkill (e.g. the git-diff branch pickers).
-- Reusable dialogs (`create-ticket-form`, `review-form`, `project-form`, `user-edit-modal`) all
-  wrap the shared `Modal` component and follow the same `open` input / `closed` output /
-  `<action>` output contract, including the "Add Custom Agent" dialog on `features/agents/agents.ts`
-  (name only - the agent starts with no instructions, per `WorkflowController`, see
-  [docs/api.md](api.md)).
+- Reusable dialogs (`create-ticket-form`, `review-form`, `project-form`, `sprint-form`,
+  `user-edit-modal`) all wrap the shared `Modal` component and follow the same `open` input /
+  `closed` output / `<action>` output contract, including the "Add Custom Agent" dialog on
+  `features/agents/agents.ts` (name only - the agent starts with no instructions, per
+  `WorkflowController`, see [docs/api.md](api.md)).
 - `project-form`'s Access Token field (`type="password"`) is the first masked input in this
   codebase - no prior precedent existed to follow. It's required when creating a project and
   optional when editing (blank = keep the currently stored token); the validator is
   added/cleared on the `accessToken` control inside the same `effect()` that already resets the
   form per the `project()` input. Remote URL is rendered as read-only text instead of a form
-  control when editing, since `Project.RemoteUrl` is immutable after creation.
-- `project-form` also has three optional sprint fields (`sprintStartDate`/`sprintEndDate` as
-  native `type="date"` inputs, `sprintGoal` as a textarea) for framing the project as an Agile
-  sprint - all unvalidated client-side beyond the server's end-before-start check, since they're
-  purely informational. `create-ticket-form` has a required `acceptanceCriteria` textarea
+  control when editing, since `Project.RemoteUrl` is immutable after creation. It no longer has a
+  base branch or sprint fields at all - those moved to `sprint-form`, built directly off
+  `project-form`'s old shape (same reactive-form/modal pattern) once `Sprint` took over owning
+  them: `baseBranch` (required, defaults to `'main'`) plus the same three optional sprint fields
+  (`sprintStartDate`/`sprintEndDate` as native `type="date"` inputs, `sprintGoal` as a textarea) -
+  all unvalidated client-side beyond the server's end-before-start check, since they're purely
+  informational. `create-ticket-form` has a required `acceptanceCriteria` textarea
   alongside title/description, following the same `Validators.required` + inline error-message
   pattern as `title`. The Live Agent chat's ticket-approval edit form (`chat-panel`'s
   `ticketEditForm`) has the same required `acceptanceCriteria` control, since an approved draft

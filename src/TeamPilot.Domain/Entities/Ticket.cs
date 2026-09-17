@@ -16,7 +16,12 @@ public class Ticket : Entity
     private readonly List<Review> _reviews = [];
     private readonly List<Conflict> _conflicts = [];
 
+    /// <summary>Denormalized from the owning <see cref="Sprint"/>'s <see cref="Sprint.ProjectId"/>
+    /// at creation - lets access control and git-branch uniqueness stay keyed on project id
+    /// without a join through Sprint on every check.</summary>
     public Guid ProjectId { get; private set; }
+
+    public Guid SprintId { get; private set; }
 
     public string Title { get; private set; } = string.Empty;
 
@@ -46,11 +51,16 @@ public class Ticket : Entity
     {
     }
 
-    public static Ticket Create(Guid projectId, string title, string? description, string acceptanceCriteria)
+    public static Ticket Create(Guid projectId, Guid sprintId, string title, string? description, string acceptanceCriteria)
     {
         if (projectId == Guid.Empty)
         {
             throw new ArgumentException("Project id is required.", nameof(projectId));
+        }
+
+        if (sprintId == Guid.Empty)
+        {
+            throw new ArgumentException("Sprint id is required.", nameof(sprintId));
         }
 
         if (string.IsNullOrWhiteSpace(title))
@@ -66,6 +76,7 @@ public class Ticket : Entity
         return new Ticket
         {
             ProjectId = projectId,
+            SprintId = sprintId,
             Title = title.Trim(),
             Description = description?.Trim() ?? string.Empty,
             AcceptanceCriteria = acceptanceCriteria.Trim(),

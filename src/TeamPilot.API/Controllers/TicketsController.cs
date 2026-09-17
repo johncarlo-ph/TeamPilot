@@ -10,17 +10,24 @@ namespace TeamPilot.API.Controllers;
 [ApiController]
 public class TicketsController(ITicketService ticketService, IOrchestrationService orchestrationService, ITicketQuestionService ticketQuestionService) : ControllerBase
 {
-    [HttpPost("api/projects/{projectId:guid}/tickets")]
-    public async Task<ActionResult<TicketDto>> Create(Guid projectId, [FromBody] CreateTicketRequest request, CancellationToken cancellationToken)
+    [HttpPost("api/sprints/{sprintId:guid}/tickets")]
+    public async Task<ActionResult<TicketDto>> Create(Guid sprintId, [FromBody] CreateTicketRequest request, CancellationToken cancellationToken)
     {
-        var ticket = await ticketService.CreateAsync(projectId, request, cancellationToken);
+        var ticket = await ticketService.CreateAsync(sprintId, request, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = ticket.Id }, ticket);
     }
 
-    [HttpGet("api/projects/{projectId:guid}/tickets")]
-    public async Task<ActionResult<IReadOnlyList<TicketDto>>> List(Guid projectId, [FromQuery] TicketStatus? status, CancellationToken cancellationToken)
+    [HttpGet("api/sprints/{sprintId:guid}/tickets")]
+    public async Task<ActionResult<IReadOnlyList<TicketDto>>> List(Guid sprintId, [FromQuery] TicketStatus? status, CancellationToken cancellationToken)
     {
-        var tickets = await ticketService.ListAsync(projectId, status, cancellationToken);
+        var tickets = await ticketService.ListAsync(sprintId, status, cancellationToken);
+        return Ok(tickets);
+    }
+
+    [HttpGet("api/projects/{projectId:guid}/tickets")]
+    public async Task<ActionResult<IReadOnlyList<TicketDto>>> ListByProject(Guid projectId, [FromQuery] TicketStatus? status, CancellationToken cancellationToken)
+    {
+        var tickets = await ticketService.ListByProjectAsync(projectId, status, cancellationToken);
         return Ok(tickets);
     }
 

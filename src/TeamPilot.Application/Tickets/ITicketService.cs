@@ -5,11 +5,18 @@ namespace TeamPilot.Application.Tickets;
 
 public interface ITicketService
 {
-    Task<TicketDto> CreateAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default);
+    Task<TicketDto> CreateAsync(Guid sprintId, CreateTicketRequest request, CancellationToken cancellationToken = default);
 
     Task<TicketDetailDto> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<TicketDto>> ListAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<TicketDto>> ListAsync(Guid sprintId, TicketStatus? status, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lean, read-only listing of every ticket across a project's sprints - used by the Agents
+    /// page's workflow-lock check (a project-wide concern, not scoped to one sprint's board) and
+    /// the Live Agent chat's ticket tool.
+    /// </summary>
+    Task<IReadOnlyList<TicketDto>> ListByProjectAsync(Guid projectId, TicketStatus? status, CancellationToken cancellationToken = default);
 
     Task<TicketDto> MoveToReviewAsync(Guid id, CancellationToken cancellationToken = default);
 

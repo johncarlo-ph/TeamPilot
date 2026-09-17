@@ -315,7 +315,13 @@ replay after a restart.
 - `Tickets` has a composite unique index on `(ProjectId, BranchName)` with a SQL Server filtered
   predicate (`HasFilter("[BranchName] IS NOT NULL")`) - the first filtered index in the schema,
   needed because `BranchName` is nullable for every ticket that hasn't linked one yet and a
-  plain unique index would only tolerate a single `NULL` row per project.
+  plain unique index would only tolerate a single `NULL` row per project. `ProjectId` here is a
+  denormalized column (the real parent FK is `SprintId`) kept specifically so this index - and
+  `IProjectAccessGuard` checks - stay project-wide rather than needing a join through `Sprint`;
+  see [docs/domain.md](domain.md#sprint). Its own foreign key is `NoAction` on delete (not
+  `Cascade` like every other reference-by-id FK in this schema) because SQL Server rejects a
+  second cascade path to the same table - `Project → Sprint → Ticket` (via `Tickets.SprintId`)
+  already cascades, so `Tickets.ProjectId`'s FK can't also cascade from `Project` directly.
 - `WorkflowStageConfiguration` maps a project's agent workflow the same "reference by id only"
   way as `Commit`/`Review`/`Conflict` on `Ticket` - no `Project`/`Agent` navigation properties.
   Its self-referencing `LoopBackToStageId` foreign key uses `DeleteBehavior.NoAction` because SQL
@@ -353,18 +359,32 @@ replay after a restart.
   plain nullable `int` columns added by the follow-up `AddTicketAgentEventUsage` migration, left to
   EF's default conventions (no explicit Fluent API needed, same as `WorkflowStage.MaxLoopIterations`)
   since a stage's token counts and duration need no string conversion or index of their own.
-- `ProjectConfiguration` maps `SprintStartDate`/`SprintEndDate` to SQL Server's `date` type (no
-  time component needed) and `SprintGoal` to `nvarchar(1000)`, all nullable. `TicketConfiguration`
-  maps the new `AcceptanceCriteria` as `IsRequired().HasMaxLength(4000)` - the first column in this
-  schema added as `NOT NULL` on a table with existing rows. The `AddProjectSprintFieldsAndTicketAcceptanceCriteria`
-  migration backfills it via the `AddColumn`'s own `defaultValue` (SQL Server applies a column's
-  `DEFAULT` constraint to every existing row when the column is added, so this needs no separate
-  `UPDATE`/backfill step the way `AddWorkflowStages` did) - existing tickets get a placeholder
-  string ("Not documented - added before acceptance criteria became a required field.") rather than
-  an empty string, so they stay visibly distinguishable from a ticket whose criteria was actually
-  written. `ChatMessageConfiguration`'s new `ProposedTicketAcceptanceCriteria` column follows
+- `TicketConfiguration` maps the new `AcceptanceCriteria` as `IsRequired().HasMaxLength(4000)` -
+  the first column in this schema added as `NOT NULL` on a table with existing rows. The
+  `AddProjectSprintFieldsAndTicketAcceptanceCriteria` migration backfills it via the `AddColumn`'s
+  own `defaultValue` (SQL Server applies a column's `DEFAULT` constraint to every existing row
+  when the column is added, so this needs no separate `UPDATE`/backfill step the way
+  `AddWorkflowStages` did) - existing tickets get a placeholder string ("Not documented - added
+  before acceptance criteria became a required field.") rather than an empty string, so they stay
+  visibly distinguishable from a ticket whose criteria was actually written.
+  `ChatMessageConfiguration`'s new `ProposedTicketAcceptanceCriteria` column follows
   `ProposedTicketDescription`'s existing nullable `nvarchar(max)` shape - added in the same
   migration, no backfill needed (nullable).
+- `SprintConfiguration` (new table `Sprints`) maps `Name`/`BaseBranch` as required
+  `nvarchar(200)`, `SprintStartDate`/`SprintEndDate` to SQL Server's `date` type (no time
+  component needed), and `SprintGoal` to `nvarchar(1000)`, all three still nullable exactly as
+  they were on `Project` before this migration - only *where* they live changed, not their shape
+  or optionality. `Sprints.ProjectId`'s own FK is `Cascade`, the normal "reference by id only"
+  pattern this schema uses everywhere except `Tickets.ProjectId` (see above). The
+  `IntroduceSprintAggregate` migration is the one genuinely hand-written data migration in this
+  schema so far: it creates `Sprints`, backfills exactly one default sprint per existing
+  `Project` row (`INSERT ... SELECT ... FROM Projects`, `Name` suffixed `" Sprint"`, carrying over
+  that project's old `BaseBranch`/`SprintStartDate`/`SprintEndDate`/`SprintGoal`), backfills every
+  existing `Tickets.SprintId` via a join on `Tickets.ProjectId = Sprints.ProjectId` (safe 1:1 at
+  that point in the migration, before any project can have more than one sprint), then alters
+  `SprintId` to `NOT NULL` and finally drops `BaseBranch`/`SprintStartDate`/`SprintEndDate`/
+  `SprintGoal` from `Projects` - in that order, so every step has the source data it needs before
+  the next one removes it.
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

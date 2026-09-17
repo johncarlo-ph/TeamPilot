@@ -22,6 +22,7 @@ internal static class TicketMappings
     public static TicketDto ToDto(Ticket ticket, bool pipelineRunning) => new(
         ticket.Id,
         ticket.ProjectId,
+        ticket.SprintId,
         ticket.Title,
         ticket.Description,
         ticket.AcceptanceCriteria,
@@ -35,6 +36,7 @@ internal static class TicketMappings
     public static TicketDetailDto ToDetailDto(Ticket ticket, bool pipelineRunning) => new(
         ticket.Id,
         ticket.ProjectId,
+        ticket.SprintId,
         ticket.Title,
         ticket.Description,
         ticket.AcceptanceCriteria,

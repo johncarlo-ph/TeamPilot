@@ -70,6 +70,7 @@ describe('ChatPanel', () => {
 
     fixture = TestBed.createComponent(ChatPanel);
     fixture.componentRef.setInput('projectId', 'project-1');
+    fixture.componentRef.setInput('sprintId', 'sprint-1');
     fixture.detectChanges();
   }
 
@@ -160,6 +161,7 @@ describe('ChatPanel', () => {
     fixture.componentInstance.approveTicket(proposal);
 
     expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
+      sprintId: 'sprint-1',
       title: 'Fix login bug',
       description: "Users can't sign in.",
       acceptanceCriteria: 'User can sign in.',
@@ -186,6 +188,7 @@ describe('ChatPanel', () => {
     fixture.componentInstance.approveTicket(proposal);
 
     expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
+      sprintId: 'sprint-1',
       title: 'Fix Google login bug',
       description: 'Edited description',
       acceptanceCriteria: 'Edited acceptance criteria',

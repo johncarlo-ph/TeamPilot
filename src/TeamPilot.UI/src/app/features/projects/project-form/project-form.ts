@@ -24,10 +24,6 @@ export class ProjectForm {
     description: [''],
     remoteUrl: ['', [Validators.required, Validators.pattern(/^https:\/\/\S+/)]],
     accessToken: ['', Validators.required],
-    baseBranch: ['main', Validators.required],
-    sprintStartDate: [''],
-    sprintEndDate: [''],
-    sprintGoal: [''],
   });
 
   constructor() {
@@ -38,10 +34,6 @@ export class ProjectForm {
         description: project?.description ?? '',
         remoteUrl: project?.remoteUrl ?? '',
         accessToken: '',
-        baseBranch: project?.baseBranch ?? 'main',
-        sprintStartDate: project?.sprintStartDate?.substring(0, 10) ?? '',
-        sprintEndDate: project?.sprintEndDate?.substring(0, 10) ?? '',
-        sprintGoal: project?.sprintGoal ?? '',
       });
 
       // Access token is required to create a project, but optional on edit (blank = keep the
@@ -73,10 +65,6 @@ export class ProjectForm {
         name: value.name,
         description: value.description || null,
         accessToken: value.accessToken || null,
-        baseBranch: value.baseBranch,
-        sprintStartDate: value.sprintStartDate || null,
-        sprintEndDate: value.sprintEndDate || null,
-        sprintGoal: value.sprintGoal || null,
       } satisfies UpdateProjectRequest);
       return;
     }
@@ -86,10 +74,6 @@ export class ProjectForm {
       description: value.description || null,
       remoteUrl: value.remoteUrl,
       accessToken: value.accessToken,
-      baseBranch: value.baseBranch || null,
-      sprintStartDate: value.sprintStartDate || null,
-      sprintEndDate: value.sprintEndDate || null,
-      sprintGoal: value.sprintGoal || null,
     } satisfies CreateProjectRequest);
   }
 }

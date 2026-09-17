@@ -14,7 +14,7 @@ export class CancelledTicketsModal {
   private readonly ticketsService = inject(TicketsService);
 
   readonly open = input(false);
-  readonly projectId = input.required<string>();
+  readonly sprintId = input.required<string>();
   readonly closed = output<void>();
 
   readonly loading = signal(false);
@@ -24,7 +24,7 @@ export class CancelledTicketsModal {
     effect(() => {
       if (this.open()) {
         this.loading.set(true);
-        this.ticketsService.listForProject(this.projectId(), 'Cancelled').subscribe({
+        this.ticketsService.listForSprint(this.sprintId(), 'Cancelled').subscribe({
           next: (tickets) => {
             this.tickets.set(tickets);
             this.loading.set(false);

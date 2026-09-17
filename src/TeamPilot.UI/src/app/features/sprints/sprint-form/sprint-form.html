@@ -1,0 +1,66 @@
+<app-modal [open]="open()" [title]="title" (closed)="closed.emit()">
+  <form [formGroup]="form" (ngSubmit)="submit()">
+    <div class="mb-3">
+      <label for="sprint-name" class="form-label">Name</label>
+      <input id="sprint-name" type="text" class="form-control" formControlName="name" />
+      @if (form.controls.name.invalid && form.controls.name.touched) {
+        <div class="text-danger small mt-1">Name is required.</div>
+      }
+    </div>
+
+    <div class="mb-3">
+      <label for="sprint-base-branch" class="form-label">Base branch</label>
+      <input
+        id="sprint-base-branch"
+        type="text"
+        class="form-control"
+        formControlName="baseBranch"
+      />
+      <div class="form-text">
+        Every ticket's branch is cut from here, and approvals merge back into it.
+      </div>
+      @if (form.controls.baseBranch.invalid && form.controls.baseBranch.touched) {
+        <div class="text-danger small mt-1">Base branch is required.</div>
+      }
+    </div>
+
+    <div class="row mb-3">
+      <div class="col">
+        <label for="sprint-start-date" class="form-label">Sprint start date</label>
+        <input
+          id="sprint-start-date"
+          type="date"
+          class="form-control"
+          formControlName="sprintStartDate"
+        />
+      </div>
+      <div class="col">
+        <label for="sprint-end-date" class="form-label">Sprint end date</label>
+        <input
+          id="sprint-end-date"
+          type="date"
+          class="form-control"
+          formControlName="sprintEndDate"
+        />
+      </div>
+    </div>
+    <div class="mb-3">
+      <label for="sprint-goal" class="form-label">Sprint goal</label>
+      <textarea
+        id="sprint-goal"
+        class="form-control"
+        rows="2"
+        formControlName="sprintGoal"
+      ></textarea>
+    </div>
+
+    <div class="d-flex justify-content-end gap-2">
+      <button type="button" class="btn btn-outline-secondary" [disabled]="saving()" (click)="closed.emit()">
+        Cancel
+      </button>
+      <button type="submit" class="btn btn-outline-primary" [disabled]="saving()">
+        {{ saving() ? 'Saving...' : 'Save' }}
+      </button>
+    </div>
+  </form>
+</app-modal>

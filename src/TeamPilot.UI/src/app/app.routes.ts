@@ -20,7 +20,12 @@ export const routes: Routes = [
           import('./features/projects/project-list/project-list').then((m) => m.ProjectList),
       },
       {
-        path: 'projects/:projectId/board',
+        path: 'projects/:projectId/sprints',
+        loadComponent: () =>
+          import('./features/sprints/sprint-list/sprint-list').then((m) => m.SprintList),
+      },
+      {
+        path: 'projects/:projectId/sprints/:sprintId/board',
         loadComponent: () => import('./features/board/board').then((m) => m.Board),
       },
       {

@@ -9,6 +9,7 @@ using TeamPilot.Application.LiveAgentChat.Dtos;
 using TeamPilot.Application.LiveAgentChat.Validators;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -25,6 +26,7 @@ public class LiveAgentChatServiceTests
     private readonly Mock<IAgentService> _agentService = new();
     private readonly Mock<IInstructionRepository> _instructionRepository = new();
     private readonly Mock<IProjectRepository> _projectRepository = new();
+    private readonly Mock<ISprintRepository> _sprintRepository = new();
     private readonly Mock<ITicketRepository> _ticketRepository = new();
     private readonly Mock<ITicketService> _ticketService = new();
     private readonly Mock<IGitService> _gitService = new();
@@ -34,17 +36,20 @@ public class LiveAgentChatServiceTests
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly LiveAgentChatService _sut;
 
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token");
+    private readonly Sprint _sprint;
     private readonly Agent _liveAgent;
     private readonly Conversation _conversation;
     private readonly Guid _currentUserId = Guid.NewGuid();
 
     public LiveAgentChatServiceTests()
     {
+        _sprint = Sprint.Create(_project.Id, "Sprint 1", "main");
         _liveAgent = Agent.Create(Guid.NewGuid(), "Live Agent", AgentRole.LiveAgent);
         _conversation = Conversation.Create(_project.Id, _liveAgent.Id, "General", _currentUserId, "Jordan Lee");
 
         _projectRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync(_project);
+        _sprintRepository.Setup(r => r.GetByIdAsync(_sprint.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_sprint);
         _agentService.Setup(s => s.EnsureLiveAgentAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
         _agentRepository
             .Setup(r => r.GetByProjectAndRoleAsync(It.IsAny<Guid>(), AgentRole.LiveAgent, It.IsAny<CancellationToken>()))
@@ -59,6 +64,7 @@ public class LiveAgentChatServiceTests
             _agentService.Object,
             _instructionRepository.Object,
             _projectRepository.Object,
+            _sprintRepository.Object,
             _ticketRepository.Object,
             _ticketService.Object,
             _gitService.Object,
@@ -234,7 +240,7 @@ public class LiveAgentChatServiceTests
     [Fact]
     public async Task SendMessageAsync_ModelReadsATicket_ExecutesGetTicketAndReturnsFinalAnswer()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix login bug", "Users can't sign in with Google.", "Acceptance criteria");
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Fix login bug", "Users can't sign in with Google.", "Acceptance criteria");
 
         var toolUseResponse = new LlmConversationResponse(
             [new LlmToolUseBlock("call-1", "get_ticket", $$"""{"id":"{{ticket.Id}}"}""")],
@@ -261,7 +267,7 @@ public class LiveAgentChatServiceTests
     [Fact]
     public async Task SendMessageAsync_ModelReadsATicketFromAnotherProject_ReturnsNotFoundWithoutLeakingIt()
     {
-        var otherProjectTicket = Ticket.Create(Guid.NewGuid(), "Unrelated ticket", "Belongs to a different project.", "Acceptance criteria");
+        var otherProjectTicket = Ticket.Create(Guid.NewGuid(), Guid.NewGuid(), "Unrelated ticket", "Belongs to a different project.", "Acceptance criteria");
 
         var toolUseResponse = new LlmConversationResponse(
             [new LlmToolUseBlock("call-1", "get_ticket", $$"""{"id":"{{otherProjectTicket.Id}}"}""")],
@@ -320,17 +326,17 @@ public class LiveAgentChatServiceTests
             "User can sign in with Google without error.");
 
         var createdTicket = new TicketDto(
-            Guid.NewGuid(), _project.Id, "Fix login bug", "Users can't sign in with Google.", "User can sign in with Google without error.",
+            Guid.NewGuid(), _project.Id, _sprint.Id, "Fix login bug", "Users can't sign in with Google.", "User can sign in with Google without error.",
             TicketStatus.ToDo, null, null, DateTime.UtcNow, null);
         _ticketService
             .Setup(t => t.CreateAsync(
-                _project.Id,
+                _sprint.Id,
                 It.Is<CreateTicketRequest>(r => r.Title == "Fix login bug" && r.Description == "Users can't sign in with Google." && r.AcceptanceCriteria == "User can sign in with Google without error."),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(createdTicket);
 
         var result = await _sut.ApproveTicketAsync(
-            _project.Id, _conversation.Id, message.Id, new ApproveTicketRequest("Fix login bug", "Users can't sign in with Google.", "User can sign in with Google without error."));
+            _project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(_sprint.Id, "Fix login bug", "Users can't sign in with Google.", "User can sign in with Google without error."));
 
         Assert.Equal(createdTicket.Id, result.CreatedTicketId);
         Assert.Equal(createdTicket.Id, message.CreatedTicketId);
@@ -348,17 +354,17 @@ public class LiveAgentChatServiceTests
             "User can sign in with Google without error.");
 
         var createdTicket = new TicketDto(
-            Guid.NewGuid(), _project.Id, "Fix Google login bug", "Edited description", "Edited acceptance criteria",
+            Guid.NewGuid(), _project.Id, _sprint.Id, "Fix Google login bug", "Edited description", "Edited acceptance criteria",
             TicketStatus.ToDo, null, null, DateTime.UtcNow, null);
         _ticketService
             .Setup(t => t.CreateAsync(
-                _project.Id,
+                _sprint.Id,
                 It.Is<CreateTicketRequest>(r => r.Title == "Fix Google login bug" && r.Description == "Edited description" && r.AcceptanceCriteria == "Edited acceptance criteria"),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(createdTicket);
 
         var result = await _sut.ApproveTicketAsync(
-            _project.Id, _conversation.Id, message.Id, new ApproveTicketRequest("Fix Google login bug", "Edited description", "Edited acceptance criteria"));
+            _project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(_sprint.Id, "Fix Google login bug", "Edited description", "Edited acceptance criteria"));
 
         Assert.Equal("Fix Google login bug", result.ProposedTicketTitle);
         Assert.Equal("Edited description", result.ProposedTicketDescription);
@@ -372,7 +378,7 @@ public class LiveAgentChatServiceTests
         var message = _conversation.AddMessage(ChatMessageRole.Assistant, "Here's a draft ticket.", "Fix login bug", "desc");
 
         await Assert.ThrowsAnyAsync<Exception>(
-            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(" ", "desc", "Acceptance criteria")));
+            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(_sprint.Id, " ", "desc", "Acceptance criteria")));
         _ticketService.Verify(t => t.CreateAsync(It.IsAny<Guid>(), It.IsAny<CreateTicketRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -383,7 +389,7 @@ public class LiveAgentChatServiceTests
         var existingTicketId = Guid.NewGuid();
         message.MarkTicketCreated(existingTicketId, "Fix login bug", "desc", "Acceptance criteria");
 
-        var result = await _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest("Fix login bug", "desc", "Acceptance criteria"));
+        var result = await _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(_sprint.Id, "Fix login bug", "desc", "Acceptance criteria"));
 
         Assert.Equal(existingTicketId, result.CreatedTicketId);
         _ticketService.Verify(t => t.CreateAsync(It.IsAny<Guid>(), It.IsAny<CreateTicketRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -393,7 +399,7 @@ public class LiveAgentChatServiceTests
     public async Task ApproveTicketAsync_MessageNotFound_ThrowsNotFoundException()
     {
         await Assert.ThrowsAsync<NotFoundException>(
-            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, Guid.NewGuid(), new ApproveTicketRequest("Fix login bug", "desc", "Acceptance criteria")));
+            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, Guid.NewGuid(), new ApproveTicketRequest(_sprint.Id, "Fix login bug", "desc", "Acceptance criteria")));
     }
 
     [Fact]
@@ -403,7 +409,7 @@ public class LiveAgentChatServiceTests
         message.RejectTicket();
 
         await Assert.ThrowsAsync<ChatMessageTicketApprovalException>(
-            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest("Fix login bug", "desc", "Acceptance criteria")));
+            () => _sut.ApproveTicketAsync(_project.Id, _conversation.Id, message.Id, new ApproveTicketRequest(_sprint.Id, "Fix login bug", "desc", "Acceptance criteria")));
         _ticketService.Verify(t => t.CreateAsync(It.IsAny<Guid>(), It.IsAny<CreateTicketRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 

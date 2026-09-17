@@ -14,9 +14,10 @@ doc drifting out of sync with the UI is the failure mode it exists to prevent.
 
 TeamPilot tracks tickets on a Kanban board, hands the work to AI agents that commit against a
 real Git repository, and routes every change through a human approval gate before it counts as
-done. Everything lives inside one **project** — a project owns its own Git repository, its own
-pool of agents, its own ticket board, and its own pipeline-run history — so every screen below
-belongs to whichever project is currently open.
+done. Work is organized in two levels: a **project** owns its own Git repository, its own pool of
+agents, and its own pipeline-run history, and inside it one or more **sprints** each have their
+own branch, sprint dates/goal, and ticket board — so every screen below belongs to whichever
+project, and often which sprint within it, is currently open.
 
 ## Signing in
 
@@ -51,6 +52,7 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 | **Approve** a ticket (merges its branch) | ✓ | ✓ | — |
 | Add/remove/reorder pipeline agents, add a custom agent, configure a loop-back | ✓ | — | — |
 | Create or edit projects | ✓ | — | — |
+| Create or edit sprints | ✓ | — | — |
 | Manage users, roles, and project assignment | ✓ | — | — |
 | View the audit log | ✓ | — | — |
 | Manage instruction templates | ✓ | — | — |
@@ -58,52 +60,72 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 ## Projects
 
 `/projects` — the landing page after sign-in. One card per project the account is assigned to,
-showing name, description, the connected remote repository URL, its sprint dates/goal when set,
-and a row of count badges — one per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked,
-👀 For Review, ✅ Done) - so you can see where a project's tickets stand without opening its board,
-with an **Open Board** button.
+showing name, description, and the connected remote repository URL, with a **View Sprints**
+button.
 
 **New Project / Edit Project** — Admin only; the button and each card's Edit/Remove links are
-hidden for Analysts and Developers. Before saving — whether creating a new project or editing an
-existing one's base branch — the entered base branch is checked against the remote repository
-itself; if it doesn't exist there, the save is rejected outright with an error and nothing
-changes (unlike a bad URL/token, below, this check happens before anything is saved). On edit,
-that check reuses the project's already-stored access token unless a new one was also entered.
-Once the check passes, creating a project saves it immediately and starts cloning its remote
-repository in the background — the card shows a live progress bar (with an object/byte count
-once Git reports one) while cloning, and **Open Board** stays disabled until it finishes. A bad
-URL or token doesn't fail the creation itself; instead the card switches to a "Clone failed"
-banner with the error, and the project stays listed (not silently discarded) so the Admin can fix
-the details and re-create it.
+hidden for Analysts and Developers. Creating a project saves it immediately and starts cloning
+its remote repository in the background — the card shows a live progress bar (with an
+object/byte count once Git reports one) while cloning, and **View Sprints** stays disabled until
+it finishes. A bad URL or token doesn't fail the creation itself; instead the card switches to a
+"Clone failed" banner with the error, and the project stays listed (not silently discarded) so the
+Admin can fix the details and re-create it.
 
 **Remove** — Admin only, next to **Edit** on each card. Hides the project from this list; it does
-**not** delete anything — the connected Git repository, its branches, and every ticket stay
-untouched, and there's no way to un-hide it from the UI afterward. Disabled (with an explanatory
-tooltip) while the project has any ticket **In Progress** or **For Review**; clicking it asks for
-confirmation, since it can't be undone from the UI.
+**not** delete anything — the connected Git repository, its branches, and every ticket in any of
+its sprints stay untouched, and there's no way to un-hide it from the UI afterward. Rejected with
+an error if any of the project's sprints has a ticket **In Progress** or **For Review**; clicking
+it asks for confirmation, since it can't be undone from the UI.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| Name | Text | Yes | Display name — shown on the project card and the board header. |
+| Name | Text | Yes | Display name — shown on the project card. |
 | Description | Text | No | Shown on the card; blank shows "No description." |
 | Remote URL | Text | Yes (create only) | The `https://` URL of the Git repository to connect, e.g. `https://github.com/org/repo.git`. Can't be changed after the project is created — shown as read-only text when editing. |
 | Access Token | Password | Yes on create, optional on edit | A Personal Access Token for that repository, with permission to read and write it. On edit, leave blank to keep the currently stored token (e.g. after rotating it on the host, paste the new one). Never shown again once saved. |
-| Base branch | Text | Yes (defaults to `main` on create) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. Must already exist on the remote repository, whether creating or editing — the save is rejected with an error otherwise. |
-| Sprint start date | Date | No | For framing this project as an Agile sprint. Purely informational — nothing in the app gates on it. |
+
+## Sprints
+
+`/projects/:id/sprints` — opened via a project's **View Sprints** button. An **Agents** button in
+the header opens the project's [agent pipeline](#agent-pipeline--instructions) - the workflow is
+project-wide, not per-sprint, so it's reached from here rather than from any one sprint's board.
+Below that, one card per sprint in that project, showing its name, base branch, sprint dates/goal
+when set, and a row of count badges — one per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked,
+👀 For Review, ✅ Done) - so you can see where a sprint's tickets stand without opening its board,
+with an **Open Board** button.
+
+**New Sprint / Edit Sprint** — Admin only; the button and each card's Edit/Remove links are
+hidden for Analysts and Developers. Before saving — whether creating a new sprint or editing an
+existing one's base branch — the entered base branch is checked against the project's connected
+remote repository; if it doesn't exist there, the save is rejected outright with an error and
+nothing changes.
+
+**Remove** — Admin only, next to **Edit** on each card. Hides the sprint from this list; it does
+**not** delete anything — every one of its tickets stays untouched, and there's no way to un-hide
+it from the UI afterward. Disabled (with an explanatory tooltip) while the sprint has any ticket
+**In Progress** or **For Review**; clicking it asks for confirmation, since it can't be undone
+from the UI.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| Name | Text | Yes | Display name — shown on the sprint card and the board header. |
+| Base branch | Text | Yes (defaults to `main` on create) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. Must already exist on the project's remote repository, whether creating or editing — the save is rejected with an error otherwise. |
+| Sprint start date | Date | No | For framing this sprint's timeline. Purely informational — nothing in the app gates on it. |
 | Sprint end date | Date | No | Same as above. Rejected if set earlier than the sprint start date (when both are given). |
 | Sprint goal | Text (multi-line) | No | The sprint's objective, free text. |
 
 ## Ticket board
 
-Opening a project shows its name at the top (so it's never ambiguous which project you're
-looking at) above a two-panel view: the [Live Agent chat](#live-agent-chat) on the left, and the
-board itself on the right — five color-coded columns — ⏳ **To Do**, 🔧 **In Progress**,
-🚫 **Blocked**, 👀 **For Review**, ✅ **Done** — holding cards for that project's tickets (title, linked branch
-once it has one, last updated). Clicking anywhere on a card, including its branch-name line,
-opens that ticket's detail page — the branch name itself is plain text here; it only becomes a
-clickable link to the remote once you're on the [ticket detail](#ticket-detail) page. The board
-polls for changes roughly every 8 seconds, so a teammate's update — including a ticket you just
-approved from the chat panel — appears without a manual refresh.
+Opening a sprint (from its **Open Board** button) shows its name at the top (so it's never
+ambiguous which sprint you're looking at), with a link back up to the project's sprint list,
+above a two-panel view: the [Live Agent chat](#live-agent-chat) on the left, and the board itself
+on the right — five color-coded columns — ⏳ **To Do**, 🔧 **In Progress**, 🚫 **Blocked**,
+👀 **For Review**, ✅ **Done** — holding cards for that sprint's tickets (title, linked branch once
+it has one, last updated). Clicking anywhere on a card, including its branch-name line, opens that
+ticket's detail page — the branch name itself is plain text here; it only becomes a clickable link
+to the remote once you're on the [ticket detail](#ticket-detail) page. The board polls for
+changes roughly every 8 seconds, so a teammate's update — including a ticket you just approved
+from the chat panel — appears without a manual refresh.
 
 The chat panel has a small round arrow button in its header that collapses it down to a thin
 strip, giving the board itself the extra width — handy on a smaller screen or a project with a
@@ -129,13 +151,14 @@ who sent it (the Live Agent's own replies are labeled **Live Agent**).
 
 If you ask it to create, log, or file a ticket, it drafts one — title, description, and
 acceptance criteria — as a card right in the chat, with **Create ticket** and **Reject** buttons
-side by side. Before drafting, it checks the board's existing tickets and will call out related or
-duplicate ones in the draft when relevant. Not happy with the wording? Click the ✏️ button on the
-card to edit the title, description, and acceptance criteria right there before creating it —
-**Create ticket** then uses your edited text instead of the original draft. Nothing is created
-until you click **Create ticket**; the
-Live Agent never adds a ticket to the board on its own. Once you approve it, the new ticket appears on the
-board (in To Do) the next time the board polls, just like one you created yourself with
+side by side. Before drafting, it checks tickets across the *whole project* (every sprint, not
+just the one whose board you have open) and will call out related or duplicate ones in the draft
+when relevant. Not happy with the wording? Click the ✏️ button on the card to edit the title,
+description, and acceptance criteria right there before creating it — **Create ticket** then uses
+your edited text instead of the original draft. Nothing is created until you click
+**Create ticket**; the Live Agent never adds a ticket to the board on its own. The new ticket
+always lands in whichever sprint's board the chat panel is open alongside - once you approve it,
+it appears there (in To Do) the next time the board polls, just like one you created yourself with
 **New Ticket**, and the card shows a **Ticket created** badge instead of the buttons. If the
 draft isn't what you wanted, click **Reject** instead — nothing is created, and the card shows a
 **Ticket rejected** badge, so the buttons don't stay there inviting an accidental click later.
@@ -246,7 +269,7 @@ finishes.
 Blocked ticket (e.g. its goal no longer applies because a requirement changed). Asks for
 confirmation, then an optional reason, and sets the ticket to **Cancelled** — permanent, with no
 way back. Since a ticket's work only ever lives on its own feature branch until a human approves
-it, and Cancel is only available before that approval, cancelling never touches the project's
+it, and Cancel is only available before that approval, cancelling never touches the sprint's
 base branch — it just stops tracking the ticket as active work. If the ticket has a linked
 branch, cancelling deletes it from the remote in the same action (see [Git](#git) below), since a
 Cancelled ticket drops off the board entirely (they're not a column, unlike Blocked) with no other
@@ -256,7 +279,7 @@ showing the cancellation reason if one was given.
 
 ### Git
 
-A ticket does its work on a Git branch, cut from the project's [base branch](#projects) and
+A ticket does its work on a Git branch, cut from its sprint's [base branch](#sprints) and
 pushed to the project's connected remote as soon as it's linked. This panel links that branch
 and compares any two branches in the project's repository.
 
@@ -319,7 +342,7 @@ Approve and Reject are both Admin/Developer only, since they're the ticket's two
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Reviewer name | Text | Yes | Pre-filled with the signed-in user's name. |
-| Decision | Select | Yes | **Approve** (merges the branch into the project's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress and immediately re-runs the pipeline - see below), **Reject** (Admin/Developer; permanently deletes the ticket's branch and cancels it - see below), or **Resolve Conflict**. |
+| Decision | Select | Yes | **Approve** (merges the branch into the sprint's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress and immediately re-runs the pipeline - see below), **Reject** (Admin/Developer; permanently deletes the ticket's branch and cancels it - see below), or **Resolve Conflict**. |
 | Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. For **Request Changes**, these comments are also passed to the agents on the re-run as feedback to address - write them as instructions to the agents, not just notes to yourself. |
 
 > **Request Changes now runs the pipeline immediately** — you don't need a separate Run Pipeline
@@ -337,8 +360,10 @@ Approve and Reject are both Admin/Developer only, since they're the ticket's two
 
 ## Agent Pipeline & Instructions
 
-Reached from a project's board via the **Agents** button. The left side lists the project's
-agents in the order tickets run through them; selecting one edits its instructions on the right.
+Reached from a project's sprint list via the **Agents** button - the agent workflow is shared
+across every sprint in the project, not per-sprint, so it lives on the project-level page rather
+than on any one sprint's board. The left side lists the project's agents in the order tickets run
+through them; selecting one edits its instructions on the right.
 The standing Live Agent isn't listed here — it's managed via the
 [Live Agent chat](#live-agent-chat) instead.
 
@@ -478,10 +503,11 @@ versioned instructions at the time.
 
 - **Nothing updates instantly.** The board and ticket-detail pages poll every 8–10 seconds
   rather than pushing updates live.
-- **Almost nothing can be deleted.** Projects, tickets, and agents can be created and edited
-  (agents can also be deactivated), but not deleted through the UI. A project can be **Removed**
-  instead (see [Projects](#projects)) — that only hides it from the list; its repository, branches,
-  and tickets are untouched. A ticket can be **Cancelled** instead (see
+- **Almost nothing can be deleted.** Projects, sprints, tickets, and agents can be created and
+  edited (agents can also be deactivated), but not deleted through the UI. A project or sprint can
+  be **Removed** instead (see [Projects](#projects)/[Sprints](#sprints)) — that only hides it from
+  its list; a project's repository and branches stay untouched, and a removed sprint's tickets stay
+  untouched too. A ticket can be **Cancelled** instead (see
   [Ticket detail](#ticket-detail)) — that's a permanent status, not a deletion; the ticket and its
   history stay on record. Instruction templates and a Cancelled ticket's Git branch are the two
   real exceptions — both genuinely, irreversibly deleted, the branch automatically as part of

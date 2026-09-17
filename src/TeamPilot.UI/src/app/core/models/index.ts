@@ -1,5 +1,6 @@
 export * from './enums';
 export * from './project.model';
+export * from './sprint.model';
 export * from './ticket.model';
 export * from './agent.model';
 export * from './workflow-stage.model';

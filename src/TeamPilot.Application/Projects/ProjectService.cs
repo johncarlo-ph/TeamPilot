@@ -18,12 +18,10 @@ using TeamPilot.Domain.Enums;
 namespace TeamPilot.Application.Projects;
 
 /// <summary>
-/// <see cref="CreateAsync"/> and <see cref="UpdateAsync"/> only need <see cref="IGitService"/>
-/// itself, up front, to verify the requested base branch actually exists on the remote before
-/// persisting anything - neither needs <see cref="IWorkflowService"/>, <see cref="IAgentService"/>,
-/// an event broadcaster, or a logger, since <see cref="IBackgroundTaskRunner"/>'s contract is that
-/// the detached clone delegate (only <see cref="CreateAsync"/> dispatches one) resolves every one
-/// of those fresh from its own scope rather than closing over this instance's (see
+/// <see cref="CreateAsync"/> dispatches the clone detached via <see cref="IBackgroundTaskRunner"/>,
+/// whose contract is that the detached delegate resolves every one of its own dependencies
+/// (<see cref="IWorkflowService"/>, <see cref="IAgentService"/>, an event broadcaster, a logger)
+/// fresh from its own DI scope rather than closing over this instance's (see
 /// <see cref="StartCloneDetached"/>).
 /// </summary>
 public sealed class ProjectService(
@@ -32,7 +30,6 @@ public sealed class ProjectService(
     IUserRepository userRepository,
     ICurrentUserContext currentUser,
     IProjectAccessGuard projectAccessGuard,
-    IGitService gitService,
     IGitCredentialProtector credentialProtector,
     IAuditLogger auditLogger,
     IUnitOfWork unitOfWork,
@@ -40,8 +37,6 @@ public sealed class ProjectService(
     IValidator<CreateProjectRequest> createValidator,
     IValidator<UpdateProjectRequest> updateValidator) : IProjectService
 {
-    private const string DefaultBaseBranch = "main";
-
     /// <summary>
     /// Persists the project immediately, in <see cref="ProjectStatus.Cloning"/>, then dispatches
     /// the actual clone detached (same <see cref="IBackgroundTaskRunner"/> pattern as
@@ -51,33 +46,17 @@ public sealed class ProjectService(
     /// the client can subscribe to <see cref="ProjectEventTypes.ProjectCloneProgress"/> on
     /// <c>GET /api/projects/{id}/events</c> right away to show a live progress bar; a failed clone
     /// leaves the row visible as <see cref="ProjectStatus.Failed"/> rather than vanishing.
-    /// Before any of that, the requested base branch (or <see cref="DefaultBaseBranch"/> when none
-    /// is given - mirrors <see cref="Project.Create"/>'s own default) is checked against the
-    /// remote itself via <see cref="IGitService.RemoteBranchExistsAsync"/>: a nonexistent branch
-    /// throws <see cref="GitOperationException"/> and no project row is created at all, rather
-    /// than persisting one that will only fail to clone later.
     /// </summary>
     public async Task<ProjectDto> CreateAsync(CreateProjectRequest request, CancellationToken cancellationToken = default)
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
-
-        var baseBranch = string.IsNullOrWhiteSpace(request.BaseBranch) ? DefaultBaseBranch : request.BaseBranch.Trim();
-        var baseBranchExists = await gitService.RemoteBranchExistsAsync(request.RemoteUrl, request.AccessToken, baseBranch, cancellationToken);
-        if (!baseBranchExists)
-        {
-            throw new GitOperationException($"Branch '{baseBranch}' does not exist in repository '{request.RemoteUrl}'.");
-        }
 
         var encryptedAccessToken = credentialProtector.Protect(request.AccessToken);
         var project = Project.Create(
             request.Name,
             request.Description,
             request.RemoteUrl,
-            encryptedAccessToken,
-            baseBranch,
-            request.SprintStartDate,
-            request.SprintEndDate,
-            request.SprintGoal);
+            encryptedAccessToken);
 
         await projectRepository.AddAsync(project, cancellationToken);
 
@@ -86,8 +65,7 @@ public sealed class ProjectService(
 
         StartCloneDetached(project.Id, project.RemoteUrl, request.AccessToken);
 
-        // Brand new project - no tickets exist yet, so no need to query for counts.
-        return ToDto(project, counts: null);
+        return ToDto(project);
     }
 
     /// <summary>
@@ -173,9 +151,7 @@ public sealed class ProjectService(
 
         await projectAccessGuard.EnsureAccessAsync(id, cancellationToken);
 
-        var counts = await ticketRepository.GetStatusCountsByProjectAsync([id], cancellationToken);
-
-        return ToDto(project, counts.GetValueOrDefault(id));
+        return ToDto(project);
     }
 
     public async Task<IReadOnlyList<ProjectDto>> ListAsync(CancellationToken cancellationToken = default)
@@ -190,19 +166,16 @@ public sealed class ProjectService(
             projects = projects.Where(p => assignedProjectIds.Contains(p.Id)).ToList();
         }
 
-        var counts = await ticketRepository.GetStatusCountsByProjectAsync(
-            projects.Select(p => p.Id).ToList(), cancellationToken);
-
-        return projects.Select(p => ToDto(p, counts.GetValueOrDefault(p.Id))).ToList();
+        return projects.Select(ToDto).ToList();
     }
 
     /// <summary>
     /// Hides the project from the UI (<see cref="Project.Remove"/>) as long as none of its
-    /// tickets are actively running or awaiting approval - <see cref="TicketStatus.InProgress"/>
-    /// or <see cref="TicketStatus.ForReview"/>. A <see cref="TicketStatus.Blocked"/> ticket
-    /// doesn't block removal (unlike <c>WorkflowService</c>'s pipeline lock): its pipeline is
-    /// merely paused, and hiding the project doesn't touch the Git repository or ticket history
-    /// it's paused against.
+    /// tickets - across all of its sprints - are actively running or awaiting approval -
+    /// <see cref="TicketStatus.InProgress"/> or <see cref="TicketStatus.ForReview"/>. A
+    /// <see cref="TicketStatus.Blocked"/> ticket doesn't block removal (unlike
+    /// <c>WorkflowService</c>'s pipeline lock): its pipeline is merely paused, and hiding the
+    /// project doesn't touch the Git repository or ticket history it's paused against.
     /// </summary>
     public async Task RemoveAsync(Guid id, CancellationToken cancellationToken = default)
     {
@@ -231,19 +204,7 @@ public sealed class ProjectService(
         var project = await projectRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), id);
 
-        // Same remote check CreateAsync does up front (see there) - a blank AccessToken here
-        // means "keep the currently stored token" (see UpdateProjectRequest), so that's what's
-        // used to authenticate the check when a new one wasn't supplied.
-        var accessTokenForCheck = string.IsNullOrWhiteSpace(request.AccessToken)
-            ? credentialProtector.Unprotect(project.EncryptedAccessToken)
-            : request.AccessToken;
-        var baseBranchExists = await gitService.RemoteBranchExistsAsync(project.RemoteUrl, accessTokenForCheck, request.BaseBranch, cancellationToken);
-        if (!baseBranchExists)
-        {
-            throw new GitOperationException($"Branch '{request.BaseBranch}' does not exist in repository '{project.RemoteUrl}'.");
-        }
-
-        project.UpdateDetails(request.Name, request.Description, request.BaseBranch, request.SprintStartDate, request.SprintEndDate, request.SprintGoal);
+        project.UpdateDetails(request.Name, request.Description);
 
         if (!string.IsNullOrWhiteSpace(request.AccessToken))
         {
@@ -253,28 +214,16 @@ public sealed class ProjectService(
         await auditLogger.LogActionAsync(AuditEventType.ProjectUpdated, $"Project '{project.Name}' updated.", cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var counts = await ticketRepository.GetStatusCountsByProjectAsync([id], cancellationToken);
-
-        return ToDto(project, counts.GetValueOrDefault(id));
+        return ToDto(project);
     }
 
-    private static ProjectDto ToDto(Project project, IReadOnlyDictionary<TicketStatus, int>? counts) => new(
+    private static ProjectDto ToDto(Project project) => new(
         project.Id,
         project.Name,
         project.Description,
         project.RemoteUrl,
-        project.BaseBranch,
         project.Status,
         project.CloneFailureReason,
         project.CreatedAtUtc,
-        project.UpdatedAtUtc,
-        new TicketStatusCountsDto(
-            ToDo: counts?.GetValueOrDefault(TicketStatus.ToDo) ?? 0,
-            InProgress: counts?.GetValueOrDefault(TicketStatus.InProgress) ?? 0,
-            Blocked: counts?.GetValueOrDefault(TicketStatus.Blocked) ?? 0,
-            ForReview: counts?.GetValueOrDefault(TicketStatus.ForReview) ?? 0,
-            Done: counts?.GetValueOrDefault(TicketStatus.Done) ?? 0),
-        project.SprintStartDate,
-        project.SprintEndDate,
-        project.SprintGoal);
+        project.UpdatedAtUtc);
 }

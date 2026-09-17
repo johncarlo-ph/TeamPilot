@@ -11,6 +11,7 @@ using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.LiveAgentChat;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.TicketAgentEvents;
 using TeamPilot.Application.TicketQuestions;
@@ -32,6 +33,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IUserService, UserService>();
 
         services.AddScoped<IProjectService, ProjectService>();
+        services.AddScoped<ISprintService, SprintService>();
         services.AddScoped<ITicketService, TicketService>();
         services.AddScoped<IAgentService, AgentService>();
         services.AddScoped<IInstructionService, InstructionService>();

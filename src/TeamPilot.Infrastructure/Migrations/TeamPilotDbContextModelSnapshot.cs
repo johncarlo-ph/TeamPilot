@@ -373,11 +373,6 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<string>("BaseBranch")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
                     b.Property<string>("CloneFailureReason")
                         .HasColumnType("nvarchar(max)");
 
@@ -411,16 +406,6 @@ namespace TeamPilot.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTime?>("SprintEndDate")
-                        .HasColumnType("date");
-
-                    b.Property<string>("SprintGoal")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTime?>("SprintStartDate")
-                        .HasColumnType("date");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -508,6 +493,50 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.ToTable("Reviews", (string)null);
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.Sprint", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("BaseBranch")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsRemoved")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("SprintEndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("SprintGoal")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime?>("SprintStartDate")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId");
+
+                    b.ToTable("Sprints", (string)null);
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.StageExecution", b =>
                 {
                     b.Property<Guid>("Id")
@@ -567,6 +596,9 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid>("SprintId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -581,6 +613,8 @@ namespace TeamPilot.Infrastructure.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SprintId");
 
                     b.HasIndex("ProjectId", "BranchName")
                         .IsUnique()
@@ -927,6 +961,15 @@ namespace TeamPilot.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.Sprint", b =>
+                {
+                    b.HasOne("TeamPilot.Domain.Entities.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.StageExecution", b =>
                 {
                     b.HasOne("TeamPilot.Domain.Entities.Agent", null)
@@ -947,6 +990,12 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.HasOne("TeamPilot.Domain.Entities.Project", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("TeamPilot.Domain.Entities.Sprint", null)
+                        .WithMany()
+                        .HasForeignKey("SprintId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -4,10 +4,10 @@ using TeamPilot.Domain.Enums;
 namespace TeamPilot.Domain.Entities;
 
 /// <summary>
-/// A project owns its own orchestrator/sub-agents, ticket board, remote Git repository, and
-/// CI/CD pipeline runs. Deliberately holds no navigation collections to those - like Commit/
-/// Review/Conflict on Ticket, they reference this entity by <see cref="Entity.Id"/> only,
-/// keeping Project a lightweight aggregate root.
+/// A project owns its own orchestrator/sub-agents, remote Git repository, CI/CD pipeline runs,
+/// and one or more <see cref="Sprint"/>s (each owning its own ticket board). Deliberately holds
+/// no navigation collections to those - like Commit/Review/Conflict on Ticket, they reference
+/// this entity by <see cref="Entity.Id"/> only, keeping Project a lightweight aggregate root.
 /// </summary>
 public class Project : Entity
 {
@@ -22,10 +22,6 @@ public class Project : Entity
     /// <summary>The remote's access token (a PAT), encrypted at rest via
     /// IGitCredentialProtector. Never exposed outside the Infrastructure Git integration.</summary>
     public string EncryptedAccessToken { get; private set; } = string.Empty;
-
-    /// <summary>The branch every ticket's feature branch is cut from, and that approvals merge
-    /// back into (replaces a hardcoded "main").</summary>
-    public string BaseBranch { get; private set; } = "main";
 
     /// <summary>
     /// Path to this project's server-managed local sandbox clone of <see cref="RemoteUrl"/>.
@@ -44,20 +40,9 @@ public class Project : Entity
     public string? CloneFailureReason { get; private set; }
 
     /// <summary>Set by <see cref="Remove"/>. Hides the project from every UI listing without
-    /// touching its remote repository, sandbox clone, tickets, or history - there is no "restore"
+    /// touching its remote repository, sandbox clone, sprints, or history - there is no "restore"
     /// in this pass, so removal is treated as one-way rather than a toggle.</summary>
     public bool IsRemoved { get; private set; }
-
-    /// <summary>When this project's sprint starts. Optional - a project can be used without
-    /// framing it as a time-boxed sprint at all.</summary>
-    public DateTime? SprintStartDate { get; private set; }
-
-    /// <summary>When this project's sprint ends. Optional, and never before
-    /// <see cref="SprintStartDate"/> when both are set - see <see cref="Create"/>/<see cref="UpdateDetails"/>.</summary>
-    public DateTime? SprintEndDate { get; private set; }
-
-    /// <summary>The sprint's goal/objective, free text. Optional.</summary>
-    public string? SprintGoal { get; private set; }
 
     private Project()
     {
@@ -67,11 +52,7 @@ public class Project : Entity
         string name,
         string? description,
         string remoteUrl,
-        string encryptedAccessToken,
-        string? baseBranch,
-        DateTime? sprintStartDate = null,
-        DateTime? sprintEndDate = null,
-        string? sprintGoal = null)
+        string encryptedAccessToken)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -88,22 +69,13 @@ public class Project : Entity
             throw new ArgumentException("Access token is required.", nameof(encryptedAccessToken));
         }
 
-        if (sprintStartDate is not null && sprintEndDate is not null && sprintEndDate < sprintStartDate)
-        {
-            throw new ArgumentException("Sprint end date can't be before the sprint start date.", nameof(sprintEndDate));
-        }
-
         return new Project
         {
             Name = name.Trim(),
             Description = description?.Trim() ?? string.Empty,
             RemoteUrl = remoteUrl.Trim(),
             EncryptedAccessToken = encryptedAccessToken,
-            BaseBranch = string.IsNullOrWhiteSpace(baseBranch) ? "main" : baseBranch.Trim(),
             Status = ProjectStatus.Cloning,
-            SprintStartDate = sprintStartDate,
-            SprintEndDate = sprintEndDate,
-            SprintGoal = sprintGoal?.Trim(),
         };
     }
 
@@ -138,35 +110,15 @@ public class Project : Entity
         MarkUpdated();
     }
 
-    public void UpdateDetails(
-        string name,
-        string? description,
-        string baseBranch,
-        DateTime? sprintStartDate = null,
-        DateTime? sprintEndDate = null,
-        string? sprintGoal = null)
+    public void UpdateDetails(string name, string? description)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
             throw new ArgumentException("Project name is required.", nameof(name));
         }
 
-        if (string.IsNullOrWhiteSpace(baseBranch))
-        {
-            throw new ArgumentException("Base branch is required.", nameof(baseBranch));
-        }
-
-        if (sprintStartDate is not null && sprintEndDate is not null && sprintEndDate < sprintStartDate)
-        {
-            throw new ArgumentException("Sprint end date can't be before the sprint start date.", nameof(sprintEndDate));
-        }
-
         Name = name.Trim();
         Description = description?.Trim() ?? string.Empty;
-        BaseBranch = baseBranch.Trim();
-        SprintStartDate = sprintStartDate;
-        SprintEndDate = sprintEndDate;
-        SprintGoal = sprintGoal?.Trim();
         MarkUpdated();
     }
 

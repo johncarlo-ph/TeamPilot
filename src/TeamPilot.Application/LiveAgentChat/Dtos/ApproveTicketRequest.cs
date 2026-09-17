@@ -8,4 +8,4 @@ namespace TeamPilot.Application.LiveAgentChat.Dtos;
 /// user may edit them in the chat UI before approving, in which case the edited values are used
 /// instead and recorded back onto the message.
 /// </summary>
-public sealed record ApproveTicketRequest(string Title, string? Description, string AcceptanceCriteria);
+public sealed record ApproveTicketRequest(Guid SprintId, string Title, string? Description, string AcceptanceCriteria);

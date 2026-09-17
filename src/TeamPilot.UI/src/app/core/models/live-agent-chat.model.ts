@@ -36,6 +36,7 @@ export interface SendChatMessageRequest {
 }
 
 export interface ApproveTicketRequest {
+  sprintId: string;
   title: string;
   description: string | null;
   acceptanceCriteria: string;

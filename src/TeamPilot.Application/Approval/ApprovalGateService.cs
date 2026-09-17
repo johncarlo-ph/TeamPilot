@@ -10,6 +10,7 @@ using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Reviews;
 using TeamPilot.Application.Reviews.Dtos;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -20,6 +21,7 @@ namespace TeamPilot.Application.Approval;
 public sealed class ApprovalGateService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
+    ISprintRepository sprintRepository,
     IReviewRepository reviewRepository,
     IGitService gitService,
     IGitCredentialProtector credentialProtector,
@@ -119,6 +121,9 @@ public sealed class ApprovalGateService(
             var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
+            var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
             var branchName = ticket.BranchName;
 
             await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
@@ -133,7 +138,7 @@ public sealed class ApprovalGateService(
                 ticket.UnlinkBranch();
 
                 var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
-                await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, project.BaseBranch, accessToken, cancellationToken);
+                await gitService.DeleteBranchAsync(project.RepositoryPath, branchName, sprint.BaseBranch, accessToken, cancellationToken);
 
                 await auditLogger.LogActionAsync(AuditEventType.GitBranchDeleted, $"Branch '{branchName}' deleted for rejected ticket '{ticket.Title}'.", cancellationToken);
             }
@@ -179,8 +184,11 @@ public sealed class ApprovalGateService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
         var branchName = ticket.BranchName;
-        var targetBranch = project.BaseBranch;
+        var targetBranch = sprint.BaseBranch;
         var accessToken = credentialProtector.Unprotect(project.EncryptedAccessToken);
 
         await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))

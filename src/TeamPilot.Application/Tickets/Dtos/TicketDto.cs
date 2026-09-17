@@ -11,6 +11,7 @@ namespace TeamPilot.Application.Tickets.Dtos;
 public sealed record TicketDto(
     Guid Id,
     Guid ProjectId,
+    Guid SprintId,
     string Title,
     string Description,
     string AcceptanceCriteria,

@@ -7,6 +7,7 @@ using TeamPilot.Application.Conflicts.Dtos;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
@@ -16,6 +17,7 @@ namespace TeamPilot.Application.Conflicts;
 public sealed class ConflictResolutionService(
     ITicketRepository ticketRepository,
     IProjectRepository projectRepository,
+    ISprintRepository sprintRepository,
     IConflictRepository conflictRepository,
     IGitService gitService,
     ILlmConnector llmConnector,
@@ -40,10 +42,13 @@ public sealed class ConflictResolutionService(
         var project = await projectRepository.GetByIdAsync(ticket.ProjectId, cancellationToken)
             ?? throw new NotFoundException(nameof(Project), ticket.ProjectId);
 
+        var sprint = await sprintRepository.GetByIdAsync(ticket.SprintId, cancellationToken)
+            ?? throw new NotFoundException(nameof(Sprint), ticket.SprintId);
+
         GitMergeConflictResult mergeCheck;
         await using (await GitRepositoryLock.AcquireAsync(project.RepositoryPath, cancellationToken))
         {
-            mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, project.BaseBranch, cancellationToken);
+            mergeCheck = await gitService.DetectMergeConflictsAsync(project.RepositoryPath, ticket.BranchName, sprint.BaseBranch, cancellationToken);
         }
 
         var conflicts = mergeCheck.ConflictingFiles

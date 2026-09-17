@@ -1,7 +1,7 @@
 @if (loading()) {
   <div class="text-body-secondary">Loading ticket...</div>
 } @else if (ticket(); as ticket) {
-  <a [routerLink]="['/projects', ticket.projectId, 'board']" class="small text-decoration-none">
+  <a [routerLink]="['/projects', ticket.projectId, 'sprints', ticket.sprintId, 'board']" class="small text-decoration-none">
     &larr; Back to board
   </a>
 

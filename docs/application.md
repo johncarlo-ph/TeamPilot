@@ -20,8 +20,9 @@ Infrastructure both depend on it, but it depends on neither.
 |---|---|
 | [`Auth/`](../src/TeamPilot.Application/Auth) | Login/refresh/logout use cases, audit logging, JWT/refresh-token/email-validation abstractions |
 | [`Users/`](../src/TeamPilot.Application/Users) | Admin user management: roles, enable/disable, project assignment |
-| [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD, project-scoped listing for non-admins |
-| [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking |
+| [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD (identity + Git connection only), project-scoped listing for non-admins |
+| [`Sprints/`](../src/TeamPilot.Application/Sprints) | Sprint CRUD within a project - branch and sprint details (start/end date, goal); owns the ticket-status-count rollup for the sprint list |
+| [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking - a ticket's parent is a `Sprint` |
 | [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 default pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate. Custom-agent creation and pipeline placement live in `Workflow/`, not here |
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
@@ -49,13 +50,17 @@ decisions into a shared, one-size-fits-all method — this violates Interface Se
 marginal code reduction, so it was rejected.
 
 **`IProjectAccessGuard` centralizes project-scoping instead of repeating it.** Every
-ticket-board-adjacent service (`TicketService`, `AgentService`, `InstructionService`,
-`OrchestrationService`, `ApprovalGateService`, `ConflictResolutionService`,
+ticket-board-adjacent service (`TicketService`, `SprintService`, `AgentService`,
+`InstructionService`, `OrchestrationService`, `ApprovalGateService`, `ConflictResolutionService`,
 `ProjectService`) calls `projectAccessGuard.EnsureAccessAsync(projectId)` before acting.
 Admins bypass it; everyone else must have that project in their `UserProjectAssignment` set.
 This is enforced **in Application, not just at the controller** — a design decision made
 explicitly so that a future second HTTP surface (or a background job) can't accidentally skip
-the check by calling a service directly.
+the check by calling a service directly. It stays keyed on project id even after `Sprint`/`Ticket`
+moved underneath `Project` in this app's hierarchy: `Sprint.ProjectId` and `Ticket`'s
+*denormalized* `ProjectId` (see [docs/domain.md](domain.md)) mean `SprintService` and
+`TicketService` can call `EnsureAccessAsync` exactly as before, without a join through `Sprint` on
+every check.
 
 **FluentValidation over `DataAnnotations`.** Validators are independently testable classes
 (`CreateTicketRequestValidator`, etc.), support conditional/cross-field rules the domain
@@ -87,32 +92,28 @@ awaited inline. This replaces the project's older invariant of "clone before per
 URL/token leaves no row behind" — a failed clone now leaves the row visible as
 `Project.Status: Failed` with `CloneFailureReason` set, the same way a failed ticket pipeline run
 stays visible as `Blocked` rather than disappearing. `Project.RemoteUrl` is immutable after
-creation (re-pointing it would orphan the existing sandbox clone) — only `Name`/`Description`/
-`BaseBranch` and the access token (via `RotateAccessToken`) can be changed later.
+creation (re-pointing it would orphan the existing sandbox clone) — only `Name`/`Description`
+and the access token (via `RotateAccessToken`) can be changed later. `Project` no longer carries a
+base branch or sprint fields at all — those belong to `Sprint` (see below); a `Project` created
+today has no tickets or branch of its own until at least one `Sprint` exists under it.
 
-**The requested base branch is checked against the remote before either creating or updating a
-project.** Before persisting anything, `ProjectService.CreateAsync` resolves the base branch
-(`CreateProjectRequest.BaseBranch`, or `"main"` when omitted — mirrors `Project.Create`'s own
-default) and calls `IGitService.RemoteBranchExistsAsync(remoteUrl, accessToken, baseBranch)`,
-which lists the remote's refs directly (`Repository.ListRemoteReferences` in
-`LibGit2SharpGitService`) without cloning it locally. A branch that doesn't exist on the remote
-throws `GitOperationException` and no project row is created — unlike a bad URL/token surfacing
-only after the row exists and the detached clone fails (see above), a missing base branch is
-caught synchronously, before the request even returns. `ProjectService.UpdateAsync` runs the same
-check before calling `Project.UpdateDetails` — a rejected `BaseBranch` change leaves the project
-completely untouched (no rename, no description change, no token rotation either, even if the
-request also included those). Since `UpdateProjectRequest.AccessToken` blank means "keep the
-currently stored token" (see `UpdateProjectRequest`), the check authenticates with
-`IGitCredentialProtector.Unprotect(project.EncryptedAccessToken)` in that case, or the new token
-directly when one was supplied — either way the *plaintext* token the check ends up using is
-never persisted or logged, only handed to `RemoteBranchExistsAsync` for the one remote call.
-
-**`Project`'s three sprint fields (`SprintStartDate`/`SprintEndDate`/`SprintGoal`) are all
-optional and purely informational** — framing a `Project` as an Agile sprint is a naming
-convention the UI/user adopt, not something the domain enforces (no gating on dates, no
-auto-transition when a sprint ends). `CreateProjectRequestValidator`/`UpdateProjectRequestValidator`
-reject a `SprintEndDate` before `SprintStartDate` when both are given (`Project.Create`/
-`UpdateDetails` guard the same invariant domain-side); either date alone, or neither, is valid.
+**`SprintService` is `ProjectService`'s old base-branch-and-sprint-fields logic, moved onto its own
+aggregate.** `SprintService.CreateAsync(projectId, CreateSprintRequest)` resolves the base branch
+(`CreateSprintRequest.BaseBranch`, or `"main"` when omitted — mirrors `Sprint.Create`'s own
+default), decrypts the *parent project's* stored access token
+(`IGitCredentialProtector.Unprotect(project.EncryptedAccessToken)`), and calls
+`IGitService.RemoteBranchExistsAsync(project.RemoteUrl, accessToken, baseBranch)` — the same
+remote-refs-only check `ProjectService.CreateAsync` used to run for `Project.BaseBranch`, just
+against the project a sprint is being created under instead of a request-supplied token. A branch
+that doesn't exist on the remote throws `GitOperationException` and no sprint row is created.
+`SprintService.UpdateAsync` runs the same check before calling `Sprint.UpdateDetails` — a rejected
+`BaseBranch` change leaves the sprint completely untouched. The three sprint fields
+(`SprintStartDate`/`SprintEndDate`/`SprintGoal`) are all optional and purely informational —
+framing a `Sprint` as an Agile sprint's dates/goal is a naming convention the UI/user adopt, not
+something the domain enforces (no gating on dates, no auto-transition when a sprint ends).
+`CreateSprintRequestValidator`/`UpdateSprintRequestValidator` reject a `SprintEndDate` before
+`SprintStartDate` when both are given (`Sprint.Create`/`UpdateDetails` guard the same invariant
+domain-side); either date alone, or neither, is valid.
 
 The detached clone reports progress via `IGitService.CloneAsync`'s optional `IProgress<GitCloneProgress>`
 parameter (object/byte counts during transfer, step counts during checkout — wired up in
@@ -123,19 +124,22 @@ outcome, is published as a `ProjectEventTypes.ProjectCloneProgress` event carryi
 `GET /api/projects/{projectId}/events`) used for ticket refetch signals. This is a deliberate,
 narrow exception to that stream's usual "refetch signal, no state" design (see `ProjectEvent`'s
 own doc comment) — there's no persisted "current clone progress" a client could refetch from
-instead, since progress isn't stored anywhere once reported. A project created against a still-
-`Cloning`/`Failed` project's ticket-creation attempt is rejected with `ProjectNotReadyException`
-(`TicketService.CreateAsync`) rather than failing confusingly against an empty `RepositoryPath`.
+instead, since progress isn't stored anywhere once reported. A ticket-creation attempt under a
+still-`Cloning`/`Failed` project's sprint is rejected with `ProjectNotReadyException`
+(`TicketService.CreateAsync`, resolving the sprint's `ProjectId` first) rather than failing
+confusingly against an empty `RepositoryPath`.
 
-**`ProjectDto` carries each project's per-status ticket counts, not just its own fields.**
-`ProjectService.ListAsync`/`GetByIdAsync`/`UpdateAsync` all call
-`ITicketRepository.GetStatusCountsByProjectAsync` — one grouped query across every project being
-returned, not one query per project — and shape the result into `TicketStatusCountsDto` (`ToDo`/
+**`SprintDto` carries each sprint's per-status ticket counts, not just its own fields — `ProjectDto`
+no longer does.** `SprintService.ListAsync`/`GetByIdAsync`/`UpdateAsync` all call
+`ITicketRepository.GetStatusCountsBySprintAsync` — one grouped query across every sprint being
+returned, not one query per sprint — and shape the result into `TicketStatusCountsDto` (`ToDo`/
 `InProgress`/`Blocked`/`ForReview`/`Done`; `Cancelled` excluded, matching the UI's board columns).
 `CreateAsync` skips the query entirely and returns an all-zero `TicketStatusCountsDto`, since a
-brand-new project provably has no tickets yet. This exists so the UI's project list can show a
-per-project status summary (see [docs/frontend.md](frontend.md)) off the same `GET /api/projects`
-call it already makes, rather than fetching each project's tickets separately.
+brand-new sprint provably has no tickets yet. This exists so the UI's sprint list can show a
+per-sprint status summary (see [docs/frontend.md](frontend.md)) off the same
+`GET /api/projects/{projectId}/sprints` call it already makes, rather than fetching each sprint's
+tickets separately. `ProjectDto` itself is now just identity and clone status — no ticket counts,
+since a project's tickets are spread across however many sprints it has.
 
 **Removing a project hides it, it doesn't delete anything.** `ProjectService.RemoveAsync`
 (Admin-only, `DELETE /api/projects/{id}`) calls `Project.Remove()`, which just sets
@@ -149,8 +153,10 @@ calling `Remove()`, `RemoveAsync` sums `ITicketRepository.CountByStatusAsync` fo
 `WorkflowLockedException`'s `InProgress`-or-`Blocked` lock, since a `Blocked` ticket's pipeline is
 merely paused and hiding the project doesn't touch the Git state it's paused against.
 
-**Every ticket branch is cut from, and merges back into, `Project.BaseBranch`** — not a
-hardcoded `"main"`. `TicketService.LinkBranchAsync` (manual) and `OrchestrationService`'s own
+**Every ticket branch is cut from, and merges back into, its ticket's `Sprint.BaseBranch`** — not a
+hardcoded `"main"`, and not `Project` (which no longer has a base branch at all). `TicketService`
+resolves the ticket's sprint (`ISprintRepository.GetByIdAsync(ticket.SprintId)`) alongside its
+project wherever it needs `BaseBranch` - `LinkBranchAsync` (manual) and `OrchestrationService`'s own
 branch-linking step (automatic, at pipeline start) both fetch the remote, create the branch from
 the base branch's current tip, and push it; the Coding stage pushes after every commit;
 `ApprovalGateService.ApproveAsync` fetches, merges locally, commits the transaction, and *then*
@@ -158,7 +164,9 @@ pushes the base branch — a push failure at that last step surfaces as an error
 back the already-committed local approval (a deliberate simplification, not a full saga/outbox
 pattern).
 
-**A branch belongs to at most one ticket per project, permanently.** `TicketService.LinkBranchAsync`
+**A branch belongs to at most one ticket per project, permanently** — project-wide, not
+sprint-scoped, since every sprint in a project shares the same physical sandbox clone.
+`TicketService.LinkBranchAsync`
 is the one path where this could otherwise be violated - it's the manual "Link Branch" flow, and
 it deliberately supports pointing a ticket at a branch that already exists (the UI's confirm
 dialog covers this case explicitly). Before doing anything else, it calls
@@ -191,11 +199,12 @@ same private `DeleteLinkedBranchAsync` helper, which validates before touching G
 inside the same unit of work as `Cancel()`, a Git failure here rolls the whole cancellation back
 (no `SaveChangesAsync` is reached) rather than leaving the ticket cancelled with a dangling branch.
 
-**Merge-conflict detection always checks against `Project.BaseBranch`, never a hardcoded branch
-name.** `ConflictResolutionService.DetectConflictsAsync` passes `project.BaseBranch` as the
-target branch to `IGitService.DetectMergeConflictsAsync` - the same branch every ticket branch is
-actually cut from and merged back into (see above), so a project configured with `master`,
-`develop`, or anything other than `main` still gets a correct conflict check.
+**Merge-conflict detection always checks against the ticket's `Sprint.BaseBranch`, never a
+hardcoded branch name.** `ConflictResolutionService.DetectConflictsAsync` resolves the ticket's
+sprint and passes `sprint.BaseBranch` as the target branch to `IGitService.DetectMergeConflictsAsync`
+- the same branch every ticket branch is actually cut from and merged back into (see above), so a
+sprint configured with `master`, `develop`, or anything other than `main` still gets a correct
+conflict check.
 
 **Resolving a conflict (either path) only ever records the content to use - nothing is written to
 Git until Approve.** `SuggestResolutionAsync` sends the model the whole conflicted file with its
@@ -396,8 +405,10 @@ to the Live Agent - reused as-is by the Research/Design/Coding pipeline stages' 
 - **Tools given to the model**: `list_files`/`read_file` (read-only, sandboxed — see
   [docs/infrastructure.md](infrastructure.md) for the sandbox guard and secret redaction; the
   same pair the pipeline stages use, just always reading whatever branch is currently checked
-  out rather than a specific ticket branch), `list_tickets` (wraps `ITicketRepository.ListAsync`,
-  lean id/title/status rows),
+  out rather than a specific ticket branch), `list_tickets` (wraps
+  `ITicketRepository.ListByProjectAsync`, lean id/title/status rows across every sprint in the
+  project — deliberately project-wide rather than scoped to one sprint, since the Live Agent
+  reasons about the whole project),
   `get_ticket(id)` (wraps `ITicketRepository.GetByIdAsync` for one ticket's full title/status/
   description/branch/cancellation reason — rejected as not found if the id belongs to a
   different project), and `propose_ticket(title, description, acceptanceCriteria)`. The model is
@@ -411,8 +422,12 @@ to the Live Agent - reused as-is by the Research/Design/Coding pipeline stages' 
   `ProposedTicketDescription`/`ProposedTicketAcceptanceCriteria`). The real `Ticket` is only
   created if/when the user clicks "Create ticket" on that message in the UI, which calls
   `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/conversations/{conversationId}/messages/{messageId}/approve-ticket`,
-  body `ApproveTicketRequest(Title, Description, AcceptanceCriteria)`)
-  — it creates the ticket via the ordinary `ITicketService.CreateAsync` using the request's
+  body `ApproveTicketRequest(SprintId, Title, Description, AcceptanceCriteria)`)
+  — since the Live Agent's `Conversation` is project-scoped but a `Ticket` now needs a sprint,
+  the approving user's `SprintId` (normally whichever sprint's board the chat panel is open
+  alongside) says which sprint the ticket lands in; `ApproveTicketAsync` 404s if it doesn't belong
+  to the conversation's own project. It creates the ticket via the ordinary
+  `ITicketService.CreateAsync(request.SprintId, ...)` using the request's
   title/description/acceptance criteria and, in the same call, stamps the message's
   `CreatedTicketId` (`ChatMessage.MarkTicketCreated(ticketId, finalTitle, finalDescription,
   finalAcceptanceCriteria)`) so every viewer - including the same user after a reload - sees the
@@ -846,7 +861,7 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.NotFoundException` | Referenced entity doesn't exist | Any `GetByIdAsync` call site |
 | `Common.Exceptions.ForbiddenException` | Wrong role or no project access | `IProjectAccessGuard`, role checks |
 | `Common.Exceptions.AuthenticationFailedException` | Bad/expired/reused token, disabled account | `AuthService` |
-| `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host) | `IGitService` implementation (Infrastructure), propagated through `ProjectService`/`TicketService`/`ApprovalGateService`; caught and turned into a blocked ticket by `OrchestrationService` specifically |
+| `Common.Exceptions.GitOperationException` | Clone/push/fetch against the remote failed (bad URL/token, unreachable host), or a requested base branch doesn't exist on the remote | `IGitService` implementation (Infrastructure), propagated through `SprintService`/`TicketService`/`ApprovalGateService`; caught and turned into a blocked ticket by `OrchestrationService` specifically |
 | `Common.Exceptions.LlmOperationException` | A Claude API call failed after the resilience pipeline's retries were exhausted | `ClaudeLlmConnector` (Infrastructure); caught and turned into a blocked ticket by `OrchestrationService`, otherwise propagates (e.g. from `LiveAgentChatService`) |
 | `Common.Exceptions.WorkflowLockedException` | A structural pipeline change was attempted while the project has an `InProgress` or `Blocked` ticket | `WorkflowService` |
 | `Common.Exceptions.AgentInstructionsIncompleteException` | An agent without a current Constitution/Guideline/Requirement instruction was placed into a workflow | `WorkflowService.AddExistingAgentAsync` |
@@ -854,7 +869,8 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.UnresolvedConflictsException` | Approving a ticket while a conflict is still unresolved by its own status, or the live merge attempt finds a conflicting file with no resolution available | `ApprovalGateService.ApproveAsync` |
 | `Common.Exceptions.StaleConflictResolutionException` | The live merge attempt finds a resolved conflict whose `Conflict.BaseTipSha` no longer matches the base branch's current tip - the affected conflicts are reset to `Detected` (`Conflict.MarkStale`) before this is thrown | `ApprovalGateService.ApproveAsync` |
 | `Common.Exceptions.ProjectNotReadyException` | Creating a ticket against a project that's still `Cloning`, or whose clone `Failed` | `TicketService.CreateAsync` |
-| `Common.Exceptions.ProjectHasActiveTicketsException` | Removing a project while it has a ticket `InProgress` or `ForReview` | `ProjectService.RemoveAsync` |
+| `Common.Exceptions.ProjectHasActiveTicketsException` | Removing a project while any of its sprints has a ticket `InProgress` or `ForReview` | `ProjectService.RemoveAsync` |
+| `Common.Exceptions.SprintHasActiveTicketsException` | Removing a sprint while it has a ticket `InProgress` or `ForReview` | `SprintService.RemoveAsync` |
 | `Domain.Exceptions.DomainException` (any subtype) | Domain invariant violated | Entity behavior methods, allowed to propagate unchanged |
 
 None of these are caught within Application — they propagate to the API's

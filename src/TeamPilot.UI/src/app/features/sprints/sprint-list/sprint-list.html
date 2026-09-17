@@ -1,0 +1,102 @@
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <a routerLink="/projects" class="small text-decoration-none">&larr; All projects</a>
+    <div class="d-flex align-items-baseline gap-2 flex-wrap">
+      <h1 class="h3 mb-0">{{ project()?.name ?? 'Loading…' }}</h1>
+      <span class="text-body-secondary">Sprints</span>
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']"
+      >Agents</a
+    >
+    @if (authService.isAdmin()) {
+      <button type="button" class="btn btn-outline-primary" (click)="openCreate()">
+        New Sprint
+      </button>
+    }
+  </div>
+</div>
+
+@if (loading()) {
+  <div class="text-body-secondary">Loading sprints...</div>
+} @else if (!sprints().length) {
+  <p class="text-body-secondary">No sprints yet.</p>
+} @else {
+  <div class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-3">
+    @for (sprint of sprints(); track sprint.id) {
+      <div class="col">
+        <div class="card h-100 shadow-sm bg-white">
+          <div class="card-body d-flex flex-column">
+            <h2 class="h5">{{ sprint.name }}</h2>
+            <p class="small text-body-secondary mb-3">
+              <code>{{ sprint.baseBranch }}</code>
+            </p>
+
+            @if (sprint.sprintStartDate || sprint.sprintEndDate || sprint.sprintGoal) {
+              <div class="small text-body-secondary mb-3">
+                @if (sprint.sprintStartDate || sprint.sprintEndDate) {
+                  <div>
+                    {{ sprint.sprintStartDate ? (sprint.sprintStartDate | date: 'mediumDate') : '?' }}
+                    &ndash;
+                    {{ sprint.sprintEndDate ? (sprint.sprintEndDate | date: 'mediumDate') : '?' }}
+                  </div>
+                }
+                @if (sprint.sprintGoal) {
+                  <div class="fst-italic">{{ sprint.sprintGoal }}</div>
+                }
+              </div>
+            }
+
+            <div class="d-flex flex-wrap gap-1 mb-3">
+              @for (summary of statusSummaries(sprint); track summary.status) {
+                <span
+                  class="badge rounded-pill status-badge badge-outline"
+                  [class]="summary.badgeClass"
+                  [title]="summary.title + ': ' + summary.count"
+                >
+                  <span aria-hidden="true">{{ summary.icon }}</span> {{ summary.count }}
+                </span>
+              }
+            </div>
+            <div class="d-flex gap-2">
+              <a
+                class="btn btn-outline-primary btn-sm flex-grow-1"
+                [routerLink]="['/projects', projectId, 'sprints', sprint.id, 'board']"
+              >
+                Open Board
+              </a>
+              @if (authService.isAdmin()) {
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary btn-sm"
+                  [disabled]="isRemoving(sprint.id)"
+                  (click)="openEdit(sprint)"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline-danger btn-sm"
+                  [disabled]="!canRemove(sprint) || isRemoving(sprint.id)"
+                  [title]="!canRemove(sprint) ? 'Cannot remove while a ticket is In Progress or For Review.' : ''"
+                  (click)="remove(sprint)"
+                >
+                  {{ isRemoving(sprint.id) ? 'Removing...' : 'Remove' }}
+                </button>
+              }
+            </div>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+}
+
+<app-sprint-form
+  [open]="formOpen()"
+  [sprint]="editingSprint()"
+  [saving]="saving()"
+  (closed)="closeForm()"
+  (saved)="save($event)"
+></app-sprint-form>

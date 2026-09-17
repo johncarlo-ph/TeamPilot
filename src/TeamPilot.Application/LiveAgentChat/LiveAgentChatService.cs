@@ -9,6 +9,7 @@ using TeamPilot.Application.Instructions;
 using TeamPilot.Application.LiveAgentChat.Dtos;
 using TeamPilot.Application.Llm;
 using TeamPilot.Application.Projects;
+using TeamPilot.Application.Sprints;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
@@ -30,6 +31,7 @@ public sealed class LiveAgentChatService(
     IAgentService agentService,
     IInstructionRepository instructionRepository,
     IProjectRepository projectRepository,
+    ISprintRepository sprintRepository,
     ITicketRepository ticketRepository,
     ITicketService ticketService,
     IGitService gitService,
@@ -109,10 +111,16 @@ public sealed class LiveAgentChatService(
             throw new ChatMessageTicketApprovalException("This message's proposed ticket was already rejected.");
         }
 
+        var sprint = await sprintRepository.GetByIdAsync(request.SprintId, cancellationToken);
+        if (sprint is null || sprint.ProjectId != projectId)
+        {
+            throw new NotFoundException(nameof(Sprint), request.SprintId);
+        }
+
         // The user may have edited the draft in the chat UI before approving, so the request's
         // title/description (not the message's originally-proposed ones) are what get created.
         var ticket = await ticketService.CreateAsync(
-            projectId,
+            request.SprintId,
             new CreateTicketRequest(request.Title, request.Description, request.AcceptanceCriteria),
             cancellationToken);
 
@@ -248,7 +256,7 @@ public sealed class LiveAgentChatService(
                         status = parsed;
                     }
 
-                    var tickets = await ticketRepository.ListAsync(projectId, status, cancellationToken);
+                    var tickets = await ticketRepository.ListByProjectAsync(projectId, status, cancellationToken);
                     var text = tickets.Count == 0
                         ? "(no tickets)"
                         : string.Join("\n", tickets.Select(t => $"{t.Id} | {t.Title} | {t.Status}"));

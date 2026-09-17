@@ -8,39 +8,47 @@ namespace TeamPilot.Domain.Tests;
 public class TicketTests
 {
     private static readonly Guid ProjectId = Guid.NewGuid();
+    private static readonly Guid SprintId = Guid.NewGuid();
 
     [Fact]
     public void Create_WithValidTitle_SetsStatusToToDo()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "Users can't log in", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "Users can't log in", "Acceptance criteria");
 
         Assert.Equal(TicketStatus.ToDo, ticket.Status);
         Assert.Equal("Fix login bug", ticket.Title);
         Assert.Equal(ProjectId, ticket.ProjectId);
+        Assert.Equal(SprintId, ticket.SprintId);
     }
 
     [Fact]
     public void Create_WithEmptyTitle_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => Ticket.Create(ProjectId, "   ", "desc", "Acceptance criteria"));
+        Assert.Throws<ArgumentException>(() => Ticket.Create(ProjectId, SprintId, "   ", "desc", "Acceptance criteria"));
     }
 
     [Fact]
     public void Create_WithEmptyProjectId_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => Ticket.Create(Guid.Empty, "Fix login bug", "desc", "Acceptance criteria"));
+        Assert.Throws<ArgumentException>(() => Ticket.Create(Guid.Empty, SprintId, "Fix login bug", "desc", "Acceptance criteria"));
+    }
+
+    [Fact]
+    public void Create_WithEmptySprintId_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => Ticket.Create(ProjectId, Guid.Empty, "Fix login bug", "desc", "Acceptance criteria"));
     }
 
     [Fact]
     public void Create_WithEmptyAcceptanceCriteria_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => Ticket.Create(ProjectId, "Fix login bug", "desc", "   "));
+        Assert.Throws<ArgumentException>(() => Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "   "));
     }
 
     [Fact]
     public void AssignAgent_FirstAssignment_MovesTicketToInProgress()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         var agent = Agent.Create(ProjectId, "Coder", AgentRole.Coding);
 
         ticket.AssignAgent(agent);
@@ -52,7 +60,7 @@ public class TicketTests
     [Fact]
     public void AssignAgent_SameAgentTwice_DoesNotDuplicateAssignment()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         var agent = Agent.Create(ProjectId, "Coder", AgentRole.Coding);
 
         ticket.AssignAgent(agent);
@@ -64,7 +72,7 @@ public class TicketTests
     [Fact]
     public void MoveToReview_WhenStatusIsToDo_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.MoveToReview());
     }
@@ -72,7 +80,7 @@ public class TicketTests
     [Fact]
     public void MoveToReview_WhenStatusIsInProgress_SetsStatusToForReview()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
 
         ticket.MoveToReview();
@@ -83,7 +91,7 @@ public class TicketTests
     [Fact]
     public void Approve_WhenStatusIsForReview_SetsStatusToDone()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
 
@@ -95,7 +103,7 @@ public class TicketTests
     [Fact]
     public void Approve_WhenStatusIsInProgress_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Approve());
@@ -104,7 +112,7 @@ public class TicketTests
     [Fact]
     public void RequestChanges_WhenStatusIsForReview_SetsStatusToInProgress()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
 
@@ -119,7 +127,7 @@ public class TicketTests
     [InlineData("   ")]
     public void Cancel_WhenStatusIsToDo_SetsStatusToCancelledAndTreatsBlankReasonAsNull(string? reason)
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
 
         ticket.Cancel(reason);
 
@@ -130,7 +138,7 @@ public class TicketTests
     [Fact]
     public void Cancel_WhenStatusIsInProgress_SetsStatusToCancelledAndTrimsReason()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
 
         ticket.Cancel("  Requirement changed  ");
@@ -142,7 +150,7 @@ public class TicketTests
     [Fact]
     public void Cancel_WhenStatusIsForReview_SetsStatusToCancelled()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
 
@@ -154,7 +162,7 @@ public class TicketTests
     [Fact]
     public void Cancel_WhenStatusIsDone_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
         ticket.Approve();
@@ -165,7 +173,7 @@ public class TicketTests
     [Fact]
     public void Cancel_WhenAlreadyCancelled_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.Cancel("First reason");
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Cancel("Second reason"));
@@ -174,7 +182,7 @@ public class TicketTests
     [Fact]
     public void LinkBranch_WhenCancelled_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.Cancel("No longer needed");
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.LinkBranch("feature/fix-login-bug"));
@@ -183,7 +191,7 @@ public class TicketTests
     [Fact]
     public void UnlinkBranch_WhenCancelled_ClearsBranchName()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.LinkBranch("feature/fix-login-bug");
         ticket.Cancel("No longer needed");
 
@@ -199,7 +207,7 @@ public class TicketTests
     [InlineData(nameof(TicketStatus.Done))]
     public void UnlinkBranch_WhenNotCancelled_ThrowsInvalidTicketStateTransitionException(string statusName)
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.LinkBranch("feature/fix-login-bug");
 
@@ -220,7 +228,7 @@ public class TicketTests
     [Fact]
     public void Block_WhenStatusIsInProgress_SetsStatusToBlocked()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
 
         ticket.Block();
@@ -235,7 +243,7 @@ public class TicketTests
     [InlineData(nameof(TicketStatus.Cancelled))]
     public void Block_WhenNotInProgress_ThrowsInvalidTicketStateTransitionException(string statusName)
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
 
         switch (Enum.Parse<TicketStatus>(statusName))
         {
@@ -259,7 +267,7 @@ public class TicketTests
     [Fact]
     public void Unblock_WhenStatusIsBlocked_SetsStatusToInProgress()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.Block();
 
@@ -271,7 +279,7 @@ public class TicketTests
     [Fact]
     public void Unblock_WhenNotBlocked_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
 
         Assert.Throws<InvalidTicketStateTransitionException>(() => ticket.Unblock());
@@ -280,7 +288,7 @@ public class TicketTests
     [Fact]
     public void Cancel_WhenStatusIsBlocked_SetsStatusToCancelled()
     {
-        var ticket = Ticket.Create(ProjectId, "Fix login bug", "desc", "Acceptance criteria");
+        var ticket = Ticket.Create(ProjectId, SprintId, "Fix login bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(ProjectId, "Coder", AgentRole.Coding));
         ticket.Block();
 

@@ -6,6 +6,7 @@ import { ConflictDto } from './conflict.model';
 export interface TicketDto {
   id: string;
   projectId: string;
+  sprintId: string;
   title: string;
   description: string;
   acceptanceCriteria: string;
@@ -29,6 +30,7 @@ export interface TicketAgentAssignmentDto {
 export interface TicketDetailDto {
   id: string;
   projectId: string;
+  sprintId: string;
   title: string;
   description: string;
   acceptanceCriteria: string;

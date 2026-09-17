@@ -1,15 +1,14 @@
 <div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
   <div>
-    <a routerLink="/projects" class="small text-decoration-none">&larr; All projects</a>
+    <a [routerLink]="['/projects', projectId, 'sprints']" class="small text-decoration-none"
+      >&larr; {{ project()?.name ?? 'Sprints' }}</a
+    >
     <div class="d-flex align-items-baseline gap-2 flex-wrap">
-      <h1 class="h3 mb-0">{{ project()?.name ?? 'Loading…' }}</h1>
+      <h1 class="h3 mb-0">{{ sprint()?.name ?? 'Loading…' }}</h1>
       <span class="text-body-secondary">Ticket Board</span>
     </div>
   </div>
   <div class="d-flex gap-2">
-    <a class="btn btn-outline-secondary" [routerLink]="['/projects', projectId, 'agents']"
-      >Agents</a
-    >
     <button type="button" class="btn btn-outline-secondary" (click)="cancelledTicketsOpen.set(true)">
       Cancelled Tickets
     </button>
@@ -26,6 +25,7 @@
     <div class="board-chat-col" [class.board-chat-col--collapsed]="chatCollapsed()">
       <app-chat-panel
         [projectId]="projectId"
+        [sprintId]="sprintId"
         [collapsed]="chatCollapsed()"
         (collapsedChange)="chatCollapsed.set($event)"
       ></app-chat-panel>
@@ -82,6 +82,6 @@
 
 <app-cancelled-tickets-modal
   [open]="cancelledTicketsOpen()"
-  [projectId]="projectId"
+  [sprintId]="sprintId"
   (closed)="cancelledTicketsOpen.set(false)"
 ></app-cancelled-tickets-modal>

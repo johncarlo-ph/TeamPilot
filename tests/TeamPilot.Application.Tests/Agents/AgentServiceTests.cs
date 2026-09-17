@@ -17,7 +17,7 @@ public class AgentServiceTests
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly AgentService _sut;
-    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+    private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token");
 
     public AgentServiceTests()
     {

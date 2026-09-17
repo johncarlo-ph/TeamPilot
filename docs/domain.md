@@ -118,8 +118,9 @@ automatic branch delete.
 
 | Entity | Represents | Key behavior methods |
 |---|---|---|
-| `Project` | A project tied to a remote Git repo, with its own agents and ticket board - optionally framed as an Agile sprint via `SprintStartDate`/`SprintEndDate`/`SprintGoal` | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
-| `Ticket` | A unit of work on the Kanban board (a "user story"), with required `AcceptanceCriteria` alongside its free-text `Description` | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
+| `Project` | A project tied to a remote Git repo, with its own agents and one or more `Sprint`s | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
+| `Sprint` | A time-boxed unit of work inside a `Project` - its own branch and sprint details (start/end date, goal), owning its own ticket board | `Create`, `UpdateDetails`, `Remove` |
+| `Ticket` | A unit of work on a sprint's Kanban board (a "user story"), with required `AcceptanceCriteria` alongside its free-text `Description` | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
@@ -188,16 +189,33 @@ the same reasoning as a `Ticket` staying visible as `Blocked` instead of vanishi
 can be called on a project of any status - `MarkCloned` after a prior `MarkCloneFailed` is exactly
 how a retried clone recovers.
 
-## Sprint fields
+## Sprint
 
-`Project.SprintStartDate`/`SprintEndDate`/`SprintGoal` let a `Project` double as an Agile sprint
-(the mapping this app is built around: Project = Sprint, Ticket = User Story with acceptance
-criteria) without the domain enforcing anything about it - all three are optional, and nothing
-gates on them (no auto-transition when a sprint ends, no validation that a ticket falls within its
-project's sprint window). The one invariant `Create`/`UpdateDetails` do guard: when both dates are
-given, `SprintEndDate` can't be before `SprintStartDate` (`ArgumentException` otherwise). A project
-with no sprint fields set behaves exactly as before this feature existed - they're additive, not a
-new required concept.
+`Sprint` is the mapping this app is built around: **Project = repository connection, Sprint =
+Agile sprint, Ticket = User Story** with acceptance criteria. A `Project` holds only its identity
+and Git connection (`Name`, `Description`, `RemoteUrl`, `EncryptedAccessToken`, `RepositoryPath`,
+clone `Status`) - everything about running a sprint (`BaseBranch`, `SprintStartDate`,
+`SprintEndDate`, `SprintGoal`) lives on `Sprint`, and `Ticket`'s parent is a `Sprint`, not a
+`Project` directly (see below). Like `Project`, `Sprint` holds no navigation collection to its
+tickets - it's a lightweight aggregate root referenced by id only.
+
+`Sprint.Create(projectId, name, baseBranch?, sprintStartDate?, sprintEndDate?, sprintGoal?)`
+requires a non-empty `projectId` and `name`; `baseBranch` defaults to `"main"` when blank, mirroring
+`Project.Create`'s old default. The dates/goal are all optional, and nothing gates on them (no
+auto-transition when a sprint ends, no validation that a ticket falls within its sprint's window) -
+the one invariant `Create`/`UpdateDetails` do guard is that, when both dates are given,
+`SprintEndDate` can't be before `SprintStartDate` (`ArgumentException` otherwise).
+`Sprint.IsRemoved`/`Remove()` mirror `Project`'s own removal: a one-way hide flag, with the
+active-ticket safety check living in `SprintService.RemoveAsync`
+([docs/application.md](application.md)), not on the entity itself.
+
+**`Ticket.ProjectId` is a denormalized column**, set from `Sprint.ProjectId` at creation time
+alongside the real parent FK, `Ticket.SprintId`. This is a deliberate shortcut: `Ticket.ProjectId`
+lets `IProjectAccessGuard` and the `(ProjectId, BranchName)` git-branch-uniqueness index stay
+keyed on project id exactly as before, without a join through `Sprint` on every check - branch
+names must be unique across a project's one physical sandbox clone regardless of which sprint a
+ticket belongs to. `Ticket.Create(projectId, sprintId, title, description?, acceptanceCriteria)`
+requires both ids non-empty.
 
 ## Project removal
 

@@ -29,16 +29,27 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
             .IsUnique()
             .HasFilter("[BranchName] IS NOT NULL");
 
+        builder.HasIndex(t => t.SprintId);
+
         builder.Navigation(t => t.Assignments).UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.Navigation(t => t.Commits).UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.Navigation(t => t.Reviews).UsePropertyAccessMode(PropertyAccessMode.Field);
         builder.Navigation(t => t.Conflicts).UsePropertyAccessMode(PropertyAccessMode.Field);
 
         // Ticket has no navigation back to Project (WithOne() with no argument) - same
-        // "reference by id only" pattern used for Commit/Review/Conflict below.
+        // "reference by id only" pattern used for Commit/Review/Conflict below. ProjectId is
+        // denormalized from Sprint.ProjectId (kept for access-guard checks and the branch-
+        // uniqueness index above, both project-wide rather than per-sprint), so this FK is
+        // NoAction rather than Cascade - Sprint's own FK below already cascades Project ->
+        // Sprint -> Ticket, and SQL Server rejects a second cascade path to the same table.
         builder.HasOne<Project>()
             .WithMany()
             .HasForeignKey(t => t.ProjectId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        builder.HasOne<Sprint>()
+            .WithMany()
+            .HasForeignKey(t => t.SprintId)
             .OnDelete(DeleteBehavior.Cascade);
 
         // These children have no navigation back to Ticket (WithOne() with no argument) -

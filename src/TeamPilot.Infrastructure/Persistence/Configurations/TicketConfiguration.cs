@@ -13,6 +13,7 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
 
         builder.Property(t => t.Title).IsRequired().HasMaxLength(200);
         builder.Property(t => t.Description).HasMaxLength(4000);
+        builder.Property(t => t.AcceptanceCriteria).IsRequired().HasMaxLength(4000);
         builder.Property(t => t.BranchName).HasMaxLength(200);
         builder.Property(t => t.CancellationReason).HasMaxLength(1000);
         builder.Property(t => t.Status).HasConversion<string>().HasMaxLength(20).IsRequired();

@@ -15,6 +15,7 @@ public class ChatMessageConfiguration : IEntityTypeConfiguration<ChatMessage>
         builder.Property(m => m.Content).IsRequired().HasColumnType("nvarchar(max)");
         builder.Property(m => m.ProposedTicketTitle).HasMaxLength(200);
         builder.Property(m => m.ProposedTicketDescription).HasColumnType("nvarchar(max)");
+        builder.Property(m => m.ProposedTicketAcceptanceCriteria).HasColumnType("nvarchar(max)");
         builder.Property(m => m.SenderName).HasMaxLength(200);
 
         builder.HasIndex(m => new { m.ConversationId, m.CreatedAtUtc });

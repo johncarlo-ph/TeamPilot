@@ -48,7 +48,7 @@ public class TicketQuestionServiceTests
 
     private Ticket CreateBlockedTicket()
     {
-        var ticket = Ticket.Create(_projectId, "Build feature", "desc");
+        var ticket = Ticket.Create(_projectId, "Build feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_projectId, "Coder", AgentRole.Coding));
         ticket.Block();
         return ticket;

@@ -69,7 +69,15 @@ public sealed class ProjectService(
         }
 
         var encryptedAccessToken = credentialProtector.Protect(request.AccessToken);
-        var project = Project.Create(request.Name, request.Description, request.RemoteUrl, encryptedAccessToken, baseBranch);
+        var project = Project.Create(
+            request.Name,
+            request.Description,
+            request.RemoteUrl,
+            encryptedAccessToken,
+            baseBranch,
+            request.SprintStartDate,
+            request.SprintEndDate,
+            request.SprintGoal);
 
         await projectRepository.AddAsync(project, cancellationToken);
 
@@ -235,7 +243,7 @@ public sealed class ProjectService(
             throw new GitOperationException($"Branch '{request.BaseBranch}' does not exist in repository '{project.RemoteUrl}'.");
         }
 
-        project.UpdateDetails(request.Name, request.Description, request.BaseBranch);
+        project.UpdateDetails(request.Name, request.Description, request.BaseBranch, request.SprintStartDate, request.SprintEndDate, request.SprintGoal);
 
         if (!string.IsNullOrWhiteSpace(request.AccessToken))
         {
@@ -265,5 +273,8 @@ public sealed class ProjectService(
             InProgress: counts?.GetValueOrDefault(TicketStatus.InProgress) ?? 0,
             Blocked: counts?.GetValueOrDefault(TicketStatus.Blocked) ?? 0,
             ForReview: counts?.GetValueOrDefault(TicketStatus.ForReview) ?? 0,
-            Done: counts?.GetValueOrDefault(TicketStatus.Done) ?? 0));
+            Done: counts?.GetValueOrDefault(TicketStatus.Done) ?? 0),
+        project.SprintStartDate,
+        project.SprintEndDate,
+        project.SprintGoal);
 }

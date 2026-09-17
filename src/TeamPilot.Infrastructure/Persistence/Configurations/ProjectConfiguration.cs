@@ -19,5 +19,8 @@ public class ProjectConfiguration : IEntityTypeConfiguration<Project>
         builder.Property(p => p.RepositoryPath).IsRequired().HasMaxLength(1000);
         builder.Property(p => p.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
         builder.Property(p => p.CloneFailureReason).HasColumnType("nvarchar(max)");
+        builder.Property(p => p.SprintStartDate).HasColumnType("date");
+        builder.Property(p => p.SprintEndDate).HasColumnType("date");
+        builder.Property(p => p.SprintGoal).HasMaxLength(1000);
     }
 }

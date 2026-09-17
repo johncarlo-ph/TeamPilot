@@ -16,6 +16,7 @@ public sealed record TicketDetailDto(
     Guid ProjectId,
     string Title,
     string Description,
+    string AcceptanceCriteria,
     TicketStatus Status,
     string? BranchName,
     string? CancellationReason,

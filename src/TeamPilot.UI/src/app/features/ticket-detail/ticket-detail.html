@@ -28,6 +28,10 @@
           Reason: {{ ticket.cancellationReason }}
         </p>
       }
+      <div class="mt-2">
+        <div class="small fw-semibold">Acceptance Criteria</div>
+        <p class="small text-body-secondary mb-0" style="white-space: pre-wrap">{{ ticket.acceptanceCriteria }}</p>
+      </div>
     </div>
     <div class="d-flex align-items-center gap-2">
       @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {

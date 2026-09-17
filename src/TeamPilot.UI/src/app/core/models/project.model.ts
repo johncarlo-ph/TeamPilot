@@ -23,6 +23,9 @@ export interface ProjectDto {
   createdAtUtc: string;
   updatedAtUtc: string | null;
   ticketStatusCounts: TicketStatusCountsDto;
+  sprintStartDate: string | null;
+  sprintEndDate: string | null;
+  sprintGoal: string | null;
 }
 
 export interface CreateProjectRequest {
@@ -31,6 +34,9 @@ export interface CreateProjectRequest {
   remoteUrl: string;
   accessToken: string;
   baseBranch: string | null;
+  sprintStartDate: string | null;
+  sprintEndDate: string | null;
+  sprintGoal: string | null;
 }
 
 /** accessToken null/blank keeps the currently stored token - remoteUrl isn't included here
@@ -40,4 +46,7 @@ export interface UpdateProjectRequest {
   description: string | null;
   accessToken: string | null;
   baseBranch: string;
+  sprintStartDate: string | null;
+  sprintEndDate: string | null;
+  sprintGoal: string | null;
 }

@@ -27,6 +27,7 @@ function message(overrides: Partial<ChatMessageDto> = {}): ChatMessageDto {
     content: 'Hello',
     proposedTicketTitle: null,
     proposedTicketDescription: null,
+    proposedTicketAcceptanceCriteria: null,
     createdTicketId: null,
     ticketRejected: false,
     senderName: null,
@@ -151,6 +152,7 @@ describe('ChatPanel', () => {
       id: 'msg-1',
       proposedTicketTitle: 'Fix login bug',
       proposedTicketDescription: "Users can't sign in.",
+      proposedTicketAcceptanceCriteria: 'User can sign in.',
     });
     setUp([conv], { 'conv-1': [proposal] });
     chatService.approveTicket.mockReturnValue(of({ ...proposal, createdTicketId: 'ticket-1' }));
@@ -160,6 +162,7 @@ describe('ChatPanel', () => {
     expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
       title: 'Fix login bug',
       description: "Users can't sign in.",
+      acceptanceCriteria: 'User can sign in.',
     });
   });
 
@@ -169,6 +172,7 @@ describe('ChatPanel', () => {
       id: 'msg-1',
       proposedTicketTitle: 'Fix login bug',
       proposedTicketDescription: "Users can't sign in.",
+      proposedTicketAcceptanceCriteria: 'User can sign in.',
     });
     setUp([conv], { 'conv-1': [proposal] });
     chatService.approveTicket.mockReturnValue(of({ ...proposal, createdTicketId: 'ticket-1' }));
@@ -177,12 +181,14 @@ describe('ChatPanel', () => {
     fixture.componentInstance.ticketEditForm.setValue({
       title: 'Fix Google login bug',
       description: 'Edited description',
+      acceptanceCriteria: 'Edited acceptance criteria',
     });
     fixture.componentInstance.approveTicket(proposal);
 
     expect(chatService.approveTicket).toHaveBeenCalledWith('project-1', 'conv-1', 'msg-1', {
       title: 'Fix Google login bug',
       description: 'Edited description',
+      acceptanceCriteria: 'Edited acceptance criteria',
     });
   });
 

@@ -25,6 +25,21 @@
               <code>{{ project.remoteUrl }}</code>
             </p>
 
+            @if (project.sprintStartDate || project.sprintEndDate || project.sprintGoal) {
+              <div class="small text-body-secondary mb-3">
+                @if (project.sprintStartDate || project.sprintEndDate) {
+                  <div>
+                    {{ project.sprintStartDate ? (project.sprintStartDate | date: 'mediumDate') : '?' }}
+                    &ndash;
+                    {{ project.sprintEndDate ? (project.sprintEndDate | date: 'mediumDate') : '?' }}
+                  </div>
+                }
+                @if (project.sprintGoal) {
+                  <div class="fst-italic">{{ project.sprintGoal }}</div>
+                }
+              </div>
+            }
+
             @if (project.status === 'Cloning') {
               <div class="mb-3" role="status">
                 <div class="small text-body-secondary mb-1">

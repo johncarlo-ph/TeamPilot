@@ -56,7 +56,7 @@ public class TicketServiceTests
     [Fact]
     public async Task CreateAsync_WithValidRequest_AddsTicketAndSavesChanges()
     {
-        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow");
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", "User can log in via OAuth.");
 
         var result = await _sut.CreateAsync(_project.Id, request);
 
@@ -71,7 +71,15 @@ public class TicketServiceTests
     [Fact]
     public async Task CreateAsync_WithEmptyTitle_ThrowsValidationException()
     {
-        var request = new CreateTicketRequest(string.Empty, null);
+        var request = new CreateTicketRequest(string.Empty, null, "Acceptance criteria");
+
+        await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(_project.Id, request));
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithEmptyAcceptanceCriteria_ThrowsValidationException()
+    {
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", string.Empty);
 
         await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(_project.Id, request));
     }
@@ -82,7 +90,7 @@ public class TicketServiceTests
         var cloningProject = Project.Create("Cloning Project", "desc", "https://github.com/org/cloning.git", "encrypted-token", "main");
         _projectRepository.Setup(r => r.GetByIdAsync(cloningProject.Id, It.IsAny<CancellationToken>())).ReturnsAsync(cloningProject);
 
-        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow");
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", "User can log in via OAuth.");
 
         await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateAsync(cloningProject.Id, request));
         _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -95,7 +103,7 @@ public class TicketServiceTests
         failedProject.MarkCloneFailed("Could not clone.");
         _projectRepository.Setup(r => r.GetByIdAsync(failedProject.Id, It.IsAny<CancellationToken>())).ReturnsAsync(failedProject);
 
-        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow");
+        var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", "User can log in via OAuth.");
 
         await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateAsync(failedProject.Id, request));
     }
@@ -104,7 +112,7 @@ public class TicketServiceTests
     public async Task CreateAsync_WhenProjectDoesNotExist_ThrowsNotFoundException()
     {
         _projectRepository.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>())).ReturnsAsync((Project?)null);
-        var request = new CreateTicketRequest("Implement login", null);
+        var request = new CreateTicketRequest("Implement login", null, "User can log in via OAuth.");
 
         await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateAsync(Guid.NewGuid(), request));
     }
@@ -122,7 +130,7 @@ public class TicketServiceTests
     [Fact]
     public async Task MoveToReviewAsync_WhenTicketIsInProgress_SetsStatusToForReview()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
 
         _ticketRepository
@@ -137,7 +145,7 @@ public class TicketServiceTests
     [Fact]
     public async Task DeleteBranchAsync_WhenTicketIsCancelled_DeletesBranchAndClearsBranchName()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.LinkBranch("feature/fix-bug");
         ticket.Cancel("No longer needed");
 
@@ -157,7 +165,7 @@ public class TicketServiceTests
     [Fact]
     public async Task DeleteBranchAsync_WhenTicketIsNotCancelled_ThrowsInvalidTicketStateTransitionExceptionWithoutTouchingGit()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.LinkBranch("feature/fix-bug");
 
         _ticketRepository
@@ -175,7 +183,7 @@ public class TicketServiceTests
     [Fact]
     public async Task DeleteBranchAsync_WhenTicketHasNoLinkedBranch_ThrowsInvalidOperationException()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.Cancel("No longer needed");
 
         _ticketRepository
@@ -188,7 +196,7 @@ public class TicketServiceTests
     [Fact]
     public async Task LinkBranchAsync_WithValidBranchName_EnsuresBranchAndLinksTicket()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
 
         _ticketRepository
             .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
@@ -205,8 +213,8 @@ public class TicketServiceTests
     [Fact]
     public async Task LinkBranchAsync_WhenBranchAlreadyLinkedToAnotherTicket_ThrowsBranchAlreadyLinkedException()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
-        var otherTicket = Ticket.Create(_project.Id, "Add feature", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
+        var otherTicket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
         otherTicket.LinkBranch("feature/shared");
 
         _ticketRepository
@@ -223,7 +231,7 @@ public class TicketServiceTests
     [Fact]
     public async Task LinkBranchAsync_WhenTicketIsCancelled_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.Cancel("No longer needed");
 
         _ticketRepository
@@ -236,7 +244,7 @@ public class TicketServiceTests
     [Fact]
     public async Task LinkBranchAsync_WhenReLinkingSameTicketToItsOwnBranch_Succeeds()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.LinkBranch("feature/fix-bug");
 
         _ticketRepository
@@ -254,7 +262,7 @@ public class TicketServiceTests
     [Fact]
     public async Task BranchExistsAsync_FetchesRemoteThenReturnsGitServiceResult()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
 
         _ticketRepository
             .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
@@ -282,7 +290,7 @@ public class TicketServiceTests
     [Fact]
     public async Task CancelAsync_WhenTicketIsInProgress_SetsStatusToCancelledAndRecordsReason()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
 
         _ticketRepository
@@ -299,7 +307,7 @@ public class TicketServiceTests
     [Fact]
     public async Task CancelAsync_WhenTicketHasLinkedBranch_DeletesBranchAndClearsBranchName()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.LinkBranch("feature/fix-bug");
 
         _ticketRepository
@@ -322,7 +330,7 @@ public class TicketServiceTests
     [Fact]
     public async Task CancelAsync_WhenTicketHasNoLinkedBranch_DoesNotCallGitService()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
 
         _ticketRepository
             .Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>()))
@@ -338,7 +346,7 @@ public class TicketServiceTests
     [Fact]
     public async Task CancelAsync_WhenTicketIsDone_ThrowsInvalidTicketStateTransitionException()
     {
-        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc");
+        var ticket = Ticket.Create(_project.Id, "Fix bug", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
         ticket.Approve();

@@ -8,6 +8,7 @@ export interface TicketDto {
   projectId: string;
   title: string;
   description: string;
+  acceptanceCriteria: string;
   status: TicketStatus;
   branchName: string | null;
   cancellationReason: string | null;
@@ -30,6 +31,7 @@ export interface TicketDetailDto {
   projectId: string;
   title: string;
   description: string;
+  acceptanceCriteria: string;
   status: TicketStatus;
   branchName: string | null;
   cancellationReason: string | null;
@@ -45,6 +47,7 @@ export interface TicketDetailDto {
 export interface CreateTicketRequest {
   title: string;
   description: string | null;
+  acceptanceCriteria: string;
 }
 
 export interface CreateBranchRequest {

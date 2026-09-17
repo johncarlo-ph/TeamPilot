@@ -43,6 +43,7 @@ export class ChatPanel {
   readonly ticketEditForm = this.fb.nonNullable.group({
     title: ['', Validators.required],
     description: [''],
+    acceptanceCriteria: ['', Validators.required],
   });
   // Grows the edit form's description textarea to fit whatever's already in it (the model's
   // draft can be much longer than its fixed rows="3"), keyed off ticketEditingMessageId so it
@@ -208,6 +209,7 @@ export class ChatPanel {
         content,
         proposedTicketTitle: null,
         proposedTicketDescription: null,
+        proposedTicketAcceptanceCriteria: null,
         createdTicketId: null,
         ticketRejected: false,
         senderName: this.authService.currentUser()?.name ?? null,
@@ -233,6 +235,7 @@ export class ChatPanel {
     this.ticketEditForm.setValue({
       title: message.proposedTicketTitle ?? '',
       description: message.proposedTicketDescription ?? '',
+      acceptanceCriteria: message.proposedTicketAcceptanceCriteria ?? '',
     });
     this.ticketEditingMessageId.set(message.id);
   }
@@ -270,13 +273,16 @@ export class ChatPanel {
     const description = (
       isEditing ? this.ticketEditForm.getRawValue().description : message.proposedTicketDescription ?? ''
     ).trim();
-    if (!title) {
+    const acceptanceCriteria = (
+      isEditing ? this.ticketEditForm.getRawValue().acceptanceCriteria : message.proposedTicketAcceptanceCriteria ?? ''
+    ).trim();
+    if (!title || !acceptanceCriteria) {
       return;
     }
 
     this.processingTicketMessageIds.update((ids) => new Set(ids).add(message.id));
     this.chatService
-      .approveTicket(this.projectId(), conversationId, message.id, { title, description: description || null })
+      .approveTicket(this.projectId(), conversationId, message.id, { title, description: description || null, acceptanceCriteria })
       .subscribe({
         next: (updated) => {
           this.notifications.success('Ticket created.');

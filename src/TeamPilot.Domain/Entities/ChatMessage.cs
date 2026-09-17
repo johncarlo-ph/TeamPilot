@@ -23,6 +23,8 @@ public class ChatMessage : Entity
 
     public string? ProposedTicketDescription { get; private set; }
 
+    public string? ProposedTicketAcceptanceCriteria { get; private set; }
+
     /// <summary>
     /// Id of the real <see cref="Ticket"/> created from this message's proposal, once the user
     /// approves it. Null until then; always null for a message with no proposal.
@@ -61,7 +63,8 @@ public class ChatMessage : Entity
     /// message's stored proposal consistent with what was really created.
     /// </param>
     /// <param name="finalDescription">Same as <paramref name="finalTitle"/>, for the description.</param>
-    public void MarkTicketCreated(Guid ticketId, string finalTitle, string? finalDescription)
+    /// <param name="finalAcceptanceCriteria">Same as <paramref name="finalTitle"/>, for the acceptance criteria.</param>
+    public void MarkTicketCreated(Guid ticketId, string finalTitle, string? finalDescription, string finalAcceptanceCriteria)
     {
         if (string.IsNullOrWhiteSpace(ProposedTicketTitle))
         {
@@ -83,8 +86,14 @@ public class ChatMessage : Entity
             throw new ArgumentException("The ticket's final title is required.", nameof(finalTitle));
         }
 
+        if (string.IsNullOrWhiteSpace(finalAcceptanceCriteria))
+        {
+            throw new ArgumentException("The ticket's final acceptance criteria is required.", nameof(finalAcceptanceCriteria));
+        }
+
         ProposedTicketTitle = finalTitle.Trim();
         ProposedTicketDescription = string.IsNullOrWhiteSpace(finalDescription) ? null : finalDescription.Trim();
+        ProposedTicketAcceptanceCriteria = finalAcceptanceCriteria.Trim();
         CreatedTicketId = ticketId;
         MarkUpdated();
     }
@@ -122,6 +131,7 @@ public class ChatMessage : Entity
         string content,
         string? proposedTicketTitle,
         string? proposedTicketDescription,
+        string? proposedTicketAcceptanceCriteria = null,
         string? senderName = null)
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -136,6 +146,7 @@ public class ChatMessage : Entity
             Content = content.Trim(),
             ProposedTicketTitle = string.IsNullOrWhiteSpace(proposedTicketTitle) ? null : proposedTicketTitle.Trim(),
             ProposedTicketDescription = string.IsNullOrWhiteSpace(proposedTicketDescription) ? null : proposedTicketDescription.Trim(),
+            ProposedTicketAcceptanceCriteria = string.IsNullOrWhiteSpace(proposedTicketAcceptanceCriteria) ? null : proposedTicketAcceptanceCriteria.Trim(),
             SenderName = string.IsNullOrWhiteSpace(senderName) ? null : senderName.Trim(),
         };
     }

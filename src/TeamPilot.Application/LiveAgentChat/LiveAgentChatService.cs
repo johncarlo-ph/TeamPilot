@@ -113,10 +113,10 @@ public sealed class LiveAgentChatService(
         // title/description (not the message's originally-proposed ones) are what get created.
         var ticket = await ticketService.CreateAsync(
             projectId,
-            new CreateTicketRequest(request.Title, request.Description),
+            new CreateTicketRequest(request.Title, request.Description, request.AcceptanceCriteria),
             cancellationToken);
 
-        message.MarkTicketCreated(ticket.Id, request.Title, request.Description);
+        message.MarkTicketCreated(ticket.Id, request.Title, request.Description, request.AcceptanceCriteria);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(message);
@@ -186,6 +186,7 @@ public sealed class LiveAgentChatService(
 
         string? proposedTitle = null;
         string? proposedDescription = null;
+        string? proposedAcceptanceCriteria = null;
 
         var finalText = await ToolLoopRunner.RunAsync(
             llmConnector,
@@ -198,7 +199,7 @@ public sealed class LiveAgentChatService(
                 var (resultText, isError, proposal) = await ExecuteToolAsync(toolUse, project, projectId, ct);
                 if (proposal is not null)
                 {
-                    (proposedTitle, proposedDescription) = proposal.Value;
+                    (proposedTitle, proposedDescription, proposedAcceptanceCriteria) = proposal.Value;
                 }
 
                 return (resultText, isError);
@@ -206,13 +207,13 @@ public sealed class LiveAgentChatService(
             cancellationToken,
             fallbackText: "I couldn't finish that within my available steps - could you narrow down the question?");
 
-        conversation.AddMessage(ChatMessageRole.Assistant, finalText, proposedTitle, proposedDescription);
+        conversation.AddMessage(ChatMessageRole.Assistant, finalText, proposedTitle, proposedDescription, proposedAcceptanceCriteria);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return ToDto(conversation.Messages.Last());
     }
 
-    private async Task<(string ResultText, bool IsError, (string Title, string Description)? Proposal)> ExecuteToolAsync(
+    private async Task<(string ResultText, bool IsError, (string Title, string Description, string AcceptanceCriteria)? Proposal)> ExecuteToolAsync(
         LlmToolUseBlock toolUse,
         Project project,
         Guid projectId,
@@ -286,12 +287,18 @@ public sealed class LiveAgentChatService(
                 {
                     var title = TryGetString(input, "title");
                     var description = TryGetString(input, "description") ?? string.Empty;
+                    var acceptanceCriteria = TryGetString(input, "acceptanceCriteria");
                     if (string.IsNullOrWhiteSpace(title))
                     {
                         return ("A ticket title is required.", true, null);
                     }
 
-                    return ("Drafted for the user to review and approve in the chat.", false, (title, description));
+                    if (string.IsNullOrWhiteSpace(acceptanceCriteria))
+                    {
+                        return ("Acceptance criteria is required.", true, null);
+                    }
+
+                    return ("Drafted for the user to review and approve in the chat.", false, (title, description, acceptanceCriteria));
                 }
 
                 default:
@@ -326,9 +333,11 @@ public sealed class LiveAgentChatService(
             "log, or file a ticket - never propose one on your own initiative from a general question. Before drafting, " +
             "check list_tickets/get_ticket for related or duplicate existing tickets and reference them by id in the " +
             "description when relevant. Describe the problem and the desired behavior only - never cite a specific file " +
-            "path or line number, since the code may have changed by the time the ticket is worked on. This does not " +
+            "path or line number, since the code may have changed by the time the ticket is worked on. Also draft " +
+            "acceptance criteria: the concrete, checkable condition(s) this ticket must satisfy to be considered done - " +
+            "this is what the pipeline agents and the human reviewer will judge the work against. This does not " +
             "create the ticket; the user must approve it themselves in the chat.",
-            """{"type":"object","properties":{"title":{"type":"string","description":"Short ticket title."},"description":{"type":"string","description":"Ticket description."}},"required":["title","description"]}"""),
+            """{"type":"object","properties":{"title":{"type":"string","description":"Short ticket title."},"description":{"type":"string","description":"Ticket description."},"acceptanceCriteria":{"type":"string","description":"The concrete condition(s) this ticket must satisfy to be considered done."}},"required":["title","description","acceptanceCriteria"]}"""),
     ];
 
     private static ChatMessageDto ToDto(ChatMessage message) => new(
@@ -337,6 +346,7 @@ public sealed class LiveAgentChatService(
         message.Content,
         message.ProposedTicketTitle,
         message.ProposedTicketDescription,
+        message.ProposedTicketAcceptanceCriteria,
         message.CreatedTicketId,
         message.TicketRejected,
         message.SenderName,

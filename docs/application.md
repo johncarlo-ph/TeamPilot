@@ -107,6 +107,13 @@ currently stored token" (see `UpdateProjectRequest`), the check authenticates wi
 directly when one was supplied — either way the *plaintext* token the check ends up using is
 never persisted or logged, only handed to `RemoteBranchExistsAsync` for the one remote call.
 
+**`Project`'s three sprint fields (`SprintStartDate`/`SprintEndDate`/`SprintGoal`) are all
+optional and purely informational** — framing a `Project` as an Agile sprint is a naming
+convention the UI/user adopt, not something the domain enforces (no gating on dates, no
+auto-transition when a sprint ends). `CreateProjectRequestValidator`/`UpdateProjectRequestValidator`
+reject a `SprintEndDate` before `SprintStartDate` when both are given (`Project.Create`/
+`UpdateDetails` guard the same invariant domain-side); either date alone, or neither, is valid.
+
 The detached clone reports progress via `IGitService.CloneAsync`'s optional `IProgress<GitCloneProgress>`
 parameter (object/byte counts during transfer, step counts during checkout — wired up in
 `LibGit2SharpGitService` from LibGit2Sharp's own `OnTransferProgress`/`OnCheckoutProgress`
@@ -393,25 +400,29 @@ to the Live Agent - reused as-is by the Research/Design/Coding pipeline stages' 
   lean id/title/status rows),
   `get_ticket(id)` (wraps `ITicketRepository.GetByIdAsync` for one ticket's full title/status/
   description/branch/cancellation reason — rejected as not found if the id belongs to a
-  different project), and `propose_ticket(title, description)`. The model is instructed to use
-  `list_tickets`/`get_ticket` to ground answers about existing work and to check for
-  related/duplicate tickets before drafting a new one.
+  different project), and `propose_ticket(title, description, acceptanceCriteria)`. The model is
+  instructed to use `list_tickets`/`get_ticket` to ground answers about existing work and to check
+  for related/duplicate tickets before drafting a new one, and to draft concrete, checkable
+  acceptance criteria alongside the title/description — required because `Ticket.Create` requires
+  it (see [docs/domain.md](domain.md)), and the tool call fails with an error result if the model
+  omits it.
 - **`propose_ticket` never writes to the database.** It only captures the drafted title/
-  description onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
-  `ProposedTicketDescription`). The real `Ticket` is only created if/when the user clicks
-  "Create ticket" on that message in the UI, which calls
+  description/acceptance criteria onto the assistant's `ChatMessage` row (`ProposedTicketTitle`/
+  `ProposedTicketDescription`/`ProposedTicketAcceptanceCriteria`). The real `Ticket` is only
+  created if/when the user clicks "Create ticket" on that message in the UI, which calls
   `LiveAgentChatService.ApproveTicketAsync` (`POST /api/projects/{projectId}/live-agent/conversations/{conversationId}/messages/{messageId}/approve-ticket`,
-  body `ApproveTicketRequest(Title, Description)`)
+  body `ApproveTicketRequest(Title, Description, AcceptanceCriteria)`)
   — it creates the ticket via the ordinary `ITicketService.CreateAsync` using the request's
-  title/description and, in the same call, stamps the message's `CreatedTicketId`
-  (`ChatMessage.MarkTicketCreated(ticketId, finalTitle, finalDescription)`) so every viewer -
-  including the same user after a reload - sees the draft as already approved and the
-  "Create ticket"/"Reject" pair doesn't reappear. **The request's title/description need not
-  match the message's original proposal**: the chat UI lets the user edit the draft inline
-  (pencil button on the approval card) before clicking "Create ticket", and whatever is in the
-  form at that point is what gets sent — `MarkTicketCreated` overwrites `ProposedTicketTitle`/
-  `ProposedTicketDescription` with the final, possibly-edited values so the stored message stays
-  consistent with the ticket that was actually created. `ApproveTicketAsync` is idempotent:
+  title/description/acceptance criteria and, in the same call, stamps the message's
+  `CreatedTicketId` (`ChatMessage.MarkTicketCreated(ticketId, finalTitle, finalDescription,
+  finalAcceptanceCriteria)`) so every viewer - including the same user after a reload - sees the
+  draft as already approved and the "Create ticket"/"Reject" pair doesn't reappear. **The
+  request's fields need not match the message's original proposal**: the chat UI lets the user
+  edit the draft inline (pencil button on the approval card) before clicking "Create ticket", and
+  whatever is in the form at that point is what gets sent — `MarkTicketCreated` overwrites
+  `ProposedTicketTitle`/`ProposedTicketDescription`/`ProposedTicketAcceptanceCriteria` with the
+  final, possibly-edited values so the stored message stays consistent with the ticket that was
+  actually created. `ApproveTicketAsync` is idempotent:
   approving an already-approved message just returns its current state instead of creating a
   duplicate ticket, which also covers a race between two users clicking the same draft. It checks
   `TicketRejected` *before* calling `ITicketService.CreateAsync` and throws immediately if the
@@ -678,6 +689,17 @@ every call - see [docs/infrastructure.md](infrastructure.md)). The model calls `
 chat), instead of being handed a fixed snapshot that could silently omit a file it actually needs.
 Research and Design only ever read - locating the code they need to investigate or design against,
 instead of guessing from the ticket description alone - and never write back to Git.
+
+**Every stage's prompt also carries the ticket's `AcceptanceCriteria`, tagged separately from its
+`Description`.** `OrchestrationService.BuildStagePrompt` appends
+`<acceptance_criteria>{ticket.AcceptanceCriteria}</acceptance_criteria>` right after the
+`<ticket_description>` block, for every stage (Research through Testing) - not just Research/
+Design - since Testing and the human approval gate ultimately judge the work against the same
+criteria the earlier stages designed against. `CreateTicketRequestValidator`/
+`ApproveTicketRequestValidator` both require it non-empty (`Ticket.Create`'s domain guard is the
+backstop), so every ticket - however it was created - has something concrete here; there is no
+ticket-edit path today, so a ticket's acceptance criteria is fixed at creation (see
+[docs/domain.md](domain.md)).
 
 **The Coding stage additionally commits real per-file changes onto the ticket's own branch, all
 within the same single Claude API call.** `BuildStagePrompt`

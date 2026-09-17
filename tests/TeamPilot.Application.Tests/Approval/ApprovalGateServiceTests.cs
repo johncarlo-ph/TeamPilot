@@ -75,7 +75,7 @@ public class ApprovalGateServiceTests
 
     private Ticket CreateTicketInReview(string branchName)
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.LinkBranch(branchName);
         ticket.MoveToReview();
@@ -174,7 +174,7 @@ public class ApprovalGateServiceTests
     [Fact]
     public async Task SubmitReviewAsync_WhenDecisionIsRejectWithNoLinkedBranch_CancelsTicketWithoutTouchingGit()
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
@@ -334,7 +334,7 @@ public class ApprovalGateServiceTests
     [Fact]
     public async Task SubmitReviewAsync_WhenApprovingWithoutLinkedBranch_ThrowsInvalidOperationException()
     {
-        var ticket = Ticket.Create(_project.Id, "Add feature", "desc");
+        var ticket = Ticket.Create(_project.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
         ticket.MoveToReview();
 

@@ -46,7 +46,7 @@ public class ConflictResolutionServiceTests
 
     private Ticket CreateTicket()
     {
-        var ticket = Ticket.Create(_project.Id, "Build feature", "desc");
+        var ticket = Ticket.Create(_project.Id, "Build feature", "desc", "Acceptance criteria");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         return ticket;
     }

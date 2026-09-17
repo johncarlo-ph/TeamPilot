@@ -77,9 +77,10 @@ public class Conversation : Entity
         string content,
         string? proposedTicketTitle = null,
         string? proposedTicketDescription = null,
+        string? proposedTicketAcceptanceCriteria = null,
         string? senderName = null)
     {
-        var message = ChatMessage.Create(Id, role, content, proposedTicketTitle, proposedTicketDescription, senderName);
+        var message = ChatMessage.Create(Id, role, content, proposedTicketTitle, proposedTicketDescription, proposedTicketAcceptanceCriteria, senderName);
         _messages.Add(message);
         MarkUpdated();
 

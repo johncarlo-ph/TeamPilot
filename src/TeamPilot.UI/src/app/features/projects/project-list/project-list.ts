@@ -1,4 +1,5 @@
 import { Component, DestroyRef, inject, signal } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
 import { AuthService } from '../../../core/services/auth.service';
@@ -34,7 +35,7 @@ const STATUS_SUMMARIES: {
 
 @Component({
   selector: 'app-project-list',
-  imports: [RouterLink, ProjectForm],
+  imports: [RouterLink, DatePipe, ProjectForm],
   templateUrl: './project-list.html',
 })
 export class ProjectList {

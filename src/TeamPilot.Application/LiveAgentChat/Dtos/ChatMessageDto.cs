@@ -8,6 +8,7 @@ public sealed record ChatMessageDto(
     string Content,
     string? ProposedTicketTitle,
     string? ProposedTicketDescription,
+    string? ProposedTicketAcceptanceCriteria,
     Guid? CreatedTicketId,
     bool TicketRejected,
     string? SenderName,

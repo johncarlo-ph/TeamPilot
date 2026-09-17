@@ -9,5 +9,6 @@ public sealed class CreateTicketRequestValidator : AbstractValidator<CreateTicke
     {
         RuleFor(x => x.Title).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Description).MaximumLength(4000);
+        RuleFor(x => x.AcceptanceCriteria).NotEmpty().MaximumLength(4000);
     }
 }

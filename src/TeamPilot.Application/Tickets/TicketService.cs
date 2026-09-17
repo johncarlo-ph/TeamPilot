@@ -41,7 +41,7 @@ public sealed class TicketService(
             throw new ProjectNotReadyException(project.Name);
         }
 
-        var ticket = Ticket.Create(projectId, request.Title, request.Description);
+        var ticket = Ticket.Create(projectId, request.Title, request.Description, request.AcceptanceCriteria);
         await ticketRepository.AddAsync(ticket, cancellationToken);
 
         await auditLogger.LogActionAsync(AuditEventType.TicketCreated, $"Ticket '{ticket.Title}' created.", cancellationToken);

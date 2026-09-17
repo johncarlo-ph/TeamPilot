@@ -353,6 +353,18 @@ replay after a restart.
   plain nullable `int` columns added by the follow-up `AddTicketAgentEventUsage` migration, left to
   EF's default conventions (no explicit Fluent API needed, same as `WorkflowStage.MaxLoopIterations`)
   since a stage's token counts and duration need no string conversion or index of their own.
+- `ProjectConfiguration` maps `SprintStartDate`/`SprintEndDate` to SQL Server's `date` type (no
+  time component needed) and `SprintGoal` to `nvarchar(1000)`, all nullable. `TicketConfiguration`
+  maps the new `AcceptanceCriteria` as `IsRequired().HasMaxLength(4000)` - the first column in this
+  schema added as `NOT NULL` on a table with existing rows. The `AddProjectSprintFieldsAndTicketAcceptanceCriteria`
+  migration backfills it via the `AddColumn`'s own `defaultValue` (SQL Server applies a column's
+  `DEFAULT` constraint to every existing row when the column is added, so this needs no separate
+  `UPDATE`/backfill step the way `AddWorkflowStages` did) - existing tickets get a placeholder
+  string ("Not documented - added before acceptance criteria became a required field.") rather than
+  an empty string, so they stay visibly distinguishable from a ticket whose criteria was actually
+  written. `ChatMessageConfiguration`'s new `ProposedTicketAcceptanceCriteria` column follows
+  `ProposedTicketDescription`'s existing nullable `nvarchar(max)` shape - added in the same
+  migration, no backfill needed (nullable).
 - Options classes (`JwtOptions`, `GitOptions`, `LlmOptions`, `ExternalProviderConfig`) are
   plain POCOs with a `public const string SectionName` for their configuration section, bound
   via `services.Configure<T>(configuration.GetSection(T.SectionName))`.

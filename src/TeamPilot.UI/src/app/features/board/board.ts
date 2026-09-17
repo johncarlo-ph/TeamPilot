@@ -8,7 +8,7 @@ import { ReviewsService } from '../../core/services/reviews.service';
 import { ProjectsService } from '../../core/services/projects.service';
 import { ProjectEventsService } from '../../core/services/project-events.service';
 import { NotificationService } from '../../core/notification/notification.service';
-import { ProjectDto, ReviewDecision, TicketDto, TicketStatus } from '../../core/models';
+import { CreateTicketRequest, ProjectDto, ReviewDecision, TicketDto, TicketStatus } from '../../core/models';
 import { TicketCard } from './ticket-card/ticket-card';
 import { CreateTicketForm } from './create-ticket-form/create-ticket-form';
 import { ReviewForm } from '../ticket-detail/review-form/review-form';
@@ -160,7 +160,7 @@ export class Board {
     return VALID_DRAG_TARGETS[status].map((target) => this.columnIdFor(target));
   }
 
-  createTicket(request: { title: string; description: string | null }): void {
+  createTicket(request: CreateTicketRequest): void {
     this.creatingTicket.set(true);
     this.ticketsService.create(this.projectId, request).subscribe({
       next: (ticket) => {

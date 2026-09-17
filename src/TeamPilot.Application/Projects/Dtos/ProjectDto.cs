@@ -12,4 +12,7 @@ public sealed record ProjectDto(
     string? CloneFailureReason,
     DateTime CreatedAtUtc,
     DateTime? UpdatedAtUtc,
-    TicketStatusCountsDto TicketStatusCounts);
+    TicketStatusCountsDto TicketStatusCounts,
+    DateTime? SprintStartDate,
+    DateTime? SprintEndDate,
+    string? SprintGoal);

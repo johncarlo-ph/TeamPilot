@@ -48,11 +48,30 @@ public class Project : Entity
     /// in this pass, so removal is treated as one-way rather than a toggle.</summary>
     public bool IsRemoved { get; private set; }
 
+    /// <summary>When this project's sprint starts. Optional - a project can be used without
+    /// framing it as a time-boxed sprint at all.</summary>
+    public DateTime? SprintStartDate { get; private set; }
+
+    /// <summary>When this project's sprint ends. Optional, and never before
+    /// <see cref="SprintStartDate"/> when both are set - see <see cref="Create"/>/<see cref="UpdateDetails"/>.</summary>
+    public DateTime? SprintEndDate { get; private set; }
+
+    /// <summary>The sprint's goal/objective, free text. Optional.</summary>
+    public string? SprintGoal { get; private set; }
+
     private Project()
     {
     }
 
-    public static Project Create(string name, string? description, string remoteUrl, string encryptedAccessToken, string? baseBranch)
+    public static Project Create(
+        string name,
+        string? description,
+        string remoteUrl,
+        string encryptedAccessToken,
+        string? baseBranch,
+        DateTime? sprintStartDate = null,
+        DateTime? sprintEndDate = null,
+        string? sprintGoal = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -69,6 +88,11 @@ public class Project : Entity
             throw new ArgumentException("Access token is required.", nameof(encryptedAccessToken));
         }
 
+        if (sprintStartDate is not null && sprintEndDate is not null && sprintEndDate < sprintStartDate)
+        {
+            throw new ArgumentException("Sprint end date can't be before the sprint start date.", nameof(sprintEndDate));
+        }
+
         return new Project
         {
             Name = name.Trim(),
@@ -77,6 +101,9 @@ public class Project : Entity
             EncryptedAccessToken = encryptedAccessToken,
             BaseBranch = string.IsNullOrWhiteSpace(baseBranch) ? "main" : baseBranch.Trim(),
             Status = ProjectStatus.Cloning,
+            SprintStartDate = sprintStartDate,
+            SprintEndDate = sprintEndDate,
+            SprintGoal = sprintGoal?.Trim(),
         };
     }
 
@@ -111,7 +138,13 @@ public class Project : Entity
         MarkUpdated();
     }
 
-    public void UpdateDetails(string name, string? description, string baseBranch)
+    public void UpdateDetails(
+        string name,
+        string? description,
+        string baseBranch,
+        DateTime? sprintStartDate = null,
+        DateTime? sprintEndDate = null,
+        string? sprintGoal = null)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -123,9 +156,17 @@ public class Project : Entity
             throw new ArgumentException("Base branch is required.", nameof(baseBranch));
         }
 
+        if (sprintStartDate is not null && sprintEndDate is not null && sprintEndDate < sprintStartDate)
+        {
+            throw new ArgumentException("Sprint end date can't be before the sprint start date.", nameof(sprintEndDate));
+        }
+
         Name = name.Trim();
         Description = description?.Trim() ?? string.Empty;
         BaseBranch = baseBranch.Trim();
+        SprintStartDate = sprintStartDate;
+        SprintEndDate = sprintEndDate;
+        SprintGoal = sprintGoal?.Trim();
         MarkUpdated();
     }
 

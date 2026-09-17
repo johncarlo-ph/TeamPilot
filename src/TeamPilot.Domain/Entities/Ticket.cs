@@ -22,6 +22,12 @@ public class Ticket : Entity
 
     public string Description { get; private set; } = string.Empty;
 
+    /// <summary>The condition(s) this story must satisfy to be considered done. Required at
+    /// creation, unlike <see cref="Description"/> - it's what the Research/Design pipeline stages
+    /// use to scope their work (see <c>OrchestrationService.BuildStagePrompt</c>) and what the
+    /// human approval gate ultimately checks against.</summary>
+    public string AcceptanceCriteria { get; private set; } = string.Empty;
+
     public TicketStatus Status { get; private set; }
 
     public string? BranchName { get; private set; }
@@ -40,7 +46,7 @@ public class Ticket : Entity
     {
     }
 
-    public static Ticket Create(Guid projectId, string title, string? description)
+    public static Ticket Create(Guid projectId, string title, string? description, string acceptanceCriteria)
     {
         if (projectId == Guid.Empty)
         {
@@ -52,11 +58,17 @@ public class Ticket : Entity
             throw new ArgumentException("Title is required.", nameof(title));
         }
 
+        if (string.IsNullOrWhiteSpace(acceptanceCriteria))
+        {
+            throw new ArgumentException("Acceptance criteria is required.", nameof(acceptanceCriteria));
+        }
+
         return new Ticket
         {
             ProjectId = projectId,
             Title = title.Trim(),
             Description = description?.Trim() ?? string.Empty,
+            AcceptanceCriteria = acceptanceCriteria.Trim(),
             Status = TicketStatus.ToDo,
         };
     }

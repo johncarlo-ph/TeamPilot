@@ -118,8 +118,8 @@ automatic branch delete.
 
 | Entity | Represents | Key behavior methods |
 |---|---|---|
-| `Project` | A project tied to a remote Git repo, with its own agents and ticket board | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
-| `Ticket` | A unit of work on the Kanban board | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
+| `Project` | A project tied to a remote Git repo, with its own agents and ticket board - optionally framed as an Agile sprint via `SprintStartDate`/`SprintEndDate`/`SprintGoal` | `Create`, `MarkCloned`, `MarkCloneFailed`, `UpdateDetails`, `RotateAccessToken`, `Remove` |
+| `Ticket` | A unit of work on the Kanban board (a "user story"), with required `AcceptanceCriteria` alongside its free-text `Description` | `AssignAgent`, `LinkBranch`, `UnlinkBranch`, `AddCommit`, `MoveToReview`, `Approve`, `RequestChanges`, `RecordReview`, `RaiseConflict`, `Block`, `Unblock`, `Cancel` |
 | `Agent` | An AI agent (Research/Design/Coding/Testing, the standing `LiveAgent`, or an admin-created `Custom` agent) scoped to a project | `Activate`, `Deactivate`, `UpdateConfiguration`, `AddInstructionVersion` |
 | `Instruction` | An append-only, versioned constitution/guideline/requirement for an agent | *(created only via `Agent.AddInstructionVersion`)* |
 | `WorkflowStage` | One position in a project's admin-configurable agent workflow - references its `Project` and `Agent` by id only | `Create`, `MoveTo`, `SetLoopBack`, `ClearLoopBack` |
@@ -187,6 +187,17 @@ leaves the project visible (with its remote URL and name intact) rather than the
 the same reasoning as a `Ticket` staying visible as `Blocked` instead of vanishing. Both methods
 can be called on a project of any status - `MarkCloned` after a prior `MarkCloneFailed` is exactly
 how a retried clone recovers.
+
+## Sprint fields
+
+`Project.SprintStartDate`/`SprintEndDate`/`SprintGoal` let a `Project` double as an Agile sprint
+(the mapping this app is built around: Project = Sprint, Ticket = User Story with acceptance
+criteria) without the domain enforcing anything about it - all three are optional, and nothing
+gates on them (no auto-transition when a sprint ends, no validation that a ticket falls within its
+project's sprint window). The one invariant `Create`/`UpdateDetails` do guard: when both dates are
+given, `SprintEndDate` can't be before `SprintStartDate` (`ArgumentException` otherwise). A project
+with no sprint fields set behaves exactly as before this feature existed - they're additive, not a
+new required concept.
 
 ## Project removal
 
@@ -287,7 +298,7 @@ validation are Infrastructure concerns (see [docs/infrastructure.md](infrastruct
 ## Example
 
 ```csharp
-var ticket = Ticket.Create(projectId, "Add health check endpoint", "Expose GET /health");
+var ticket = Ticket.Create(projectId, "Add health check endpoint", "Expose GET /health", "GET /health returns 200 with an OK body.");
 ticket.AssignAgent(codingAgent);              // ToDo -> InProgress
 ticket.LinkBranch("feature/health-check");
 ticket.AddCommit(commit);                     // recorded by OrchestrationService
@@ -309,9 +320,9 @@ does not catch or wrap its own exceptions.
 - **Domain events:** none are raised today (e.g., "TicketApproved"); if a future feature needs
   to react to state changes (notifications, webhooks) without coupling services directly
   together, a lightweight domain event dispatcher would be the natural next step.
-- **Value objects:** `Ticket.Title`, `User.Email`, and `Project.RemoteUrl` are plain `string`s
-  today. If validation rules for these grow more complex, promoting them to value objects (e.g.
-  an `EmailAddress` type) would centralize that logic.
+- **Value objects:** `Ticket.Title`, `Ticket.AcceptanceCriteria`, `User.Email`, and
+  `Project.RemoteUrl` are plain `string`s today. If validation rules for these grow more complex,
+  promoting them to value objects (e.g. an `EmailAddress` type) would centralize that logic.
 - **Instruction versioning as its own aggregate:** `Instruction` is currently a child of
   `Agent`. If instruction history needs its own access patterns (e.g. bulk diffing across
   versions, independent pagination) it may outgrow being a pure `Agent` child.

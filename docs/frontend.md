@@ -580,6 +580,14 @@ follow-up work, not fixed as part of this frontend change.
   added/cleared on the `accessToken` control inside the same `effect()` that already resets the
   form per the `project()` input. Remote URL is rendered as read-only text instead of a form
   control when editing, since `Project.RemoteUrl` is immutable after creation.
+- `project-form` also has three optional sprint fields (`sprintStartDate`/`sprintEndDate` as
+  native `type="date"` inputs, `sprintGoal` as a textarea) for framing the project as an Agile
+  sprint - all unvalidated client-side beyond the server's end-before-start check, since they're
+  purely informational. `create-ticket-form` has a required `acceptanceCriteria` textarea
+  alongside title/description, following the same `Validators.required` + inline error-message
+  pattern as `title`. The Live Agent chat's ticket-approval edit form (`chat-panel`'s
+  `ticketEditForm`) has the same required `acceptanceCriteria` control, since an approved draft
+  also creates a real `Ticket`.
 - New Angular control-flow syntax (`@if`/`@for`/`@switch`) is used throughout; no `*ngIf`/`*ngFor`.
 
 ## Configuration

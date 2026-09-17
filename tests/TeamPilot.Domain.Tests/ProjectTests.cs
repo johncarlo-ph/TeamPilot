@@ -55,6 +55,62 @@ public class ProjectTests
     }
 
     [Fact]
+    public void Create_WithNoSprintFields_LeavesThemNull()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+
+        Assert.Null(project.SprintStartDate);
+        Assert.Null(project.SprintEndDate);
+        Assert.Null(project.SprintGoal);
+    }
+
+    [Fact]
+    public void Create_WithValidSprintFields_SetsThem()
+    {
+        var start = new DateTime(2026, 1, 1);
+        var end = new DateTime(2026, 1, 14);
+
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main", start, end, "Ship the sprint fields feature");
+
+        Assert.Equal(start, project.SprintStartDate);
+        Assert.Equal(end, project.SprintEndDate);
+        Assert.Equal("Ship the sprint fields feature", project.SprintGoal);
+    }
+
+    [Fact]
+    public void Create_WithSprintEndDateBeforeStartDate_ThrowsArgumentException()
+    {
+        var start = new DateTime(2026, 1, 14);
+        var end = new DateTime(2026, 1, 1);
+
+        Assert.Throws<ArgumentException>(() => Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main", start, end));
+    }
+
+    [Fact]
+    public void UpdateDetails_WithSprintEndDateBeforeStartDate_ThrowsArgumentException()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+        var start = new DateTime(2026, 1, 14);
+        var end = new DateTime(2026, 1, 1);
+
+        Assert.Throws<ArgumentException>(() => project.UpdateDetails("TeamPilot", "desc", "main", start, end));
+    }
+
+    [Fact]
+    public void UpdateDetails_WithSprintFields_UpdatesThem()
+    {
+        var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");
+        var start = new DateTime(2026, 2, 1);
+        var end = new DateTime(2026, 2, 14);
+
+        project.UpdateDetails("TeamPilot", "desc", "main", start, end, "Sprint 2 goal");
+
+        Assert.Equal(start, project.SprintStartDate);
+        Assert.Equal(end, project.SprintEndDate);
+        Assert.Equal("Sprint 2 goal", project.SprintGoal);
+    }
+
+    [Fact]
     public void MarkCloned_WithValidPath_SetsRepositoryPathAndReadyStatus()
     {
         var project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token", "main");

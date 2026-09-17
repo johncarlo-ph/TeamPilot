@@ -27,7 +27,7 @@ public class TicketAgentEventServiceTests
     [Fact]
     public async Task ListByTicketAsync_ChecksProjectAccessAndReturnsTheRepositoryListing()
     {
-        var ticket = Ticket.Create(Guid.NewGuid(), "Build feature", "desc");
+        var ticket = Ticket.Create(Guid.NewGuid(), "Build feature", "desc", "Acceptance criteria");
         var events = new List<TicketAgentEvent> { TicketAgentEvent.CreateStarted(ticket.Id, Guid.NewGuid(), AgentRole.Research) };
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _ticketAgentEventRepository.Setup(r => r.ListByTicketAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(events);
@@ -50,7 +50,7 @@ public class TicketAgentEventServiceTests
     [Fact]
     public async Task ListByTicketAsync_WhenCallerLacksProjectAccess_ThrowsForbiddenExceptionAndNeverQueriesEvents()
     {
-        var ticket = Ticket.Create(Guid.NewGuid(), "Build feature", "desc");
+        var ticket = Ticket.Create(Guid.NewGuid(), "Build feature", "desc", "Acceptance criteria");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
         _projectAccessGuard.Setup(g => g.EnsureAccessAsync(ticket.ProjectId, It.IsAny<CancellationToken>())).ThrowsAsync(new ForbiddenException("No access."));
 

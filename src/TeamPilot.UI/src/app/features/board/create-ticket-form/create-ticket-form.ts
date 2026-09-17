@@ -19,12 +19,13 @@ export class CreateTicketForm {
   readonly form = this.fb.nonNullable.group({
     title: ['', Validators.required],
     description: [''],
+    acceptanceCriteria: ['', Validators.required],
   });
 
   constructor() {
     effect(() => {
       if (this.open()) {
-        this.form.reset({ title: '', description: '' });
+        this.form.reset({ title: '', description: '', acceptanceCriteria: '' });
       }
     });
   }
@@ -35,6 +36,10 @@ export class CreateTicketForm {
       return;
     }
     const value = this.form.getRawValue();
-    this.created.emit({ title: value.title, description: value.description || null });
+    this.created.emit({
+      title: value.title,
+      description: value.description || null,
+      acceptanceCriteria: value.acceptanceCriteria,
+    });
   }
 }

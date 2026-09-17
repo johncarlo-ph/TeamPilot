@@ -24,6 +24,7 @@ export interface ChatMessageDto {
   content: string;
   proposedTicketTitle: string | null;
   proposedTicketDescription: string | null;
+  proposedTicketAcceptanceCriteria: string | null;
   createdTicketId: string | null;
   ticketRejected: boolean;
   senderName: string | null;
@@ -37,4 +38,5 @@ export interface SendChatMessageRequest {
 export interface ApproveTicketRequest {
   title: string;
   description: string | null;
+  acceptanceCriteria: string;
 }

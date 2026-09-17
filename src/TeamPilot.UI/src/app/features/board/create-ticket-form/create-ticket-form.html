@@ -16,6 +16,22 @@
         formControlName="description"
       ></textarea>
     </div>
+    <div class="mb-3">
+      <label for="ticket-acceptance-criteria" class="form-label">Acceptance Criteria</label>
+      <textarea
+        id="ticket-acceptance-criteria"
+        class="form-control"
+        rows="4"
+        formControlName="acceptanceCriteria"
+      ></textarea>
+      <div class="form-text">
+        The condition(s) this story must satisfy to be considered done - the pipeline agents use
+        this to scope their work.
+      </div>
+      @if (form.controls.acceptanceCriteria.invalid && form.controls.acceptanceCriteria.touched) {
+        <div class="text-danger small mt-1">Acceptance criteria is required.</div>
+      }
+    </div>
     <div class="d-flex justify-content-end gap-2">
       <button type="button" class="btn btn-outline-secondary" [disabled]="creating()" (click)="closed.emit()">
         Cancel

@@ -131,12 +131,19 @@
                       />
                       <textarea
                         #ticketDescriptionTextarea
-                        class="form-control form-control-sm"
+                        class="form-control form-control-sm mb-1"
                         formControlName="description"
                         rows="3"
                         placeholder="Ticket description"
                         aria-label="Ticket description"
                         (input)="onTicketDescriptionInput($event)"
+                      ></textarea>
+                      <textarea
+                        class="form-control form-control-sm"
+                        formControlName="acceptanceCriteria"
+                        rows="3"
+                        placeholder="Acceptance criteria"
+                        aria-label="Acceptance criteria"
                       ></textarea>
                       <div class="d-flex gap-2 mt-2">
                         <button
@@ -182,6 +189,12 @@
                     @if (message.proposedTicketDescription) {
                       <div class="small text-body-secondary">
                         {{ message.proposedTicketDescription }}
+                      </div>
+                    }
+                    @if (message.proposedTicketAcceptanceCriteria) {
+                      <div class="small text-body-secondary mt-1">
+                        <span class="fw-semibold">Acceptance criteria:</span>
+                        {{ message.proposedTicketAcceptanceCriteria }}
                       </div>
                     }
                     @if (isTicketCreated(message)) {

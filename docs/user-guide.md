@@ -58,9 +58,10 @@ can't use is either not shown, or shown disabled with an explanation next to it.
 ## Projects
 
 `/projects` — the landing page after sign-in. One card per project the account is assigned to,
-showing name, description, the connected remote repository URL, and a row of count badges — one
-per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked, 👀 For Review, ✅ Done) - so you can see
-where a project's tickets stand without opening its board, with an **Open Board** button.
+showing name, description, the connected remote repository URL, its sprint dates/goal when set,
+and a row of count badges — one per board column (⏳ To Do, 🔧 In Progress, 🚫 Blocked,
+👀 For Review, ✅ Done) - so you can see where a project's tickets stand without opening its board,
+with an **Open Board** button.
 
 **New Project / Edit Project** — Admin only; the button and each card's Edit/Remove links are
 hidden for Analysts and Developers. Before saving — whether creating a new project or editing an
@@ -88,6 +89,9 @@ confirmation, since it can't be undone from the UI.
 | Remote URL | Text | Yes (create only) | The `https://` URL of the Git repository to connect, e.g. `https://github.com/org/repo.git`. Can't be changed after the project is created — shown as read-only text when editing. |
 | Access Token | Password | Yes on create, optional on edit | A Personal Access Token for that repository, with permission to read and write it. On edit, leave blank to keep the currently stored token (e.g. after rotating it on the host, paste the new one). Never shown again once saved. |
 | Base branch | Text | Yes (defaults to `main` on create) | Every ticket's branch is cut from here, and an approved ticket's branch is merged back into it. Must already exist on the remote repository, whether creating or editing — the save is rejected with an error otherwise. |
+| Sprint start date | Date | No | For framing this project as an Agile sprint. Purely informational — nothing in the app gates on it. |
+| Sprint end date | Date | No | Same as above. Rejected if set earlier than the sprint start date (when both are given). |
+| Sprint goal | Text (multi-line) | No | The sprint's objective, free text. |
 
 ## Ticket board
 
@@ -123,12 +127,13 @@ rename whichever session is currently selected — any project member can rename
 just the one they started. Within a session, each message is labeled with the name of the person
 who sent it (the Live Agent's own replies are labeled **Live Agent**).
 
-If you ask it to create, log, or file a ticket, it drafts one — title and description — as a
-card right in the chat, with **Create ticket** and **Reject** buttons side by side. Before
-drafting, it checks the board's existing tickets and will call out related or duplicate ones in
-the draft when relevant. Not happy with the wording? Click the ✏️ button on the card to edit the
-title and description right there before creating it — **Create ticket** then uses your edited
-text instead of the original draft. Nothing is created until you click **Create ticket**; the
+If you ask it to create, log, or file a ticket, it drafts one — title, description, and
+acceptance criteria — as a card right in the chat, with **Create ticket** and **Reject** buttons
+side by side. Before drafting, it checks the board's existing tickets and will call out related or
+duplicate ones in the draft when relevant. Not happy with the wording? Click the ✏️ button on the
+card to edit the title, description, and acceptance criteria right there before creating it —
+**Create ticket** then uses your edited text instead of the original draft. Nothing is created
+until you click **Create ticket**; the
 Live Agent never adds a ticket to the board on its own. Once you approve it, the new ticket appears on the
 board (in To Do) the next time the board polls, just like one you created yourself with
 **New Ticket**, and the card shows a **Ticket created** badge instead of the buttons. If the
@@ -143,6 +148,7 @@ chat, so nobody can approve or reject the same draft twice.
 |---|---|---|---|
 | Title | Text | Yes | Shown on the card and at the top of the ticket's detail page. |
 | Description | Text (multi-line) | No | The work to be done — what an assigned agent reads to know what to build. |
+| Acceptance Criteria | Text (multi-line) | Yes | The condition(s) this ticket must satisfy to be considered done — the pipeline agents (especially Research and Design) use this to scope their work, and it's what the human approval gate ultimately checks against. Shown on the ticket detail page. |
 
 ### Moving a ticket
 
@@ -214,8 +220,8 @@ error message with nothing to retry from the board.
 
 ## Ticket detail
 
-Clicking a card opens its full page: title, description, and status badge at the top, then four
-panels. This page also polls for updates, roughly every 10 seconds.
+Clicking a card opens its full page: title, description, acceptance criteria, and status badge at
+the top, then four panels. This page also polls for updates, roughly every 10 seconds.
 
 **Agent assignments & commits** — lists every agent assigned to the ticket and when. While the
 ticket is To Do or In Progress, a **Start** (or **Run Pipeline**, once it's already In Progress)

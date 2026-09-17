@@ -216,7 +216,12 @@ this, in order:
 2. The real, authoritative check: `ApproveAsync` builds a `{FilePath: GitConflictResolution(ResolvedContent, BaseTipSha)}`
    map from every conflict that *is* resolved and hands it to
    `IGitService.MergeWithResolutionsAsync(repositoryPath, sourceBranch, targetBranch, resolutions,
-   mergerName, ct)`. That method performs the same trial merge `DetectMergeConflictsAsync` does
+   mergerName, ct)`, where `mergerName` is the authenticated caller's own login name
+   (`ICurrentUserContext.Name`), not `SubmitReviewRequest.ReviewerName` (which is only a free-text
+   label stored on the `Review` record - see "Review attribution" below). That name becomes both
+   the merge commit's author/committer signature and part of its message (`"... (approved by
+   {mergerName})"`), so the Git history itself records who actually clicked Approve. That method
+   performs the same trial merge `DetectMergeConflictsAsync` does
    (`CommitOnSuccess: false`, so the merge-in-progress state isn't cleared). For each file it still
    finds conflicting: no entry in `resolutions` at all means a genuinely new conflict (the base
    branch moved further since the ticket's `Conflict` records were last checked) - reported as
@@ -846,9 +851,11 @@ None of these are caught within Application — they propagate to the API's
   non-admins is a candidate for short-lived caching if project-assignment churn stays low
   relative to read volume.
 - **Review attribution:** `SubmitReviewRequest.ReviewerName` is still a client-supplied free-text
-  field rather than derived from `ICurrentUserContext` — the Approve role gate itself doesn't
-  depend on it, but tightening this would improve audit-trail integrity (a user could type any
-  name into the field today).
+  field rather than derived from `ICurrentUserContext`, and is what's stored on the `Review`
+  record itself and shown in the review history — the Approve role gate itself doesn't depend on
+  it, so a user could still type any name into the field there. The merge commit an Approve
+  produces is already tied to the authenticated login name instead (see `ApprovalGateService.ApproveAsync`
+  above), but `Review.ReviewerName` hasn't been switched over the same way yet.
 - **Stale-resolution recovery still requires a manual re-detect for fresh content:** `Conflict.MarkStale`
   resets a stale conflict back to `Detected` and un-resolves it, but doesn't refresh
   `ConflictingDiffContent` - if the base branch changed the conflicting hunk itself (not just

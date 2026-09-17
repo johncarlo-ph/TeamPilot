@@ -180,7 +180,11 @@ further; only a matching entry actually gets written and `Commands.Stage`d (clea
 conflict). Once every conflicting file is covered (no unresolved or stale paths), `repo.Commit(...)`
 is called directly - LibGit2Sharp sees the still-set `MERGE_HEAD` and records it as a second parent
 automatically, exactly like completing a conflicted `git merge` by hand (edit the file, `git add`,
-`git commit`). If anything is left unresolved *or* stale, the attempt is aborted
+`git commit`). The commit message is `"Merge branch '{sourceBranch}' into '{targetBranch}' (approved
+by {mergerName})"`, and `mergerName` is also used as the commit's author/committer `Signature` - see
+[docs/application.md](application.md) for where `ApprovalGateService.ApproveAsync` sources that name
+from (the authenticated caller's login name, not the free-text `SubmitReviewRequest.ReviewerName`).
+If anything is left unresolved *or* stale, the attempt is aborted
 (`repo.Reset(ResetMode.Hard, target.Tip)`, same as `DetectMergeConflictsAsync`'s cleanup) rather
 than left mid-merge, since every ticket in a project shares that project's one sandbox clone and a
 real other ticket's pipeline stage could touch it next. `MergeStatus.UpToDate`/`FastForward`

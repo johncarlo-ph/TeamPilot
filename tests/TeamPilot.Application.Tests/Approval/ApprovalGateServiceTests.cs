@@ -122,6 +122,10 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
+        // The merge is attributed to the authenticated approver's own login name, not the
+        // free-text ReviewerName on the request below - see ApprovalGateService.ApproveAsync.
+        _currentUser.Setup(c => c.Name).Returns("Alice");
+
         var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
@@ -253,6 +257,10 @@ public class ApprovalGateServiceTests
         conflict.ResolveManually("final merged content", "Kept both changes", "Alice");
         ticket.RaiseConflict(conflict);
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        // The merge is attributed to the authenticated approver's own login name, not the
+        // free-text ReviewerName on the request below - see ApprovalGateService.ApproveAsync.
+        _currentUser.Setup(c => c.Name).Returns("Alice");
 
         var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
 

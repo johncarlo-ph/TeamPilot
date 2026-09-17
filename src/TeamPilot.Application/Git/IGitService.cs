@@ -68,7 +68,10 @@ public interface IGitService
     /// can't complete. Either way the attempt is aborted (nothing is committed or left in a
     /// mid-merge state) and the returned result lists exactly which files are unresolved vs.
     /// stale. This is a live check against the real merge, not a trust of whatever the caller
-    /// already believes is resolved - see docs/application.md.
+    /// already believes is resolved - see docs/application.md. <paramref name="mergerName"/> is
+    /// used as the merge commit's author/committer signature and is also embedded in the commit
+    /// message itself (e.g. "... (approved by {mergerName})"), so the Git history records who
+    /// approved the merge.
     /// </summary>
     Task<GitMergeResolutionResult> MergeWithResolutionsAsync(
         string repositoryPath,

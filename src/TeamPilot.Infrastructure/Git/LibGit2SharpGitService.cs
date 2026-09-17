@@ -327,7 +327,7 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
                 var merger = new Signature(mergerName, _options.DefaultAuthorEmail, DateTimeOffset.UtcNow);
                 var mergeOptions = new MergeOptions { CommitOnSuccess = false, FailOnConflict = false };
                 var mergeResult = repo.Merge(source.Tip, merger, mergeOptions);
-                var message = $"Merge branch '{sourceBranch}' into '{targetBranch}'";
+                var message = $"Merge branch '{sourceBranch}' into '{targetBranch}' (approved by {mergerName})";
 
                 if (mergeResult.Status is MergeStatus.UpToDate or MergeStatus.FastForward)
                 {

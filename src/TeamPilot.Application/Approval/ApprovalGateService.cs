@@ -67,7 +67,7 @@ public sealed class ApprovalGateService(
         switch (request.Decision)
         {
             case ReviewDecision.Approve:
-                await ApproveAsync(ticket, request.ReviewerName, cancellationToken);
+                await ApproveAsync(ticket, cancellationToken);
                 break;
 
             case ReviewDecision.RequestChanges:
@@ -143,12 +143,18 @@ public sealed class ApprovalGateService(
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task ApproveAsync(Ticket ticket, string reviewerName, CancellationToken cancellationToken)
+    private async Task ApproveAsync(Ticket ticket, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(ticket.BranchName))
         {
             throw new InvalidOperationException("Ticket has no linked branch to merge.");
         }
+
+        // The authenticated approver's own login name, not the free-text SubmitReviewRequest.ReviewerName
+        // (which is only a display label on the Review record) - this is what lands in the merge
+        // commit's author signature and message, so the Git history reflects who actually clicked
+        // Approve rather than whatever name a caller typed into the review form.
+        var approverName = currentUser.Name ?? "Unknown";
 
         // Fast, cheap pre-check against what we already know: an early, clear error instead of
         // fetching/attempting a merge that the live check below would reject anyway.
@@ -190,7 +196,7 @@ public sealed class ApprovalGateService(
             // transaction below (no DB write happens before this returns), so a stale-resolution
             // reset (see the StaleFilePaths branch) actually persists instead of rolling back
             // together with the failed approval it's reported alongside.
-            var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, reviewerName, cancellationToken);
+            var mergeResult = await gitService.MergeWithResolutionsAsync(project.RepositoryPath, branchName, targetBranch, resolutions, approverName, cancellationToken);
             if (!mergeResult.Success)
             {
                 if (mergeResult.StaleFilePaths.Count > 0)
@@ -226,9 +232,9 @@ public sealed class ApprovalGateService(
         }
 
         logger.LogInformation(
-            "Ticket {TicketId} in project {ProjectId} approved and merged by {ReviewerName}",
+            "Ticket {TicketId} in project {ProjectId} approved and merged by {ApproverName}",
             ticket.Id,
             ticket.ProjectId,
-            reviewerName);
+            approverName);
     }
 }

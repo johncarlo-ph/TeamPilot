@@ -53,11 +53,11 @@ describe('ReviewForm', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const submitted = vi.fn();
     fixture.componentInstance.submitted.subscribe(submitted);
-    fixture.componentInstance.form.patchValue({ reviewerName: 'Alice', decision: 'Reject', comments: 'Wrong approach' });
+    fixture.componentInstance.form.patchValue({ decision: 'Reject', comments: 'Wrong approach' });
 
     fixture.componentInstance.submit();
 
-    expect(submitted).toHaveBeenCalledWith({ reviewerName: 'Alice', decision: 'Reject', comments: 'Wrong approach' });
+    expect(submitted).toHaveBeenCalledWith({ decision: 'Reject', comments: 'Wrong approach' });
   });
 
   it('submit_RejectDecisionNotConfirmed_DoesNotEmit', () => {
@@ -66,7 +66,7 @@ describe('ReviewForm', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     const submitted = vi.fn();
     fixture.componentInstance.submitted.subscribe(submitted);
-    fixture.componentInstance.form.patchValue({ reviewerName: 'Alice', decision: 'Reject', comments: '' });
+    fixture.componentInstance.form.patchValue({ decision: 'Reject', comments: '' });
 
     fixture.componentInstance.submit();
 
@@ -79,7 +79,7 @@ describe('ReviewForm', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const submitted = vi.fn();
     fixture.componentInstance.submitted.subscribe(submitted);
-    fixture.componentInstance.form.patchValue({ reviewerName: 'Alice', decision: 'Reject', comments: '' });
+    fixture.componentInstance.form.patchValue({ decision: 'Reject', comments: '' });
 
     fixture.componentInstance.submit();
 

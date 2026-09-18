@@ -183,7 +183,7 @@ automatically, exactly like completing a conflicted `git merge` by hand (edit th
 `git commit`). The commit message is `"Merge branch '{sourceBranch}' into '{targetBranch}' (approved
 by {mergerName})"`, and `mergerName` is also used as the commit's author/committer `Signature` - see
 [docs/application.md](application.md) for where `ApprovalGateService.ApproveAsync` sources that name
-from (the authenticated caller's login name, not the free-text `SubmitReviewRequest.ReviewerName`).
+from (the authenticated caller's own login name via `ICurrentUserContext.Name`).
 If anything is left unresolved *or* stale, the attempt is aborted
 (`repo.Reset(ResetMode.Hard, target.Tip)`, same as `DetectMergeConflictsAsync`'s cleanup) rather
 than left mid-merge, since every ticket in a project shares that project's one sandbox clone and a

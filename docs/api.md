@@ -164,6 +164,7 @@ curl -X POST https://localhost:7085/api/auth/refresh -b cookies.txt -c cookies.t
 | `Application.Common.Exceptions.ProjectHasActiveTicketsException` | 409 (removing a project while any of its sprints has a ticket `InProgress` or `ForReview`) |
 | `Application.Common.Exceptions.SprintHasActiveTicketsException` | 409 (removing a sprint that has a ticket `InProgress` or `ForReview`) |
 | `Application.Common.Exceptions.TicketNotAssignedToSprintException` | 409 (starting the pipeline or linking a branch on a backlog ticket - assign it to a sprint first) |
+| `Application.Common.Exceptions.TicketHasNoLinkedBranchException` | 409 (approving a ticket that has no linked branch to merge) |
 | `Domain.Exceptions.DomainException` (any subtype, incl. `TicketAlreadyAssignedToSprintException`) | 409 |
 | anything else | 500 (message is generic; the real exception is logged, never returned to the client) |
 

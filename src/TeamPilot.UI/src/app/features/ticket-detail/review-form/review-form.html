@@ -1,9 +1,6 @@
 <app-modal [open]="open()" title="Submit Review" (closed)="closed.emit()">
   <form [formGroup]="form" (ngSubmit)="submit()">
-    <div class="mb-3">
-      <label for="reviewer-name" class="form-label">Reviewer name</label>
-      <input id="reviewer-name" type="text" class="form-control" formControlName="reviewerName" />
-    </div>
+    <p class="text-body-secondary small">Reviewing as {{ authService.currentUser()?.name }}</p>
     <div class="mb-3">
       <label for="review-decision" class="form-label">Decision</label>
       <select id="review-decision" class="form-select" formControlName="decision">

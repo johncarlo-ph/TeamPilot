@@ -7,7 +7,6 @@ public sealed class SubmitReviewRequestValidator : AbstractValidator<SubmitRevie
 {
     public SubmitReviewRequestValidator()
     {
-        RuleFor(x => x.ReviewerName).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Decision).IsInEnum();
         RuleFor(x => x.Comments).MaximumLength(4000);
     }

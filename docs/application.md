@@ -250,10 +250,11 @@ this, in order:
    map from every conflict that *is* resolved and hands it to
    `IGitService.MergeWithResolutionsAsync(repositoryPath, sourceBranch, targetBranch, resolutions,
    mergerName, ct)`, where `mergerName` is the authenticated caller's own login name
-   (`ICurrentUserContext.Name`), not `SubmitReviewRequest.ReviewerName` (which is only a free-text
-   label stored on the `Review` record - see "Review attribution" below). That name becomes both
-   the merge commit's author/committer signature and part of its message (`"... (approved by
-   {mergerName})"`), so the Git history itself records who actually clicked Approve. That method
+   (`ICurrentUserContext.Name`) - the same source `SubmitReviewAsync` stamps `Review.ReviewerName`
+   from, so both records agree on who actually acted rather than trusting a client-supplied name.
+   That name becomes both the merge commit's author/committer signature and part of its message
+   (`"... (approved by {mergerName})"`), so the Git history itself records who actually clicked
+   Approve. That method
    performs the same trial merge `DetectMergeConflictsAsync` does
    (`CommitOnSuccess: false`, so the merge-in-progress state isn't cleared). For each file it still
    finds conflicting: no entry in `resolutions` at all means a genuinely new conflict (the base
@@ -887,6 +888,7 @@ public async Task<TicketDto> SubmitReviewAsync(Guid ticketId, SubmitReviewReques
 | `Common.Exceptions.StaleConflictResolutionException` | The live merge attempt finds a resolved conflict whose `Conflict.BaseTipSha` no longer matches the base branch's current tip - the affected conflicts are reset to `Detected` (`Conflict.MarkStale`) before this is thrown | `ApprovalGateService.ApproveAsync` |
 | `Common.Exceptions.ProjectNotReadyException` | Creating a ticket against a project that's still `Cloning`, or whose clone `Failed` | `TicketService.CreateAsync`/`CreateBacklogAsync` |
 | `Common.Exceptions.TicketNotAssignedToSprintException` | Starting the pipeline or manually linking a branch on a backlog ticket (`SprintId == null`) | `TicketService.LinkBranchAsync`, `OrchestrationService.RunPipelineAsync` |
+| `Common.Exceptions.TicketHasNoLinkedBranchException` | Approving a ticket that has no linked branch to merge | `ApprovalGateService.ApproveAsync` |
 | `Domain.Exceptions.TicketAlreadyAssignedToSprintException` | Assigning a ticket to a sprint when it's already assigned to one | `Ticket.AssignToSprint` (via `TicketService.AssignToSprintAsync`) |
 | `Common.Exceptions.ProjectHasActiveTicketsException` | Removing a project while any of its sprints has a ticket `InProgress` or `ForReview` | `ProjectService.RemoveAsync` |
 | `Common.Exceptions.SprintHasActiveTicketsException` | Removing a sprint while it has a ticket `InProgress` or `ForReview` | `SprintService.RemoveAsync` |
@@ -907,12 +909,6 @@ None of these are caught within Application — they propagate to the API's
 - **Caching:** `ProjectService.ListAsync`'s per-request `GetAssignedProjectIdsAsync` lookup for
   non-admins is a candidate for short-lived caching if project-assignment churn stays low
   relative to read volume.
-- **Review attribution:** `SubmitReviewRequest.ReviewerName` is still a client-supplied free-text
-  field rather than derived from `ICurrentUserContext`, and is what's stored on the `Review`
-  record itself and shown in the review history — the Approve role gate itself doesn't depend on
-  it, so a user could still type any name into the field there. The merge commit an Approve
-  produces is already tied to the authenticated login name instead (see `ApprovalGateService.ApproveAsync`
-  above), but `Review.ReviewerName` hasn't been switched over the same way yet.
 - **Stale-resolution recovery still requires a manual re-detect for fresh content:** `Conflict.MarkStale`
   resets a stale conflict back to `Detected` and un-resolves it, but doesn't refresh
   `ConflictingDiffContent` - if the base branch changed the conflicting hunk itself (not just

@@ -257,7 +257,7 @@ export class Board {
     });
   }
 
-  confirmReview(request: { reviewerName: string; decision: ReviewDecision; comments: string | null }): void {
+  confirmReview(request: { decision: ReviewDecision; comments: string | null }): void {
     const ticket = this.reviewTarget();
     if (!ticket) {
       return;

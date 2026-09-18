@@ -61,10 +61,14 @@ public sealed class ApprovalGateService(
             throw new ForbiddenException("Only Developers or Admins may approve or reject tickets.");
         }
 
-        var review = Review.Create(ticket.Id, request.ReviewerName, request.Decision, request.Comments);
+        // The authenticated caller's own login name, not a client-supplied field - otherwise a
+        // reviewer could type any name into their own review (see Review.ReviewerName).
+        var reviewerName = currentUser.Name ?? "Unknown";
+
+        var review = Review.Create(ticket.Id, reviewerName, request.Decision, request.Comments);
         ticket.RecordReview(review);
 
-        await auditLogger.LogActionAsync(AuditEventType.ReviewSubmitted, $"Review ({request.Decision}) submitted for ticket '{ticket.Title}' by {request.ReviewerName}.", cancellationToken);
+        await auditLogger.LogActionAsync(AuditEventType.ReviewSubmitted, $"Review ({request.Decision}) submitted for ticket '{ticket.Title}' by {reviewerName}.", cancellationToken);
 
         switch (request.Decision)
         {
@@ -154,13 +158,11 @@ public sealed class ApprovalGateService(
     {
         if (string.IsNullOrWhiteSpace(ticket.BranchName))
         {
-            throw new InvalidOperationException("Ticket has no linked branch to merge.");
+            throw new TicketHasNoLinkedBranchException(ticket.Title);
         }
 
-        // The authenticated approver's own login name, not the free-text SubmitReviewRequest.ReviewerName
-        // (which is only a display label on the Review record) - this is what lands in the merge
-        // commit's author signature and message, so the Git history reflects who actually clicked
-        // Approve rather than whatever name a caller typed into the review form.
+        // The authenticated approver's own login name - this is what lands in the merge commit's
+        // author signature and message, so the Git history reflects who actually clicked Approve.
         var approverName = currentUser.Name ?? "Unknown";
 
         // Fast, cheap pre-check against what we already know: an early, clear error instead of

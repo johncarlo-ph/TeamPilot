@@ -10,7 +10,6 @@ export interface ReviewDto {
 }
 
 export interface SubmitReviewRequest {
-  reviewerName: string;
   decision: ReviewDecision;
   comments: string | null;
 }

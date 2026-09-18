@@ -357,10 +357,11 @@ Review** opens the same form a board drag-and-drop opens, without presetting a d
 
 **Submit Review** — anyone assigned to the project can request changes or resolve a conflict;
 Approve and Reject are both Admin/Developer only, since they're the ticket's two "final" outcomes.
+The form shows "Reviewing as {your name}" - the reviewer is always the signed-in user, not a
+typed-in name.
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| Reviewer name | Text | Yes | Pre-filled with the signed-in user's name. |
 | Decision | Select | Yes | **Approve** (merges the branch into the sprint's base branch and pushes the merge to the remote; Admin/Developer, requires a linked branch), **Request Changes** (sends the ticket back to In Progress and immediately re-runs the pipeline - see below), **Reject** (Admin/Developer; permanently deletes the ticket's branch and cancels it - see below), or **Resolve Conflict**. |
 | Comments | Text (multi-line) | No | Shown alongside the decision in the ticket's review history. For **Request Changes**, these comments are also passed to the agents on the re-run as feedback to address - write them as instructions to the agents, not just notes to yourself. |
 

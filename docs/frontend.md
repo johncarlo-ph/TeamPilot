@@ -589,12 +589,12 @@ Approve-role check in `ApprovalGateService`; see [docs/application.md](applicati
 this is a security boundary on its own — a client-side check only improves UX by not showing a
 control the server would reject anyway.
 
-One additional client-side-only guard exists for a real backend gap found during development:
-approving a ticket with no linked branch currently throws an unhandled `InvalidOperationException`
-in `ApprovalGateService` (a raw 500, not a proper validation error) — `review-form.ts`'s
-`hasLinkedBranch` input disables the Approve option before that request can even be sent. The
-underlying fix still belongs server-side (return a typed, mapped exception); this is tracked as
-follow-up work, not fixed as part of this frontend change.
+One additional client-side-only guard exists purely as a UX nicety: `review-form.ts`'s
+`hasLinkedBranch` input disables the Approve option when the ticket has no linked branch, so the
+request is never sent in the first place. The server enforces this too - `ApprovalGateService.ApproveAsync`
+throws `TicketHasNoLinkedBranchException`, mapped by `GlobalExceptionHandler` to a proper 409 - so
+this guard just skips a round trip the API would reject anyway, the same as every other guard in
+this section.
 
 ## Code style notes
 
@@ -693,8 +693,6 @@ than a toast).
   `ProjectEventsService`'s stream (or the `ProjectEvent` type set) to cover new chat messages would
   be the natural next step, deliberately left out of the board/ticket-detail SSE conversion above
   to keep that change scoped to the polling it was replacing.
-- **Server-side fix for the branchless-approve 500** described above under "Authorization" —
-  the client-side guard is a stopgap, not a substitute for the API returning a proper error.
 - **No delete endpoints** exist for `Project` or `Ticket` on the API, so the UI has no delete
   affordance for either. `Agent` has two narrow exceptions, both on the agents page: the
   pipeline's "Remove" button calls `DELETE /api/projects/{projectId}/workflow/stages/{stageId}`,

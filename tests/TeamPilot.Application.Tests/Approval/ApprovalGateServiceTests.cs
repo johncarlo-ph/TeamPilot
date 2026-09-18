@@ -129,11 +129,11 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        // The merge is attributed to the authenticated approver's own login name, not the
-        // free-text ReviewerName on the request below - see ApprovalGateService.ApproveAsync.
+        // The merge is attributed to the authenticated caller's own login name - see
+        // ApprovalGateService.ApproveAsync.
         _currentUser.Setup(c => c.Name).Returns("Alice");
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, "Looks good");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
@@ -162,7 +162,7 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, "Wrong approach entirely");
+        var request = new SubmitReviewRequest(ReviewDecision.Reject, "Wrong approach entirely");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
@@ -186,7 +186,7 @@ public class ApprovalGateServiceTests
         ticket.MoveToReview();
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, null);
+        var request = new SubmitReviewRequest(ReviewDecision.Reject, null);
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
@@ -205,7 +205,7 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Reject, null);
+        var request = new SubmitReviewRequest(ReviewDecision.Reject, null);
 
         await Assert.ThrowsAsync<ForbiddenException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         _gitService.Verify(
@@ -222,7 +222,7 @@ public class ApprovalGateServiceTests
         // tracker, so this stands in for what it would report once really invoked.
         _pipelineRunTracker.Setup(t => t.IsRunning(ticket.Id)).Returns(true);
 
-        var request = new SubmitReviewRequest("Bob", ReviewDecision.RequestChanges, "Needs work");
+        var request = new SubmitReviewRequest(ReviewDecision.RequestChanges, "Needs work");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
@@ -247,7 +247,7 @@ public class ApprovalGateServiceTests
         ticket.RaiseConflict(Conflict.Create(ticket.Id, "src/File.cs", "<<<<<<< diff"));
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, "Looks good");
 
         await Assert.ThrowsAsync<UnresolvedConflictsException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         _gitService.Verify(
@@ -265,11 +265,11 @@ public class ApprovalGateServiceTests
         ticket.RaiseConflict(conflict);
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        // The merge is attributed to the authenticated approver's own login name, not the
-        // free-text ReviewerName on the request below - see ApprovalGateService.ApproveAsync.
+        // The merge is attributed to the authenticated caller's own login name - see
+        // ApprovalGateService.ApproveAsync.
         _currentUser.Setup(c => c.Name).Returns("Alice");
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, "Looks good");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 
@@ -303,7 +303,7 @@ public class ApprovalGateServiceTests
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, GitConflictResolution>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitMergeResolutionResult(false, ["src/OtherFile.cs"], Array.Empty<string>()));
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, "Looks good");
 
         var exception = await Assert.ThrowsAsync<UnresolvedConflictsException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         Assert.Equal(["src/OtherFile.cs"], exception.FilePaths);
@@ -327,7 +327,7 @@ public class ApprovalGateServiceTests
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<IReadOnlyDictionary<string, GitConflictResolution>>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new GitMergeResolutionResult(false, Array.Empty<string>(), ["src/File.cs"]));
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, "Looks good");
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, "Looks good");
 
         var exception = await Assert.ThrowsAsync<StaleConflictResolutionException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
 
@@ -339,7 +339,7 @@ public class ApprovalGateServiceTests
     }
 
     [Fact]
-    public async Task SubmitReviewAsync_WhenApprovingWithoutLinkedBranch_ThrowsInvalidOperationException()
+    public async Task SubmitReviewAsync_WhenApprovingWithoutLinkedBranch_ThrowsTicketHasNoLinkedBranchException()
     {
         var ticket = Ticket.Create(_project.Id, _sprint.Id, "Add feature", "desc", "Acceptance criteria");
         ticket.AssignAgent(Agent.Create(_project.Id, "Coder", AgentRole.Coding));
@@ -347,9 +347,9 @@ public class ApprovalGateServiceTests
 
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, null);
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, null);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
+        await Assert.ThrowsAsync<TicketHasNoLinkedBranchException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
     }
 
     [Fact]
@@ -361,7 +361,7 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.Approve, null);
+        var request = new SubmitReviewRequest(ReviewDecision.Approve, null);
 
         await Assert.ThrowsAsync<ForbiddenException>(() => _sut.SubmitReviewAsync(ticket.Id, request));
         _gitService.Verify(
@@ -379,7 +379,7 @@ public class ApprovalGateServiceTests
         var ticket = CreateTicketInReview("feature/add-feature");
         _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
 
-        var request = new SubmitReviewRequest("Alice", ReviewDecision.RequestChanges, "Needs work");
+        var request = new SubmitReviewRequest(ReviewDecision.RequestChanges, "Needs work");
 
         var result = await _sut.SubmitReviewAsync(ticket.Id, request);
 

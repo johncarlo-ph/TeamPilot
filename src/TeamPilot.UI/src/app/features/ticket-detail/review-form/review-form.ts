@@ -1,5 +1,5 @@
 import { Component, effect, inject, input, output } from '@angular/core';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 import { Modal } from '../../../shared/components/modal/modal';
 import { AuthService } from '../../../core/services/auth.service';
 import { ReviewDecision, SubmitReviewRequest } from '../../../core/models';
@@ -17,9 +17,9 @@ export class ReviewForm {
   /** Preselects the decision (e.g. when triggered from a board drag-and-drop action). */
   readonly initialDecision = input<ReviewDecision>('Approve');
   /**
-   * Approving merges the ticket's linked branch server-side (ApprovalGateService.ApproveAsync)
-   * and currently throws an unhandled 500 (not a proper validation error) when no branch is
-   * linked yet — this is blocked client-side until the backend guards it properly.
+   * Approving merges the ticket's linked branch server-side (ApprovalGateService.ApproveAsync),
+   * which returns a proper 409 when no branch is linked yet - this client-side guard is a UX
+   * nicety on top of that (skips the round trip), not a substitute for it.
    */
   readonly hasLinkedBranch = input(true);
   readonly submitting = input(false);
@@ -27,7 +27,6 @@ export class ReviewForm {
   readonly submitted = output<SubmitReviewRequest>();
 
   readonly form = this.fb.nonNullable.group({
-    reviewerName: [this.authService.currentUser()?.name ?? '', Validators.required],
     decision: this.fb.nonNullable.control<ReviewDecision>('Approve'),
     comments: [''],
   });
@@ -36,7 +35,6 @@ export class ReviewForm {
     effect(() => {
       if (this.open()) {
         this.form.patchValue({
-          reviewerName: this.authService.currentUser()?.name ?? '',
           decision: this.initialDecision(),
           comments: '',
         });
@@ -72,7 +70,6 @@ export class ReviewForm {
       }
     }
     this.submitted.emit({
-      reviewerName: value.reviewerName,
       decision: value.decision,
       comments: value.comments || null,
     });

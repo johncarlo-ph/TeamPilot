@@ -17,3 +17,4 @@ export * from './git.model';
 export * from './auth.model';
 export * from './live-agent-chat.model';
 export * from './project-event.model';
+export * from './dashboard.model';

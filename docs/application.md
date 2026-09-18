@@ -33,6 +33,7 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Approval/`](../src/TeamPilot.Application/Approval) | The approval gate: review submission, merge |
 | [`Conflicts/`](../src/TeamPilot.Application/Conflicts) | Merge-conflict detection and resolution |
 | [`AuditLog/`](../src/TeamPilot.Application/AuditLog) | Read-side of the audit log |
+| [`Dashboard/`](../src/TeamPilot.Application/Dashboard) | Read-only cross-project rollup for the projects landing page: active sprint count, global ticket-status counts, and a "needs attention" list (Blocked/ForReview tickets, at-risk sprints) - see [Architectural decisions](#architectural-decisions) below for how it's scoped instead of using `IProjectAccessGuard` |
 | [`Git/`](../src/TeamPilot.Application/Git), [`Llm/`](../src/TeamPilot.Application/Llm) | `IGitService`/`ILlmConnector` port declarations (implemented in Infrastructure) |
 | [`Common/Interfaces/IGitCredentialProtector.cs`](../src/TeamPilot.Application/Common/Interfaces/IGitCredentialProtector.cs) | Encrypts/decrypts a project's remote access token for storage (implemented in Infrastructure via Data Protection) |
 | [`Reviews/`](../src/TeamPilot.Application/Reviews), [`Commits/`](../src/TeamPilot.Application/Commits) | Read-only repository interfaces for child records |
@@ -48,6 +49,23 @@ cases need (e.g. `ITicketRepository.GetByIdAsync` eager-loads the full ticket gr
 either force every caller to accept a fat interface or push `Include()`/`AsNoTracking()`
 decisions into a shared, one-size-fits-all method — this violates Interface Segregation for
 marginal code reduction, so it was rejected.
+
+**`DashboardService` scopes itself to accessible projects directly instead of using
+`IProjectAccessGuard`.** `IProjectAccessGuard.EnsureAccessAsync` checks access to *one* project
+id and throws if denied - not a fit for a rollup that spans every project the caller can see at
+once. Instead `DashboardService` computes its own accessible-project-id set (mirroring
+`ProjectService.ListAsync`'s exact rule: Admins get every non-removed project, everyone else only
+their `UserProjectAssignment` set) and passes it into every `IDashboardRepository` query, so a
+non-admin's dashboard numbers and "needs attention" lists never include a project they can't open.
+
+**`IDashboardRepository` is the one repository allowed to join across aggregates.** `Project`,
+`Sprint`, and `Ticket` are deliberately independent aggregates that reference each other by id
+only (see [docs/domain.md](domain.md)) - every other repository stays scoped to its own aggregate
+accordingly. The dashboard summary has no aggregate of its own, so `DashboardRepository`
+(Infrastructure) is a narrow, explicit exception: it queries `Projects`/`Sprints`/`Tickets`
+together in a handful of single-pass, `AsNoTracking()` projections (same style as
+`TicketRepository.GetStatusCountsBySprintAsync`) rather than composing several per-aggregate
+repository calls and joining in memory.
 
 **`IProjectAccessGuard` centralizes project-scoping instead of repeating it.** Every
 ticket-board-adjacent service (`TicketService`, `SprintService`, `AgentService`,

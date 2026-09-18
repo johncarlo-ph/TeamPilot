@@ -1,0 +1,109 @@
+@if (loading()) {
+  <div class="text-body-secondary">Loading dashboard...</div>
+} @else if (summary(); as summary) {
+  <div class="row row-cols-2 row-cols-md-3 row-cols-xl-6 g-3 mb-3">
+    <div class="col">
+      <div class="card h-100 shadow-sm bg-white text-center">
+        <div class="card-body">
+          <div class="fs-3 fw-semibold">{{ summary.activeSprintCount }}</div>
+          <div class="small text-body-secondary">Active Sprints</div>
+        </div>
+      </div>
+    </div>
+    @for (entry of statusCounts(); track entry.status) {
+      <div class="col">
+        <div class="card h-100 shadow-sm bg-white text-center">
+          <div class="card-body">
+            <div class="fs-3 fw-semibold">{{ entry.count }}</div>
+            <app-status-badge [value]="entry.status"></app-status-badge>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+
+  <div class="card shadow-sm bg-white mb-4">
+    <div class="card-header">
+      <i class="bi bi-exclamation-triangle-fill text-warning me-1"></i>
+      Needs Attention
+    </div>
+    <div class="card-body">
+      @if (hasNothingToAttendTo()) {
+        <p class="text-body-secondary mb-0">Nothing needs attention right now.</p>
+      } @else {
+        <div class="row g-3">
+          <div class="col-12 col-lg-4">
+            <div class="small fw-semibold mb-2">Blocked Tickets</div>
+            @if (!summary.needsAttention.blockedTickets.length) {
+              <p class="small text-body-secondary mb-0">No blocked tickets.</p>
+            } @else {
+              <ul class="list-group list-group-flush">
+                @for (ticket of summary.needsAttention.blockedTickets; track ticket.id) {
+                  <li class="list-group-item px-0">
+                    <a [routerLink]="['/tickets', ticket.id]" class="d-block text-decoration-none">
+                      <div class="d-flex align-items-center justify-content-between gap-2">
+                        <span class="text-truncate">{{ ticket.title }}</span>
+                        <app-status-badge [value]="ticket.status"></app-status-badge>
+                      </div>
+                      <div class="small text-body-secondary">
+                        {{ ticket.projectName }} &middot; {{ ticket.sprintName || 'Backlog' }}
+                      </div>
+                    </a>
+                  </li>
+                }
+              </ul>
+            }
+          </div>
+
+          <div class="col-12 col-lg-4">
+            <div class="small fw-semibold mb-2">For Review</div>
+            @if (!summary.needsAttention.ticketsForReview.length) {
+              <p class="small text-body-secondary mb-0">No tickets awaiting review.</p>
+            } @else {
+              <ul class="list-group list-group-flush">
+                @for (ticket of summary.needsAttention.ticketsForReview; track ticket.id) {
+                  <li class="list-group-item px-0">
+                    <a [routerLink]="['/tickets', ticket.id]" class="d-block text-decoration-none">
+                      <div class="d-flex align-items-center justify-content-between gap-2">
+                        <span class="text-truncate">{{ ticket.title }}</span>
+                        <app-status-badge [value]="ticket.status"></app-status-badge>
+                      </div>
+                      <div class="small text-body-secondary">
+                        {{ ticket.projectName }} &middot; {{ ticket.sprintName || 'Backlog' }}
+                      </div>
+                    </a>
+                  </li>
+                }
+              </ul>
+            }
+          </div>
+
+          <div class="col-12 col-lg-4">
+            <div class="small fw-semibold mb-2">Sprints At Risk</div>
+            @if (!summary.needsAttention.sprintsAtRisk.length) {
+              <p class="small text-body-secondary mb-0">No sprints at risk.</p>
+            } @else {
+              <ul class="list-group list-group-flush">
+                @for (sprint of summary.needsAttention.sprintsAtRisk; track sprint.id) {
+                  <li class="list-group-item px-0">
+                    <a
+                      [routerLink]="['/projects', sprint.projectId, 'sprints', sprint.id, 'board']"
+                      class="d-block text-decoration-none"
+                    >
+                      <div class="text-truncate">{{ sprint.name }}</div>
+                      <div class="small text-body-secondary">
+                        {{ sprint.projectName }} &middot; Ends
+                        {{ sprint.sprintEndDate | date: 'mediumDate' }} &middot;
+                        {{ sprint.unfinishedTicketCount }} unfinished
+                      </div>
+                    </a>
+                  </li>
+                }
+              </ul>
+            }
+          </div>
+        </div>
+      }
+    </div>
+  </div>
+}

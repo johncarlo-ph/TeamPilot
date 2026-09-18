@@ -1,109 +1,76 @@
 @if (loading()) {
   <div class="text-body-secondary">Loading ticket...</div>
 } @else if (ticket(); as ticket) {
-  <a [routerLink]="backLink()" class="small text-decoration-none">
-    &larr; {{ backLabel() }}
-  </a>
+  <a [routerLink]="backLink()" class="small text-decoration-none"> &larr; {{ backLabel() }} </a>
 
-  <div class="d-flex align-items-start justify-content-between mt-3">
-    <div>
-      <div class="mb-1">
-        <app-status-badge [value]="ticket.status"></app-status-badge>
-      </div>
-      <h1 class="h3 mb-1">{{ ticket.title }}</h1>
-      <p class="ticket-description text-body-secondary mb-0">
-        {{ descriptionPreview() || 'No description.' }}
-      </p>
-      @if (isDescriptionLong()) {
-        <button
-          type="button"
-          class="btn btn-link btn-sm ps-0"
-          (click)="toggleDescription()"
-        >
-          {{ descriptionExpanded() ? 'See less' : 'See more' }}
-        </button>
-      }
-      @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
-        <p class="small text-body-secondary fst-italic mb-0 mt-1">
-          Reason: {{ ticket.cancellationReason }}
-        </p>
-      }
-      <div class="mt-2">
-        <div class="small fw-semibold">Acceptance Criteria</div>
-        <p class="small text-body-secondary mb-0" style="white-space: pre-wrap">{{ ticket.acceptanceCriteria }}</p>
+  <div class="row g-3 p-3">
+    <div class="mb-1">
+      <app-status-badge [value]="ticket.status"></app-status-badge>
+    </div>
+    <h1 class="h3 mb-1">{{ ticket.title }}</h1>
+    <div class="col-12 col-lg-6">
+      <div class="small fw-semibold">Description</div>
+      <div class="d-flex align-items-start justify-content-between">
+        <div>
+          <p class="ticket-description text-body-secondary mb-0">
+            {{ descriptionPreview() || 'No description.' }}
+          </p>
+          @if (isDescriptionLong()) {
+            <button type="button" class="btn btn-link btn-sm ps-0" (click)="toggleDescription()">
+              {{ descriptionExpanded() ? 'See less' : 'See more' }}
+            </button>
+          }
+          @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
+            <p class="small text-body-secondary fst-italic mb-0 mt-1">
+              Reason: {{ ticket.cancellationReason }}
+            </p>
+          }
+        </div>
+        <div class="d-flex align-items-center gap-2">
+          @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
+            @if (ticket.pipelineRunning) {
+              <span class="small text-body-secondary fst-italic">Pipeline running&hellip;</span>
+            } @else {
+              <button
+                type="button"
+                class="btn btn-sm btn-primary"
+                [disabled]="starting()"
+                (click)="startPipeline()"
+              >
+                {{
+                  starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline'
+                }}
+              </button>
+            }
+          }
+          @if (
+            ticket.status === 'ToDo' ||
+            ticket.status === 'InProgress' ||
+            ticket.status === 'ForReview' ||
+            ticket.status === 'Blocked'
+          ) {
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-danger"
+              [disabled]="cancelling()"
+              (click)="cancelTicket()"
+            >
+              {{ cancelling() ? 'Cancelling...' : 'Cancel Ticket' }}
+            </button>
+          }
+        </div>
       </div>
     </div>
-    <div class="d-flex align-items-center gap-2">
-      @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
-        @if (ticket.pipelineRunning) {
-          <span class="small text-body-secondary fst-italic">Pipeline running&hellip;</span>
-        } @else {
-          <button
-            type="button"
-            class="btn btn-sm btn-primary"
-            [disabled]="starting()"
-            (click)="startPipeline()"
-          >
-            {{ starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline' }}
-          </button>
-        }
-      }
-      @if (
-        ticket.status === 'ToDo' ||
-        ticket.status === 'InProgress' ||
-        ticket.status === 'ForReview' ||
-        ticket.status === 'Blocked'
-      ) {
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-danger"
-          [disabled]="cancelling()"
-          (click)="cancelTicket()"
-        >
-          {{ cancelling() ? 'Cancelling...' : 'Cancel Ticket' }}
-        </button>
-      }
+
+    <div class="col-12 col-lg-6">
+      <div class="small fw-semibold">Acceptance Criteria</div>
+      <p class="small text-body-secondary mb-0" style="white-space: pre-wrap">
+        {{ ticket.acceptanceCriteria }}
+      </p>
     </div>
   </div>
 
   <div class="row g-3">
-    <div class="col-12 col-lg-7">
-      <div class="card mb-3">
-        <div class="card-header">Commits</div>
-        <div class="card-body">
-          @if (!ticket.commits.length) {
-            <p class="text-body-secondary mb-0">No commits yet.</p>
-          } @else {
-            @for (commit of ticket.commits; track commit.id) {
-              <div class="mb-3">
-                <p class="mb-1">
-                  <code class="me-2">{{ commit.commitHash.slice(0, 8) }}</code
-                  >{{ commit.message }}
-                </p>
-                <p class="small text-body-secondary mb-1">
-                  @if (branchUrl(commit.branchName); as url) {
-                    <a [href]="url" target="_blank" rel="noopener noreferrer">{{
-                      commit.branchName
-                    }}</a>
-                  } @else {
-                    {{ commit.branchName }}
-                  }
-                  &middot; {{ commit.createdAtUtc | date: 'short' }}
-                </p>
-                <app-commit-diff-viewer [content]="commit.diffContent"></app-commit-diff-viewer>
-              </div>
-            }
-          }
-        </div>
-      </div>
-
-      <app-branch-panel
-        [ticket]="ticket"
-        [remoteUrl]="project()?.remoteUrl ?? null"
-        (changed)="onBranchChanged()"
-      ></app-branch-panel>
-    </div>
-
     <div class="col-12 col-lg-5">
       <div class="card mb-3">
         <div class="card-header d-flex align-items-center justify-content-between">
@@ -150,6 +117,43 @@
       ></app-ticket-question-panel>
 
       <app-agent-event-log-panel [events]="agentEvents()"></app-agent-event-log-panel>
+    </div>
+
+    <div class="col-12 col-lg-7">
+      <app-branch-panel
+        [ticket]="ticket"
+        [remoteUrl]="project()?.remoteUrl ?? null"
+        (changed)="onBranchChanged()"
+      ></app-branch-panel>
+
+      <div class="card mb-3">
+        <div class="card-header">Commits</div>
+        <div class="card-body">
+          @if (!ticket.commits.length) {
+            <p class="text-body-secondary mb-0">No commits yet.</p>
+          } @else {
+            @for (commit of ticket.commits; track commit.id) {
+              <div class="mb-3">
+                <p class="mb-1">
+                  <code class="me-2">{{ commit.commitHash.slice(0, 8) }}</code
+                  >{{ commit.message }}
+                </p>
+                <p class="small text-body-secondary mb-1">
+                  @if (branchUrl(commit.branchName); as url) {
+                    <a [href]="url" target="_blank" rel="noopener noreferrer">{{
+                      commit.branchName
+                    }}</a>
+                  } @else {
+                    {{ commit.branchName }}
+                  }
+                  &middot; {{ commit.createdAtUtc | date: 'short' }}
+                </p>
+                <app-commit-diff-viewer [content]="commit.diffContent"></app-commit-diff-viewer>
+              </div>
+            }
+          }
+        </div>
+      </div>
 
       <app-conflicts-panel
         [ticketId]="ticket.id"

@@ -15,6 +15,7 @@ import { CreateTicketForm } from './create-ticket-form/create-ticket-form';
 import { ReviewForm } from '../ticket-detail/review-form/review-form';
 import { ChatPanel } from './chat-panel/chat-panel';
 import { CancelledTicketsModal } from './cancelled-tickets-modal/cancelled-tickets-modal';
+import { TICKET_STATUS_ICONS } from '../../shared/components/status-badge/status-badge';
 
 // The SSE stream (see ProjectEventsService) now drives the primary refresh; this is only a
 // safety net for a stuck/misbehaving connection, so it's far longer than the old 8s poll.
@@ -23,11 +24,11 @@ const SAFETY_POLL_INTERVAL_MS = 60000;
 type BoardStatus = Exclude<TicketStatus, 'Cancelled'>;
 
 export const BOARD_COLUMNS: { status: BoardStatus; title: string; icon: string; accentClass: string }[] = [
-  { status: 'ToDo', title: 'To Do', icon: '⏳', accentClass: 'board-column--todo' },
-  { status: 'InProgress', title: 'In Progress', icon: '🔧', accentClass: 'board-column--inprogress' },
-  { status: 'Blocked', title: 'Blocked', icon: '🚫', accentClass: 'board-column--blocked' },
-  { status: 'ForReview', title: 'For Review', icon: '👀', accentClass: 'board-column--forreview' },
-  { status: 'Done', title: 'Done', icon: '✅', accentClass: 'board-column--done' },
+  { status: 'ToDo', title: 'To Do', icon: TICKET_STATUS_ICONS['ToDo'], accentClass: 'board-column--todo' },
+  { status: 'InProgress', title: 'In Progress', icon: TICKET_STATUS_ICONS['InProgress'], accentClass: 'board-column--inprogress' },
+  { status: 'Blocked', title: 'Blocked', icon: TICKET_STATUS_ICONS['Blocked'], accentClass: 'board-column--blocked' },
+  { status: 'ForReview', title: 'For Review', icon: TICKET_STATUS_ICONS['ForReview'], accentClass: 'board-column--forreview' },
+  { status: 'Done', title: 'Done', icon: TICKET_STATUS_ICONS['Done'], accentClass: 'board-column--done' },
 ];
 
 // The only drags handleTransition actually acts on - everything else (e.g. dropping a ToDo card

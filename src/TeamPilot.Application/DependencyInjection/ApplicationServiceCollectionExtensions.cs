@@ -6,6 +6,7 @@ using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Conflicts;
+using TeamPilot.Application.Dashboard;
 using TeamPilot.Application.Instructions;
 using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.LiveAgentChat;
@@ -45,6 +46,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ITicketAgentEventService, TicketAgentEventService>();
         services.AddScoped<IConflictResolutionService, ConflictResolutionService>();
         services.AddScoped<IWorkflowService, WorkflowService>();
+        services.AddScoped<IDashboardService, DashboardService>();
 
         return services;
     }

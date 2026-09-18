@@ -8,9 +8,7 @@
       <div class="text-body-secondary">Not yet assigned to a sprint</div>
     </div>
   </div>
-  <button type="button" class="btn btn-outline-primary" (click)="formOpen.set(true)">
-    New Ticket
-  </button>
+  <button type="button" class="btn btn-primary" (click)="formOpen.set(true)">New Ticket</button>
 </div>
 
 @if (loading()) {
@@ -24,7 +22,9 @@
         <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
           <div class="flex-grow-1" style="min-width: 16rem">
             <div class="d-flex align-items-center gap-2 mb-1">
-              <a class="text-decoration-none" [routerLink]="['/tickets', ticket.id]">{{ ticket.title }}</a>
+              <a class="text-decoration-none" [routerLink]="['/tickets', ticket.id]">{{
+                ticket.title
+              }}</a>
               <app-status-badge [value]="ticket.status"></app-status-badge>
             </div>
             @if (ticket.description) {
@@ -35,7 +35,12 @@
           </div>
           @if (sprints().length) {
             <div class="d-flex align-items-center gap-2">
-              <select #sprintSelect class="form-select form-select-sm" style="width: auto" [disabled]="isAssigning(ticket.id)">
+              <select
+                #sprintSelect
+                class="form-select form-select-sm"
+                style="width: auto"
+                [disabled]="isAssigning(ticket.id)"
+              >
                 @for (sprint of sprints(); track sprint.id) {
                   <option [value]="sprint.id">{{ sprint.name }}</option>
                 }

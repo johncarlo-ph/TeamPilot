@@ -1,11 +1,11 @@
-<div class="d-flex align-items-center justify-content-between mt-3">
+<div class="d-flex align-items-center justify-content-between mt-3 mb-2">
   <h1 class="h3">Projects</h1>
   @if (authService.isAdmin()) {
-    <button type="button" class="btn btn-outline-primary" (click)="openCreate()">
-      New Project
-    </button>
+    <button type="button" class="btn btn-primary" (click)="openCreate()">New Project</button>
   }
 </div>
+
+<app-dashboard-summary></app-dashboard-summary>
 
 @if (loading()) {
   <div class="text-body-secondary">Loading projects...</div>

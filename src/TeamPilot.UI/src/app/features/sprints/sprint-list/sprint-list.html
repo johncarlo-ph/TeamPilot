@@ -14,9 +14,7 @@
       >Agents</a
     >
     @if (authService.isAdmin()) {
-      <button type="button" class="btn btn-outline-primary" (click)="openCreate()">
-        New Sprint
-      </button>
+      <button type="button" class="btn btn-primary" (click)="openCreate()">New Sprint</button>
     }
   </div>
 </div>
@@ -40,7 +38,9 @@
               <div class="small text-body-secondary mb-3">
                 @if (sprint.sprintStartDate || sprint.sprintEndDate) {
                   <div>
-                    {{ sprint.sprintStartDate ? (sprint.sprintStartDate | date: 'mediumDate') : '?' }}
+                    {{
+                      sprint.sprintStartDate ? (sprint.sprintStartDate | date: 'mediumDate') : '?'
+                    }}
                     &ndash;
                     {{ sprint.sprintEndDate ? (sprint.sprintEndDate | date: 'mediumDate') : '?' }}
                   </div>
@@ -82,7 +82,11 @@
                   type="button"
                   class="btn btn-outline-danger btn-sm"
                   [disabled]="!canRemove(sprint) || isRemoving(sprint.id)"
-                  [title]="!canRemove(sprint) ? 'Cannot remove while a ticket is In Progress or For Review.' : ''"
+                  [title]="
+                    !canRemove(sprint)
+                      ? 'Cannot remove while a ticket is In Progress or For Review.'
+                      : ''
+                  "
                   (click)="remove(sprint)"
                 >
                   {{ isRemoving(sprint.id) ? 'Removing...' : 'Remove' }}

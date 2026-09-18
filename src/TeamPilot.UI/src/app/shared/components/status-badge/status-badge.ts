@@ -34,14 +34,31 @@ const BADGE_CLASS_BY_VALUE: Record<string, string> = {
   ResolveConflict: 'text-bg-info',
 };
 
+// Ticket status only - matches the Kanban board's own column icons (see BOARD_COLUMNS in
+// features/board/board.ts, which imports this rather than redeclaring the emoji). Every other
+// status-badge value (review decisions, conflict/question/user status, ...) has no entry here and
+// simply renders without an icon.
+export const TICKET_STATUS_ICONS: Record<string, string> = {
+  ToDo: '⏳',
+  InProgress: '🔧',
+  Blocked: '🚫',
+  ForReview: '👀',
+  Done: '✅',
+};
+
 @Component({
   selector: 'app-status-badge',
-  template: `<span class="badge rounded-pill status-badge {{ badgeClass() }}">{{ label() }}</span>`,
+  template: `<span class="badge rounded-pill status-badge {{ badgeClass() }}"
+    >@if (icon(); as icon) {
+      <span aria-hidden="true">{{ icon }}</span>
+    }{{ label() }}</span
+  >`,
 })
 export class StatusBadge {
   readonly value = input.required<string>();
   readonly label = computed(() => splitPascalCase(this.value()));
   readonly badgeClass = computed(() => BADGE_CLASS_BY_VALUE[this.value()] ?? 'text-bg-secondary');
+  readonly icon = computed(() => TICKET_STATUS_ICONS[this.value()] ?? null);
 }
 
 function splitPascalCase(value: string): string {

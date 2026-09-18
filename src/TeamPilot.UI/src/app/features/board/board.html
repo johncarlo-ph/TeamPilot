@@ -9,10 +9,14 @@
     </div>
   </div>
   <div class="d-flex gap-2">
-    <button type="button" class="btn btn-outline-secondary" (click)="cancelledTicketsOpen.set(true)">
+    <button
+      type="button"
+      class="btn btn-outline-secondary"
+      (click)="cancelledTicketsOpen.set(true)"
+    >
       Cancelled Tickets
     </button>
-    <button type="button" class="btn btn-outline-primary" (click)="createFormOpen.set(true)">
+    <button type="button" class="btn btn-primary" (click)="createFormOpen.set(true)">
       New Ticket
     </button>
   </div>
@@ -52,7 +56,10 @@
               >
                 @for (ticket of ticketsByStatus()[column.status]; track ticket.id) {
                   <div cdkDrag [cdkDragData]="ticket">
-                    <app-ticket-card [ticket]="ticket" (movedToBacklog)="moveToBacklog(ticket)"></app-ticket-card>
+                    <app-ticket-card
+                      [ticket]="ticket"
+                      (movedToBacklog)="moveToBacklog(ticket)"
+                    ></app-ticket-card>
                   </div>
                 }
               </div>

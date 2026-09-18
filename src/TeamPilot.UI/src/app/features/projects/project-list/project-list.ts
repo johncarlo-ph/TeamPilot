@@ -12,10 +12,11 @@ import {
   UpdateProjectRequest,
 } from '../../../core/models';
 import { ProjectForm } from '../project-form/project-form';
+import { DashboardSummary } from '../../dashboard-summary/dashboard-summary';
 
 @Component({
   selector: 'app-project-list',
-  imports: [RouterLink, ProjectForm],
+  imports: [RouterLink, ProjectForm, DashboardSummary],
   templateUrl: './project-list.html',
 })
 export class ProjectList {

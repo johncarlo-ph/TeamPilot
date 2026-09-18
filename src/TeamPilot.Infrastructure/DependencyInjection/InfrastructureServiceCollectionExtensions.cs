@@ -7,6 +7,7 @@ using TeamPilot.Application.Auth;
 using TeamPilot.Application.Commits;
 using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Conflicts;
+using TeamPilot.Application.Dashboard;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Instructions;
 using TeamPilot.Application.InstructionTemplates;
@@ -58,6 +59,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IRefreshTokenRepository, RefreshTokenRepository>();
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+        services.AddScoped<IDashboardRepository, DashboardRepository>();
 
         services.Configure<GitOptions>(configuration.GetSection(GitOptions.SectionName));
         services.AddScoped<IGitService, LibGit2SharpGitService>();

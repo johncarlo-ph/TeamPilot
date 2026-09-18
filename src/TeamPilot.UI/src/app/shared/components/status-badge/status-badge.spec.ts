@@ -8,7 +8,7 @@ import { StatusBadge } from './status-badge';
   template: `<app-status-badge [value]="value"></app-status-badge>`,
 })
 class HostComponent {
-  value = 'ForReview';
+  value = 'RequestChanges';
 }
 
 describe('StatusBadge', () => {
@@ -22,12 +22,12 @@ describe('StatusBadge', () => {
 
   it('render_PascalCaseStatus_InsertsSpaceBetweenWords', () => {
     const badge: HTMLElement = fixture.nativeElement.querySelector('span');
-    expect(badge.textContent?.trim()).toBe('For Review');
+    expect(badge.textContent?.trim()).toBe('Request Changes');
   });
 
   it('render_KnownStatus_AppliesMappedBadgeClass', () => {
     const badge: HTMLElement = fixture.nativeElement.querySelector('span');
-    expect(badge.classList).toContain('text-bg-forreview');
+    expect(badge.classList).toContain('text-bg-warning');
   });
 
   it('render_UnknownStatus_FallsBackToSecondaryClass', () => {
@@ -36,5 +36,18 @@ describe('StatusBadge', () => {
     unknownFixture.detectChanges();
     const badge: HTMLElement = unknownFixture.nativeElement.querySelector('span');
     expect(badge.classList).toContain('text-bg-secondary');
+  });
+
+  it('render_TicketStatusValue_PrefixesLabelWithItsBoardIcon', () => {
+    const ticketStatusFixture = TestBed.createComponent(HostComponent);
+    ticketStatusFixture.componentInstance.value = 'ForReview';
+    ticketStatusFixture.detectChanges();
+    const badge: HTMLElement = ticketStatusFixture.nativeElement.querySelector('span');
+    expect(badge.textContent?.trim()).toBe('👀 For Review');
+  });
+
+  it('render_NonTicketStatusValue_RendersLabelWithNoIcon', () => {
+    const badge: HTMLElement = fixture.nativeElement.querySelector('span');
+    expect(badge.textContent?.trim()).toBe('Request Changes');
   });
 });

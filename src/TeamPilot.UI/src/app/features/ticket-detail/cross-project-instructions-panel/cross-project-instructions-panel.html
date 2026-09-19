@@ -1,0 +1,24 @@
+@if (instructions().length) {
+  <div class="card mb-3">
+    <div class="card-header">
+      <span aria-hidden="true">🔗</span> Cross-Project Instructions
+    </div>
+    <div class="card-body">
+      <p class="small text-body-secondary">
+        Changes an agent found were needed in another referenced project - these are not applied
+        automatically and require manual follow-up.
+      </p>
+      <ul class="list-group list-group-flush">
+        @for (instruction of sortedInstructions(); track instruction.id) {
+          <li class="list-group-item px-0">
+            <div class="d-flex align-items-center justify-content-between">
+              <span class="fw-semibold">{{ projectName(instruction.referencedProjectId) }}</span>
+              <span class="small text-body-secondary">{{ instruction.createdAtUtc | date: 'short' }}</span>
+            </div>
+            <p class="small mb-0 mt-1" style="white-space: pre-wrap">{{ instruction.text }}</p>
+          </li>
+        }
+      </ul>
+    </div>
+  </div>
+}

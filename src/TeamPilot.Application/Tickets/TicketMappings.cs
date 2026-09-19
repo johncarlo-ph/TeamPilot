@@ -1,6 +1,8 @@
 using TeamPilot.Application.Commits.Dtos;
 using TeamPilot.Application.Conflicts.Dtos;
 using TeamPilot.Application.Reviews.Dtos;
+using TeamPilot.Application.TicketPipelineNotes.Dtos;
+using TeamPilot.Application.TicketProjectInstructions.Dtos;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Domain.Entities;
 
@@ -33,7 +35,11 @@ internal static class TicketMappings
         ticket.UpdatedAtUtc,
         pipelineRunning);
 
-    public static TicketDetailDto ToDetailDto(Ticket ticket, bool pipelineRunning) => new(
+    public static TicketDetailDto ToDetailDto(
+        Ticket ticket,
+        IReadOnlyCollection<TicketProjectInstruction> instructions,
+        IReadOnlyCollection<TicketPipelineNote> pipelineNotes,
+        bool pipelineRunning) => new(
         ticket.Id,
         ticket.ProjectId,
         ticket.SprintId,
@@ -54,6 +60,12 @@ internal static class TicketMappings
             .ToList(),
         ticket.Conflicts
             .Select(c => new ConflictDto(c.Id, c.TicketId, c.CommitId, c.FilePath, c.ConflictingDiffContent, c.AiSuggestedResolution, c.ResolvedContent, c.ResolutionNote, c.Status, c.ResolvedAtUtc, c.ResolvedBy, c.BaseTipSha, c.CreatedAtUtc))
+            .ToList(),
+        instructions
+            .Select(i => new TicketProjectInstructionDto(i.Id, i.AgentId, i.ReferencedProjectId, i.Text, i.CreatedAtUtc))
+            .ToList(),
+        pipelineNotes
+            .Select(n => new TicketPipelineNoteDto(n.Id, n.AgentId, n.Role, n.Text, n.CreatedAtUtc))
             .ToList(),
         ticket.CreatedAtUtc,
         ticket.UpdatedAtUtc,

@@ -1,4 +1,4 @@
-using Moq;
+﻿using Moq;
 using TeamPilot.Application.Auth;
 using TeamPilot.Application.Common;
 using TeamPilot.Application.Common.Exceptions;
@@ -6,6 +6,8 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Sprints;
+using TeamPilot.Application.TicketPipelineNotes;
+using TeamPilot.Application.TicketProjectInstructions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Tickets.Dtos;
 using TeamPilot.Application.Tickets.Validators;
@@ -28,6 +30,8 @@ public class TicketServiceTests
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IPipelineRunTracker> _pipelineRunTracker = new();
     private readonly Mock<IProjectEventBroadcaster> _eventBroadcaster = new();
+    private readonly Mock<ITicketProjectInstructionRepository> _ticketProjectInstructionRepository = new();
+    private readonly Mock<ITicketPipelineNoteRepository> _ticketPipelineNoteRepository = new();
     private readonly TicketService _sut;
     private readonly Project _project = Project.Create("TeamPilot", "desc", "https://github.com/org/teampilot.git", "encrypted-token");
     private readonly Sprint _sprint;
@@ -42,6 +46,12 @@ public class TicketServiceTests
         _projectRepository.Setup(r => r.GetByIdAsync(_project.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_project);
         _sprintRepository.Setup(r => r.GetByIdAsync(_sprint.Id, It.IsAny<CancellationToken>())).ReturnsAsync(_sprint);
         _credentialProtector.Setup(p => p.Unprotect(_project.EncryptedAccessToken)).Returns("plaintext-token");
+        _ticketProjectInstructionRepository
+            .Setup(r => r.ListByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _ticketPipelineNoteRepository
+            .Setup(r => r.ListByTicketAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
         _sut = new TicketService(
             _ticketRepository.Object,
@@ -54,6 +64,8 @@ public class TicketServiceTests
             _unitOfWork.Object,
             _pipelineRunTracker.Object,
             _eventBroadcaster.Object,
+            _ticketProjectInstructionRepository.Object,
+            _ticketPipelineNoteRepository.Object,
             new CreateTicketRequestValidator(),
             new CreateBranchRequestValidator(),
             new CancelTicketRequestValidator(),
@@ -89,6 +101,189 @@ public class TicketServiceTests
         var request = new CreateTicketRequest("Implement login", "Add OAuth login flow", string.Empty);
 
         await Assert.ThrowsAsync<ValidationException>(() => _sut.CreateAsync(_sprint.Id, request));
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsExistingAccessibleTicket_Succeeds()
+    {
+        var mentionedTicket = Ticket.Create(_project.Id, _sprint.Id, "Other ticket", "desc", "criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([mentionedTicket]);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[Other ticket](ticket:{mentionedTicket.Id})", "User can log in via OAuth.");
+
+        var result = await _sut.CreateAsync(_sprint.Id, request);
+
+        Assert.Equal("Implement login", result.Title);
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsNonExistentTicket_ThrowsNotFoundExceptionAndDoesNotAddTicket()
+    {
+        var missingTicketId = Guid.NewGuid();
+        _ticketRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[Ghost ticket](ticket:{missingTicketId})", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsTicketInInaccessibleProject_ThrowsForbiddenExceptionAndDoesNotAddTicket()
+    {
+        var otherProject = Project.Create("Other Project", "desc", "https://github.com/org/other.git", "encrypted-token");
+        var mentionedTicket = Ticket.Create(otherProject.Id, null, "Other project's ticket", "desc", "criteria");
+        _ticketRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([mentionedTicket]);
+        _projectAccessGuard
+            .Setup(g => g.EnsureAccessAsync(otherProject.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ForbiddenException("You do not have access to project."));
+
+        var request = new CreateTicketRequest("Implement login", $"See @[Other project's ticket](ticket:{mentionedTicket.Id})", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<ForbiddenException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsExistingAccessibleProject_Succeeds()
+    {
+        var mentionedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([mentionedProject]);
+
+        var request = new CreateTicketRequest("Implement login", $"Depends on @[Billing Service](project:{mentionedProject.Id})", "User can log in via OAuth.");
+
+        var result = await _sut.CreateAsync(_sprint.Id, request);
+
+        Assert.Equal("Implement login", result.Title);
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsNonExistentProject_ThrowsNotFoundExceptionAndDoesNotAddTicket()
+    {
+        var missingProjectId = Guid.NewGuid();
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var request = new CreateTicketRequest("Implement login", $"Depends on @[Ghost project](project:{missingProjectId})", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsFileInOwnProjectThatExists_Succeeds()
+    {
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_project]);
+        _gitService
+            .Setup(g => g.FileExistsAsync(_project.RepositoryPath, "src/app/foo.ts", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[src/app/foo.ts](file:{_project.Id}:src/app/foo.ts)", "User can log in via OAuth.");
+
+        var result = await _sut.CreateAsync(_sprint.Id, request);
+
+        Assert.Equal("Implement login", result.Title);
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsFileInOwnProjectThatDoesNotExist_ThrowsNotFoundExceptionAndDoesNotAddTicket()
+    {
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([_project]);
+        _gitService
+            .Setup(g => g.FileExistsAsync(_project.RepositoryPath, "src/app/missing.ts", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[src/app/missing.ts](file:{_project.Id}:src/app/missing.ts)", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsFileInOtherProjectWithoutProjectMention_ThrowsFileMentionProjectNotReferencedExceptionAndDoesNotAddTicket()
+    {
+        var otherProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        otherProject.MarkCloned("C:/git-sandboxes/" + otherProject.Id);
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([otherProject]);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[src/app/foo.ts](file:{otherProject.Id}:src/app/foo.ts)", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<FileMentionProjectNotReferencedException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+        _gitService.Verify(g => g.FileExistsAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsFileInOtherProjectWithMatchingProjectMention_Succeeds()
+    {
+        var otherProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        otherProject.MarkCloned("C:/git-sandboxes/" + otherProject.Id);
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([otherProject]);
+        _gitService
+            .Setup(g => g.FileExistsAsync(otherProject.RepositoryPath, "src/app/foo.ts", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var request = new CreateTicketRequest(
+            "Implement login",
+            $"Depends on @[Billing Service](project:{otherProject.Id}) - see @[src/app/foo.ts](file:{otherProject.Id}:src/app/foo.ts)",
+            "User can log in via OAuth.");
+
+        var result = await _sut.CreateAsync(_sprint.Id, request);
+
+        Assert.Equal("Implement login", result.Title);
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionMentionsFileInNotReadyOtherProject_ThrowsProjectNotReadyExceptionAndDoesNotAddTicket()
+    {
+        var otherProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        // Not MarkCloned - stays Cloning, not Ready.
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([otherProject]);
+
+        var request = new CreateTicketRequest(
+            "Implement login",
+            $"Depends on @[Billing Service](project:{otherProject.Id}) - see @[src/app/foo.ts](file:{otherProject.Id}:src/app/foo.ts)",
+            "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<ProjectNotReadyException>(() => _sut.CreateAsync(_sprint.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateBacklogAsync_DescriptionMentionsNonExistentTicket_ThrowsNotFoundExceptionAndDoesNotAddTicket()
+    {
+        var missingTicketId = Guid.NewGuid();
+        _ticketRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var request = new CreateTicketRequest("Implement login", $"See @[Ghost ticket](ticket:{missingTicketId})", "User can log in via OAuth.");
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _sut.CreateBacklogAsync(_project.Id, request));
+        _ticketRepository.Verify(r => r.AddAsync(It.IsAny<Ticket>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

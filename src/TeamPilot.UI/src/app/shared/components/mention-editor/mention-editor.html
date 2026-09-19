@@ -1,0 +1,24 @@
+<div class="position-relative">
+  <div
+    #editorRoot
+    [attr.id]="editorId()"
+    class="form-control"
+    style="white-space: pre-wrap; min-height: 6rem; overflow-y: auto"
+    contenteditable="true"
+    role="textbox"
+    aria-multiline="true"
+    (input)="onInput()"
+    (keydown)="onKeydown($event)"
+    (paste)="onPaste($event)"
+    (blur)="onBlur()"
+  ></div>
+  @if (mentionQuery() !== null) {
+    <app-mention-autocomplete
+      [query]="mentionQuery()!"
+      [projects]="allKnownProjects()"
+      (categorySelected)="onCategorySelected($event)"
+      (selected)="onMentionSelected($event)"
+      (closed)="closeMentionAutocomplete()"
+    ></app-mention-autocomplete>
+  }
+</div>

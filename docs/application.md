@@ -23,6 +23,10 @@ Infrastructure both depend on it, but it depends on neither.
 | [`Projects/`](../src/TeamPilot.Application/Projects) | Project CRUD (identity + Git connection only), project-scoped listing for non-admins |
 | [`Sprints/`](../src/TeamPilot.Application/Sprints) | Sprint CRUD within a project - branch and sprint details (start/end date, goal); owns the ticket-status-count rollup for the sprint list |
 | [`Tickets/`](../src/TeamPilot.Application/Tickets) | Ticket board CRUD, branch linking - a ticket's parent is a `Sprint`, or `null` for a project's backlog until assigned |
+| [`Tickets/Mentions/`](../src/TeamPilot.Application/Tickets/Mentions) | `MentionParser` - extracts `@[Label](ticket:<id>)`/`@[Label](project:<id>)`/`@[Label](file:<projectId>:<path>)` tokens out of a ticket's `Description`, see "Cross-referencing other tickets/projects/files via '@'-mentions" below |
+| [`Mentions/`](../src/TeamPilot.Application/Mentions) | `IMentionSearchService` - the Project/Ticket (cross-project) and File (per-project) search backing the "@" mention-autocomplete dropdown |
+| [`TicketProjectInstructions/`](../src/TeamPilot.Application/TicketProjectInstructions) | `ITicketProjectInstructionRepository` - append/list for the non-blocking "referenced project needs a change" notes a Research/Design stage can raise |
+| [`TicketPipelineNotes/`](../src/TeamPilot.Application/TicketPipelineNotes) | `ITicketPipelineNoteRepository` - append/list for the non-blocking human-facing notes any pipeline stage can leave via the `NOTES:` marker |
 | [`Agents/`](../src/TeamPilot.Application/Agents) | Provisioning/self-healing the 4 default pipeline agents plus the standing `LiveAgent` per project; read/configure/activate-deactivate. Custom-agent creation and pipeline placement live in `Workflow/`, not here |
 | [`Instructions/`](../src/TeamPilot.Application/Instructions) | Versioned agent instructions |
 | [`InstructionTemplates/`](../src/TeamPilot.Application/InstructionTemplates) | Admin-managed catalog of reusable instructions an admin can apply to a real agent |
@@ -377,6 +381,85 @@ ticket; any other exception (a genuine bug) still propagates to a 500 exactly as
 stays loud instead of quietly turning into a parked ticket. Either way, `RunPipelineAsync`
 returns early with `TicketPipelineResultDto.Blocked = true` and `BlockingQuestionId` set, instead
 of throwing or reaching `ticket.MoveToReview()`.
+
+**Cross-referencing other tickets/projects/files via "@"-mentions.** A ticket's `Description` can
+embed a plain-text mention token - `@[Label](ticket:<guid>)`, `@[Label](project:<guid>)`, or
+`@[Label](file:<projectGuid>:<path>)` - inserted by the frontend's "@" mention-autocomplete, with
+no schema change to `Description` itself and no separate "reference" entity; `MentionParser.Parse`
+(`Tickets/Mentions/`) extracts them via a single regex. A File mention's "id" is the id of the
+project the file belongs to (there's no other way to disambiguate a path once more than one
+project's files can be referenced - see below); `Mention.FilePath` carries the path itself, null
+for the other two types. `TicketService.CreateAsync`/`CreateBacklogAsync` validate every mention
+at creation time (before `Ticket.Create`; there is no ticket-edit path today, so this is the only
+place mentions are ever written):
+- A missing ticket/project (including a File mention's project) throws `NotFoundException`; one
+  the creating user can't reach throws `ForbiddenException` via the same `IProjectAccessGuard`
+  used everywhere else.
+- **A cross-project File mention (one whose project isn't the ticket's own) is rejected
+  (`FileMentionProjectNotReferencedException`, 409) unless that same project is also directly
+  Project-mentioned somewhere in the description.** This is deliberate, not incidental: a Project
+  mention is what actually grants Research/Design read access to that repo (see below), so a file
+  chip alone could otherwise silently smuggle in an unreviewed cross-project pointer.
+- **The file path itself is checked against the live repository** (`IGitService.FileExistsAsync`,
+  requiring that project to be `ProjectStatus.Ready`) - unlike a ticket/project mention, which
+  points at a stable database row, a path can trivially be stale or mistyped, so (unlike those two
+  types) this one *is* worth a git read at creation time.
+
+`Mentions/IMentionSearchService` backs the autocomplete dropdown's three categories differently:
+`SearchTicketsAsync`/`SearchProjectsAsync` search by title/name across **every project the caller
+has access to** (Admin bypass, else `IUserRepository.GetAssignedProjectIdsAsync`, mirroring
+`ProjectService.ListAsync`) - capped at 10 results, skipped for a query under 2 characters, same
+as before. `SearchFilesAsync(projectId, query)` is scoped to **one project at a time**
+(`IGitService.SearchFilesAsync`, a bounded recursive path-substring walk of that project's repo,
+skipped/returns empty for a project that isn't `Ready`) - the frontend calls it once per project
+it's allowed to file-reference (the ticket's own, plus any already directly Project-mentioned) and
+merges the results itself; see [docs/frontend.md](frontend.md) for the two-phase category-then-
+search UI this backs.
+
+`OrchestrationService.ResolveReferencedProjectsAndTicketsAsync` resolves a ticket's mentions once
+per pipeline run (mentions can't change mid-run) into two things at once (fetching the referenced
+tickets already requires it, to read their `ProjectId`): every OTHER project the mentions point
+at (a Project mention directly, a Ticket mention's own project, or a File mention's project) -
+excluding the ticket's own project, which stays primary - and the referenced tickets themselves.
+**Research and Design stages only** get read-only `list_files`/`read_file` tool access to each
+referenced project's repo, in addition to their own (`RunStagePromptAsync` grows a
+`referencedProjects` parameter; `GitReadOnlyTools.BuildDefinitions` adds an optional `"project"`
+tool argument only when that list is non-empty, resolved against a name-keyed dictionary built
+from the primary project plus the referenced ones - a referenced project's reads pass
+`branchName: null`, since it has no "ticket branch" of its own). Those same two stages also get,
+directly in the prompt, **each referenced ticket's own `Description`/`AcceptanceCriteria`/
+`Status`**, each wrapped in its own `<referenced_ticket title="..." status="...">` block (added to
+`DataNotInstructionsNotice`'s tag list, same untrusted-content treatment as `<ticket_description>`
+itself) - a "@ticket" mention was originally only resolved into repo access to that ticket's
+project (identical to what a "@project" mention on the same project would do), with no way for
+the agent to actually see what the referenced ticket says; this closes that gap.
+`ResolveReferencedFileMentions` separately extracts every File mention (pure text parsing, not
+re-checked against the filesystem - already checked once at creation) so `BuildStagePrompt` can
+tell Research/Design exactly which files to read first, grouped by whether they're in the
+ticket's own project or one of the referenced ones. **Coding's own `RunStagePromptAsync` call
+always passes an empty `referencedProjects` list** (and neither file mentions nor referenced
+tickets' content are surfaced to it either) - its write scope stays exactly
+`project.RepositoryPath`, and it never even gets read access to a mentioned project, by design.
+If a stage decides a referenced project itself needs a
+change, it's told to never attempt that write itself - instead end its response with one or more
+`<instruction project="<id>">...</instruction>` blocks (mirroring the `<file path="...">`
+convention, safer for free text than a single colon-delimited marker), parsed by
+`ParseCrossProjectInstructions` (loops over every match, unlike the single-match
+`QUESTION:`/`DECISION:` parsers) right after the existing decision/question short-circuit check -
+**non-blocking**, it never calls `ticket.Block()` or gates a later stage, it just persists a
+`TicketProjectInstruction` per block via `ITicketProjectInstructionRepository`, surfaced read-only
+on the ticket detail page for a human to act on manually.
+
+**Every stage's prompt also offers an entirely optional `NOTES: <text>` marker - unlike
+`QUESTION:`/`DECISION:`/the cross-project `<instruction>` blocks above, every role gets this, not
+just Research/Design/Coding.** It's for a brief human-facing note - a summary of what the stage
+did, an assumption it made, a limitation, or a suggested follow-up - worth surfacing once the
+ticket reaches `Done`, where there's no more raw agent output left to dig through. `ParsePipelineNote`
+(a single-match parser, same shape as `ParseQuestion`/`ParseDecision`) runs right alongside the
+cross-project instruction parsing, after the decision/question short-circuit check - **non-blocking**,
+same as `TicketProjectInstruction`: it never calls `ticket.Block()` or gates a later stage, it just
+persists a `TicketPipelineNote` via `ITicketPipelineNoteRepository` when the marker is present
+(the common case is no marker at all - most stage runs have nothing worth flagging).
 
 **Resuming a blocked ticket reuses the review-feedback threading mechanism above, generalized.**
 `TicketQuestionService.AnswerAsync` (answering a clarifying question or a decision - both

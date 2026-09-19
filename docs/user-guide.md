@@ -188,8 +188,26 @@ chat, so nobody can approve or reject the same draft twice.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | Title | Text | Yes | Shown on the card and at the top of the ticket's detail page. |
-| Description | Text (multi-line) | No | The work to be done — what an assigned agent reads to know what to build. |
+| Description | Text (multi-line) | No | The work to be done — what an assigned agent reads to know what to build. Type `@` to reference a project, ticket, or file — pick a category, then a match, and it's inserted as a chip (e.g. `@ticket: Fix login bug`). |
 | Acceptance Criteria | Text (multi-line) | Yes | The condition(s) this ticket must satisfy to be considered done — the pipeline agents (especially Research and Design) use this to scope their work, and it's what the human approval gate ultimately checks against. Shown on the ticket detail page. |
+
+**Referencing a project, ticket, or file.** Typing `@` in the Description field opens a small
+menu with three choices — **Project**, **Ticket**, **File** — pick one, then keep typing to
+search; click a result or press Enter to insert it as a highlighted chip right in the text (shown
+as `@project: ...`, `@ticket: ...`, or `@file: ...`). Project and Ticket search across every
+project you have access to, not just this one. **File** search is scoped to this ticket's own
+project plus any project you've already `@project`-referenced earlier in the same description —
+reference the project first if you want to point at a file elsewhere.
+
+This helps the Research and Design agents ground their work: referencing a project (directly, or
+by referencing a ticket or file that belongs to it) gives those two stages read-only access to
+that project's repository too (Coding never does — it only ever writes to this ticket's own
+project). Referencing a **ticket** also hands Research and Design that ticket's own description
+and acceptance criteria directly, not just access to its project's code — useful for pointing an
+agent at a related piece of work without repeating its details yourself. If an agent decides a
+referenced project itself needs a change, it never makes that change automatically — instead it
+leaves a note under **Cross-Project Instructions** on the ticket's detail page for you to act on
+manually.
 
 ### Moving a ticket
 
@@ -283,6 +301,18 @@ on for every stage of every pipeline run, including a stage that paused the tick
 or hit an operational failure. It updates in real time while a pipeline run is in progress, so you
 can watch which stage is currently working instead of only seeing the outcome once the whole run
 finishes.
+
+**Cross-Project Instructions** — only shown when there's at least one. If a Research or Design
+agent decided a project you `@`-referenced in the Description needs a change of its own, it's
+listed here (which project, and what the agent found) instead of being changed automatically —
+nobody but a human makes that change, so treat this as a to-do list for follow-up work in that
+other project.
+
+**Pipeline Notes** — only shown once the ticket is **Done**, and only if any stage actually left
+a note. Any agent in the pipeline can end its work with a brief note for whoever reviews the
+ticket later — a summary of what it did, an assumption it made, a limitation, or a suggested
+follow-up — and this is where those notes surface, so you don't have to scroll back through the
+full Agent Log once there's a finished result to look at instead.
 
 **Cancel Ticket** — shown next to the status badge for any To Do, In Progress, For Review, or
 Blocked ticket (e.g. its goal no longer applies because a requirement changed). Asks for

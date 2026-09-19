@@ -1,0 +1,36 @@
+<div
+  class="list-group position-absolute shadow-sm"
+  style="z-index: 1060; max-height: 14rem; overflow-y: auto; min-width: 16rem"
+>
+  @if (category() === null) {
+    @for (cat of categories; track cat.type; let i = $index) {
+      <button
+        #itemEl
+        type="button"
+        class="list-group-item list-group-item-action d-flex align-items-center gap-2"
+        [class.active]="i === highlightedIndex()"
+        (mousedown)="$event.preventDefault(); selectCategory(cat.type)"
+      >
+        <i class="bi {{ cat.icon }}" aria-hidden="true"></i>
+        <span>{{ cat.label }}</span>
+      </button>
+    }
+  } @else if (loading()) {
+    <div class="list-group-item small text-body-secondary">Searching&hellip;</div>
+  } @else if (results().length === 0) {
+    <div class="list-group-item small text-body-secondary">No matching {{ category() }}s.</div>
+  } @else {
+    @for (item of results(); track item.type + item.id + (item.filePath ?? ''); let i = $index) {
+      <button
+        #itemEl
+        type="button"
+        class="list-group-item list-group-item-action d-flex align-items-center justify-content-between gap-2"
+        [class.active]="i === highlightedIndex()"
+        (mousedown)="$event.preventDefault(); selectItem(item)"
+      >
+        <span class="text-truncate">{{ item.label }}</span>
+        <span class="small text-body-secondary text-nowrap">{{ item.meta }}</span>
+      </button>
+    }
+  }
+</div>

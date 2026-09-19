@@ -1,0 +1,24 @@
+@if (visible()) {
+  <div class="card mb-3">
+    <div class="card-header">
+      <span aria-hidden="true">📝</span> Pipeline Notes
+    </div>
+    <div class="card-body">
+      <p class="small text-body-secondary">
+        Notes the agent pipeline left behind while working this ticket - summaries, assumptions,
+        or follow-ups worth knowing now that it's done.
+      </p>
+      <ul class="list-group list-group-flush">
+        @for (note of sortedNotes(); track note.id) {
+          <li class="list-group-item px-0">
+            <div class="d-flex align-items-center justify-content-between">
+              <span class="fw-semibold">{{ note.role ?? 'Agent' }}</span>
+              <span class="small text-body-secondary">{{ note.createdAtUtc | date: 'short' }}</span>
+            </div>
+            <p class="small mb-0 mt-1" style="white-space: pre-wrap">{{ note.text }}</p>
+          </li>
+        }
+      </ul>
+    </div>
+  </div>
+}

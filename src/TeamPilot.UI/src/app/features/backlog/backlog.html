@@ -29,7 +29,7 @@
             </div>
             @if (ticket.description) {
               <p class="small text-body-secondary mb-0 text-truncate" style="max-width: 40rem">
-                {{ ticket.description }}
+                <app-mention-text [text]="ticket.description"></app-mention-text>
               </p>
             }
           </div>
@@ -66,6 +66,8 @@
 <app-create-ticket-form
   [open]="formOpen()"
   [creating]="creatingTicket()"
+  [projectId]="projectId"
+  [projectName]="project()?.name ?? ''"
   (closed)="formOpen.set(false)"
   (created)="createTicket($event)"
 ></app-create-ticket-form>

@@ -7,10 +7,11 @@ import { TicketsService } from '../../core/services/tickets.service';
 import { CreateTicketRequest, ProjectDto, SprintDto, TicketDto } from '../../core/models';
 import { CreateTicketForm } from '../board/create-ticket-form/create-ticket-form';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
+import { MentionText } from '../../shared/components/mention-text/mention-text';
 
 @Component({
   selector: 'app-backlog',
-  imports: [RouterLink, CreateTicketForm, StatusBadge],
+  imports: [RouterLink, CreateTicketForm, StatusBadge, MentionText],
   templateUrl: './backlog.html',
 })
 export class Backlog {

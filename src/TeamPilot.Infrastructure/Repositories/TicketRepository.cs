@@ -93,4 +93,19 @@ public class TicketRepository(TeamPilotDbContext dbContext) : ITicketRepository
                 g => g.Key,
                 g => (IReadOnlyDictionary<TicketStatus, int>)g.ToDictionary(c => c.Status, c => c.Count));
     }
+
+    public async Task<IReadOnlyList<Ticket>> SearchAsync(string query, IReadOnlyCollection<Guid>? allowedProjectIds, int maxResults, CancellationToken cancellationToken = default)
+    {
+        var titleQuery = dbContext.Tickets.AsNoTracking().Where(t => EF.Functions.Like(t.Title, $"%{query}%"));
+
+        if (allowedProjectIds is not null)
+        {
+            titleQuery = titleQuery.Where(t => allowedProjectIds.Contains(t.ProjectId));
+        }
+
+        return await titleQuery.OrderBy(t => t.Title).Take(maxResults).ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Ticket>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken cancellationToken = default) =>
+        await dbContext.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id)).ToListAsync(cancellationToken);
 }

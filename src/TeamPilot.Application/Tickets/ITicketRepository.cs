@@ -69,4 +69,19 @@ public interface ITicketRepository
     /// </summary>
     Task<IReadOnlyDictionary<Guid, IReadOnlyDictionary<TicketStatus, int>>> GetStatusCountsBySprintAsync(
         IReadOnlyCollection<Guid> sprintIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lean, read-only, title-matching search for the "@" mention-autocomplete dropdown (see
+    /// <c>Mentions.IMentionSearchService</c>) - capped at <paramref name="maxResults"/>.
+    /// <paramref name="allowedProjectIds"/> restricts results to those projects;
+    /// <see langword="null"/> means unrestricted (an Admin caller).
+    /// </summary>
+    Task<IReadOnlyList<Ticket>> SearchAsync(string query, IReadOnlyCollection<Guid>? allowedProjectIds, int maxResults, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lean, read-only bulk lookup by id - used by <c>TicketService.ValidateMentionsAsync</c> and
+    /// <c>Orchestration.OrchestrationService</c> to resolve "@ticket" mentions parsed out of a
+    /// ticket's description.
+    /// </summary>
+    Task<IReadOnlyList<Ticket>> GetByIdsAsync(IReadOnlyCollection<Guid> ids, CancellationToken cancellationToken = default);
 }

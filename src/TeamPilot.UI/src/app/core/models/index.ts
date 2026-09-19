@@ -18,3 +18,5 @@ export * from './auth.model';
 export * from './live-agent-chat.model';
 export * from './project-event.model';
 export * from './dashboard.model';
+export * from './mention.model';
+export * from './ticket-pipeline-note.model';

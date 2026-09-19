@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using TeamPilot.Application.Mentions;
+using TeamPilot.Application.Mentions.Dtos;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
@@ -8,8 +10,24 @@ using TeamPilot.Domain.Enums;
 namespace TeamPilot.API.Controllers;
 
 [ApiController]
-public class TicketsController(ITicketService ticketService, IOrchestrationService orchestrationService, ITicketQuestionService ticketQuestionService) : ControllerBase
+public class TicketsController(
+    ITicketService ticketService,
+    IOrchestrationService orchestrationService,
+    ITicketQuestionService ticketQuestionService,
+    IMentionSearchService mentionSearchService) : ControllerBase
 {
+    /// <summary>
+    /// Backs the "@" mention-autocomplete dropdown a user gets while writing a ticket's
+    /// description - searches by title across every project the caller has access to, capped and
+    /// short-query-filtered by <see cref="IMentionSearchService"/> itself.
+    /// </summary>
+    [HttpGet("api/tickets/search")]
+    public async Task<ActionResult<IReadOnlyList<TicketMentionResultDto>>> Search([FromQuery] string query, CancellationToken cancellationToken)
+    {
+        var results = await mentionSearchService.SearchTicketsAsync(query, cancellationToken);
+        return Ok(results);
+    }
+
     [HttpPost("api/sprints/{sprintId:guid}/tickets")]
     public async Task<ActionResult<TicketDto>> Create(Guid sprintId, [FromBody] CreateTicketRequest request, CancellationToken cancellationToken)
     {

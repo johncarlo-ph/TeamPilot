@@ -1,6 +1,7 @@
 using System.Text.Json;
 using TeamPilot.Application.Common.Exceptions;
 using TeamPilot.Application.Llm;
+using TeamPilot.Domain.Entities;
 
 namespace TeamPilot.Application.Git;
 
@@ -31,6 +32,52 @@ public static class GitReadOnlyTools
             "Only read files that are directly relevant to your current task.",
             """{"type":"object","properties":{"path":{"type":"string","description":"Relative file path within the repository to read."}},"required":["path"]}"""),
     ];
+
+    /// <summary>
+    /// Same two tool definitions as <see cref="Definitions"/>, but when a stage also has
+    /// read-only access to other projects (see <see cref="TeamPilot.Application.Orchestration.OrchestrationService"/>'s
+    /// cross-project mention grant), both schemas gain an optional <c>"project"</c> input naming
+    /// which repository to read from. Used only by callers with more than one accessible
+    /// project - a caller with just its own (every other caller, including the Live Agent chat)
+    /// keeps using the plain <see cref="Definitions"/> with the original single-repo schema.
+    /// </summary>
+    public static IReadOnlyList<LlmToolDefinition> BuildDefinitions(IReadOnlyCollection<string> additionalProjectNames)
+    {
+        if (additionalProjectNames.Count == 0)
+        {
+            return Definitions;
+        }
+
+        var projectNamesList = string.Join(", ", additionalProjectNames);
+        var projectPropertyDescription = $"Optional. Which project's repository to read from - one of {projectNamesList}. Omit to read from this ticket's own project.";
+
+        var listFilesSchema = JsonSerializer.Serialize(new
+        {
+            type = "object",
+            properties = new
+            {
+                path = new { type = "string", description = "Relative directory path within the repository. Omit or leave empty to list the whole repository." },
+                project = new { type = "string", description = projectPropertyDescription },
+            },
+        });
+
+        var readFileSchema = JsonSerializer.Serialize(new
+        {
+            type = "object",
+            properties = new
+            {
+                path = new { type = "string", description = "Relative file path within the repository to read." },
+                project = new { type = "string", description = projectPropertyDescription },
+            },
+            required = new[] { "path" },
+        });
+
+        return
+        [
+            new LlmToolDefinition("list_files", Definitions[0].Description, listFilesSchema),
+            new LlmToolDefinition("read_file", Definitions[1].Description, readFileSchema),
+        ];
+    }
 
     /// <summary>
     /// Dispatches <paramref name="toolUse"/> if it names <c>list_files</c> or <c>read_file</c>,
@@ -97,6 +144,66 @@ public static class GitReadOnlyTools
             {
                 return (ex.Message, true);
             }
+        }
+    }
+
+    /// <summary>
+    /// Multi-repo variant of <see cref="TryExecuteAsync(IGitService, string, string?, LlmToolUseBlock, CancellationToken)"/>
+    /// for a stage that also has read-only access to projects referenced by the ticket's
+    /// description mentions (see <see cref="TeamPilot.Application.Orchestration.OrchestrationService"/>).
+    /// Reads the tool input's optional <c>"project"</c> argument (see <see cref="BuildDefinitions"/>)
+    /// and resolves it case-insensitively against <paramref name="allowedProjectsByName"/> (which
+    /// includes <paramref name="primaryProject"/> itself, under its own name); an unresolvable
+    /// name returns a clear error listing the valid ones instead of silently falling back.
+    /// Omitting <c>"project"</c> resolves to <paramref name="primaryProject"/>, exactly like the
+    /// single-repo overload. Only the primary project's reads use <paramref name="branchName"/>
+    /// (the ticket's own branch) - a referenced project has no "ticket branch" of its own, so its
+    /// reads pass <see langword="null"/> (whatever's currently checked out / the repo's default).
+    /// </summary>
+    public static async Task<(string ResultText, bool IsError)?> TryExecuteAsync(
+        IGitService gitService,
+        Project primaryProject,
+        IReadOnlyDictionary<string, Project> allowedProjectsByName,
+        string? branchName,
+        LlmToolUseBlock toolUse,
+        CancellationToken cancellationToken)
+    {
+        if (toolUse.Name is not ("list_files" or "read_file"))
+        {
+            return null;
+        }
+
+        var requestedProjectName = TryGetProjectArgument(toolUse);
+        if (requestedProjectName is null)
+        {
+            return await TryExecuteAsync(gitService, primaryProject.RepositoryPath, branchName, toolUse, cancellationToken);
+        }
+
+        if (!allowedProjectsByName.TryGetValue(requestedProjectName, out var resolvedProject))
+        {
+            var validNames = string.Join(", ", allowedProjectsByName.Keys.Select(n => $"\"{n}\""));
+            return ($"Unknown project '{requestedProjectName}'. Valid projects: {validNames}.", true);
+        }
+
+        var resolvedBranchName = resolvedProject.Id == primaryProject.Id ? branchName : null;
+        return await TryExecuteAsync(gitService, resolvedProject.RepositoryPath, resolvedBranchName, toolUse, cancellationToken);
+    }
+
+    private static string? TryGetProjectArgument(LlmToolUseBlock toolUse)
+    {
+        if (string.IsNullOrWhiteSpace(toolUse.InputJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var input = JsonDocument.Parse(toolUse.InputJson);
+            return TryGetString(input, "project");
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

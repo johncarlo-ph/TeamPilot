@@ -20,7 +20,11 @@ public class TeamPilotDbContext(DbContextOptions<TeamPilotDbContext> options) : 
 
     public DbSet<TicketQuestion> TicketQuestions => Set<TicketQuestion>();
 
+    public DbSet<TicketProjectInstruction> TicketProjectInstructions => Set<TicketProjectInstruction>();
+
     public DbSet<TicketAgentEvent> TicketAgentEvents => Set<TicketAgentEvent>();
+
+    public DbSet<TicketPipelineNote> TicketPipelineNotes => Set<TicketPipelineNote>();
 
     public DbSet<Instruction> Instructions => Set<Instruction>();
 

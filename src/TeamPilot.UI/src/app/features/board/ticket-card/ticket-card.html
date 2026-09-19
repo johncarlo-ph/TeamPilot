@@ -15,15 +15,5 @@
     <p class="small text-body-tertiary mb-0">
       Updated {{ ticket().updatedAtUtc || ticket().createdAtUtc | date: 'short' }}
     </p>
-    @if (ticket().status === 'ToDo') {
-      <button
-        type="button"
-        class="btn btn-outline-secondary btn-sm position-relative mt-1"
-        title="Move back to the project's backlog"
-        (click)="movedToBacklog.emit()"
-      >
-        Move to Backlog
-      </button>
-    }
   </div>
 </div>

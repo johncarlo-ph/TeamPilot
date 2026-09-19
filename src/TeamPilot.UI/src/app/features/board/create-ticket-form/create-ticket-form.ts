@@ -1,11 +1,12 @@
 import { Component, effect, inject, input, output } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { Modal } from '../../../shared/components/modal/modal';
+import { MentionEditor } from '../../../shared/components/mention-editor/mention-editor';
 import { CreateTicketRequest } from '../../../core/models';
 
 @Component({
   selector: 'app-create-ticket-form',
-  imports: [ReactiveFormsModule, Modal],
+  imports: [ReactiveFormsModule, Modal, MentionEditor],
   templateUrl: './create-ticket-form.html',
 })
 export class CreateTicketForm {
@@ -13,6 +14,8 @@ export class CreateTicketForm {
 
   readonly open = input(false);
   readonly creating = input(false);
+  readonly projectId = input.required<string>();
+  readonly projectName = input.required<string>();
   readonly closed = output<void>();
   readonly created = output<CreateTicketRequest>();
 

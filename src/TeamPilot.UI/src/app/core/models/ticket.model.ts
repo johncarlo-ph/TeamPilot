@@ -2,6 +2,8 @@ import { AgentRole, TicketStatus } from './enums';
 import { CommitDto } from './commit.model';
 import { ReviewDto } from './review.model';
 import { ConflictDto } from './conflict.model';
+import { TicketProjectInstructionDto } from './mention.model';
+import { TicketPipelineNoteDto } from './ticket-pipeline-note.model';
 
 export interface TicketDto {
   id: string;
@@ -42,6 +44,8 @@ export interface TicketDetailDto {
   commits: CommitDto[];
   reviews: ReviewDto[];
   conflicts: ConflictDto[];
+  instructions: TicketProjectInstructionDto[];
+  pipelineNotes: TicketPipelineNoteDto[];
   createdAtUtc: string;
   updatedAtUtc: string | null;
   pipelineRunning: boolean;

@@ -9,12 +9,13 @@
     </div>
     <div class="mb-3">
       <label for="ticket-description" class="form-label">Description</label>
-      <textarea
+      <app-mention-editor
         id="ticket-description"
-        class="form-control"
-        rows="4"
         formControlName="description"
-      ></textarea>
+        [projectId]="projectId()"
+        [projectName]="projectName()"
+      ></app-mention-editor>
+      <div class="form-text">Type @ to reference another ticket or project.</div>
     </div>
     <div class="mb-3">
       <label for="ticket-acceptance-criteria" class="form-label">Acceptance Criteria</label>

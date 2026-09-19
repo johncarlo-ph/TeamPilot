@@ -3,63 +3,76 @@
 } @else if (ticket(); as ticket) {
   <a [routerLink]="backLink()" class="small text-decoration-none"> &larr; {{ backLabel() }} </a>
 
-  <div class="row g-3 p-3">
-    <div class="mb-1">
-      <app-status-badge [value]="ticket.status"></app-status-badge>
+  <div class="d-flex align-items-start justify-content-between gap-2 p-3 pb-0">
+    <div>
+      <div class="mb-1">
+        <app-status-badge [value]="ticket.status"></app-status-badge>
+      </div>
+      <h1 class="h3 mb-1">{{ ticket.title }}</h1>
     </div>
-    <h1 class="h3 mb-1">{{ ticket.title }}</h1>
+    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+      @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
+        @if (ticket.pipelineRunning) {
+          <span class="small text-body-secondary fst-italic">Pipeline running&hellip;</span>
+        } @else {
+          <button
+            type="button"
+            class="btn btn-sm btn-primary"
+            [disabled]="starting()"
+            (click)="startPipeline()"
+          >
+            {{ starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline' }}
+          </button>
+        }
+      }
+      @if (
+        ticket.status === 'ToDo' ||
+        ticket.status === 'InProgress' ||
+        ticket.status === 'ForReview' ||
+        ticket.status === 'Blocked'
+      ) {
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-danger"
+          [disabled]="cancelling()"
+          (click)="cancelTicket()"
+        >
+          {{ cancelling() ? 'Cancelling...' : 'Cancel Ticket' }}
+        </button>
+      }
+      @if (ticket.status === 'ToDo') {
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-secondary"
+          [disabled]="movingToBacklog()"
+          (click)="moveToBacklog()"
+        >
+          {{ movingToBacklog() ? 'Moving...' : 'Move to Backlog' }}
+        </button>
+      }
+    </div>
+  </div>
+
+  <div class="row g-3 p-3">
     <div class="col-12 col-lg-6">
       <div class="small fw-semibold">Description</div>
-      <div class="d-flex align-items-start justify-content-between">
-        <div>
-          <p class="ticket-description text-body-secondary mb-0">
-            {{ descriptionPreview() || 'No description.' }}
-          </p>
-          @if (isDescriptionLong()) {
-            <button type="button" class="btn btn-link btn-sm ps-0" (click)="toggleDescription()">
-              {{ descriptionExpanded() ? 'See less' : 'See more' }}
-            </button>
-          }
-          @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
-            <p class="small text-body-secondary fst-italic mb-0 mt-1">
-              Reason: {{ ticket.cancellationReason }}
-            </p>
-          }
-        </div>
-        <div class="d-flex align-items-center gap-2">
-          @if (ticket.status === 'ToDo' || ticket.status === 'InProgress') {
-            @if (ticket.pipelineRunning) {
-              <span class="small text-body-secondary fst-italic">Pipeline running&hellip;</span>
-            } @else {
-              <button
-                type="button"
-                class="btn btn-sm btn-primary"
-                [disabled]="starting()"
-                (click)="startPipeline()"
-              >
-                {{
-                  starting() ? 'Running...' : ticket.status === 'ToDo' ? 'Start' : 'Run Pipeline'
-                }}
-              </button>
-            }
-          }
-          @if (
-            ticket.status === 'ToDo' ||
-            ticket.status === 'InProgress' ||
-            ticket.status === 'ForReview' ||
-            ticket.status === 'Blocked'
-          ) {
-            <button
-              type="button"
-              class="btn btn-sm btn-outline-danger"
-              [disabled]="cancelling()"
-              (click)="cancelTicket()"
-            >
-              {{ cancelling() ? 'Cancelling...' : 'Cancel Ticket' }}
-            </button>
-          }
-        </div>
-      </div>
+      <p class="ticket-description text-body-secondary mb-0">
+        @if (descriptionPreview()) {
+          <app-mention-text [text]="descriptionPreview()"></app-mention-text>
+        } @else {
+          No description.
+        }
+      </p>
+      @if (isDescriptionLong()) {
+        <button type="button" class="btn btn-link btn-sm ps-0" (click)="toggleDescription()">
+          {{ descriptionExpanded() ? 'See less' : 'See more' }}
+        </button>
+      }
+      @if (ticket.status === 'Cancelled' && ticket.cancellationReason) {
+        <p class="small text-body-secondary fst-italic mb-0 mt-1">
+          Reason: {{ ticket.cancellationReason }}
+        </p>
+      }
     </div>
 
     <div class="col-12 col-lg-6">
@@ -117,6 +130,15 @@
       ></app-ticket-question-panel>
 
       <app-agent-event-log-panel [events]="agentEvents()"></app-agent-event-log-panel>
+
+      <app-cross-project-instructions-panel
+        [instructions]="ticket.instructions"
+      ></app-cross-project-instructions-panel>
+
+      <app-pipeline-notes-panel
+        [notes]="ticket.pipelineNotes"
+        [status]="ticket.status"
+      ></app-pipeline-notes-panel>
     </div>
 
     <div class="col-12 col-lg-7">

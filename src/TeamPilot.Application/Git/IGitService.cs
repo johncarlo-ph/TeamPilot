@@ -103,6 +103,26 @@ public interface IGitService
     Task<IReadOnlyList<string>> ListFilesAsync(string repositoryPath, string? relativePath, string? branchName = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Read-only, recursive, path-substring search across the whole repository (same ignored
+    /// directories as <see cref="ListFilesAsync"/>), returning up to <paramref name="maxResults"/>
+    /// matching relative paths - backs the "@"-mention autocomplete's File-category search (see
+    /// <c>Mentions.IMentionSearchService</c>), not the pipeline's browsing tool. When
+    /// <paramref name="branchName"/> is given, that branch is checked out first; a ticket has no
+    /// branch yet at creation time, so this is typically called with <see langword="null"/> (the
+    /// project's default checked-out branch).
+    /// </summary>
+    Task<IReadOnlyList<string>> SearchFilesAsync(string repositoryPath, string query, string? branchName, int maxResults, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only existence check for one file, backing the "@"-mention validation a file mention
+    /// gets at ticket creation (see <c>TicketService.ValidateMentionsAsync</c>) - unlike
+    /// <see cref="ReadFileAsync"/> this never reads or redacts content, just resolves the
+    /// sandboxed path and checks it. Rejects (via <see cref="GitOperationException"/>) a path that
+    /// would resolve outside the repository's working directory, same as every other read here.
+    /// </summary>
+    Task<bool> FileExistsAsync(string repositoryPath, string relativeFilePath, string? branchName, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Read-only read of one file's text content from the repository's working directory, backing
     /// the Live Agent chat's and the Research/Design/Coding pipeline stages' file-reading tool (see
     /// <see cref="TeamPilot.Application.Git.GitReadOnlyTools"/>). Refuses well-known secret-bearing

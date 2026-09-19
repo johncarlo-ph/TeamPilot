@@ -1,0 +1,9 @@
+<span>
+  @for (segment of segments(); track $index) {
+    @if (segment.type === 'mention') {
+      <span class="badge rounded-pill text-bg-secondary">{{ displayLabel(segment.mentionType!, segment.text) }}</span>
+    } @else {
+      {{ segment.text }}
+    }
+  }
+</span>

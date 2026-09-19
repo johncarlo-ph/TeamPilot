@@ -136,6 +136,52 @@ real, reproduced incident where a Research-stage tool-use loop burned most of it
 navigating six directory levels one `list_files` call at a time before ever reading a file,
 exhausting the loop before it could produce an answer.
 
+**`GitReadOnlyTools` (Application layer) gained an additive multi-repo overload, not a breaking
+signature change.** Research/Design stages can now get read-only access to a project a ticket's
+description "@"-mentions, in addition to their own project (see
+[docs/application.md](application.md#architectural-decisions)) - but `LiveAgentChatService` calls
+the original single-repo `Definitions`/`TryExecuteAsync` directly and had to keep compiling
+unchanged. So the multi-repo case is a *new* `BuildDefinitions(additionalProjectNames)` (adds an
+optional `"project"` schema property only when that list is non-empty) and a *new*
+`TryExecuteAsync` overload (takes the primary `Project` plus a name-keyed
+`IReadOnlyDictionary<string, Project>` of every accessible project, resolves an optional
+`"project"` tool argument against it, and delegates to the original single-repo method with that
+project's `RepositoryPath`) - the original two members are untouched. A referenced project's
+reads pass `branchName: null` (it has no "ticket branch" of its own), unlike the primary
+project's reads which still use the ticket's branch.
+
+**`TicketProjectInstruction`'s EF configuration and repository mirror `TicketQuestion`'s
+exactly** (`TicketProjectInstructionConfiguration`, migration `AddTicketProjectInstructions`) -
+`Cascade` on the FK to `Ticket` (its history goes with the ticket), `Restrict` on the FKs to the
+referenced `Project` and the (nullable) `Agent` (both are only ever deactivated/removed-flagged,
+never deleted, once they have real history), and an index on `(TicketId, CreatedAtUtc)` for the
+ticket detail page's read. `TicketRepository`/`ProjectRepository` also each gained a lean
+`SearchAsync`/`GetByIdsAsync` pair (`AsNoTracking`, `EF.Functions.Like` on `Title`/`Name`, capped
+`Take(maxResults)`) backing the "@" mention-autocomplete dropdown and its creation-time
+validation - `allowedProjectIds: null` means unrestricted (an Admin caller), resolved one layer up
+in `Mentions.MentionSearchService` rather than either repository knowing about roles.
+
+**`TicketPipelineNote`'s EF configuration and repository mirror `TicketProjectInstruction`'s
+just as closely** (`TicketPipelineNoteConfiguration`, migration `AddTicketPipelineNotes`) -
+`Cascade` on the FK to `Ticket`, `Restrict` on the (nullable) FK to `Agent`, and the same
+`(TicketId, CreatedAtUtc)` index for the ticket detail page's read - simpler than
+`TicketProjectInstruction` only in that there's no second FK to a referenced `Project`, since a
+pipeline note is about the ticket itself, not another project.
+
+**`IGitService` gained two new read-only members for the File-category "@"-mention, both scoped
+to one repository at a time (no multi-repo concept, unlike `GitReadOnlyTools`).**
+`SearchFilesAsync(repositoryPath, query, branchName, maxResults)` does a bounded recursive,
+case-insensitive path-substring walk (same ignored directories as `ListFilesAsync` - `.git`,
+`node_modules`, `bin`, `obj`, `dist`, `.angular`), capped at `MaxSearchFilesWalked` (5,000) files
+*examined* independent of how many actually match, so a huge repository can't turn every
+autocomplete keystroke into a full-tree walk - at the cost of a very deep match potentially not
+surfacing for an early-alphabetical query. `FileExistsAsync(repositoryPath, relativeFilePath,
+branchName)` is the lean existence check `TicketService.ValidateMentionsAsync` uses at ticket
+creation - same sandboxed-path resolution and blocked-path denylist as `ReadFileAsync`, but never
+reads or redacts content. Both are typically called with `branchName: null` from mention search/
+validation, since a ticket has no branch yet at creation time - they read whatever's currently
+checked out (the project's default branch).
+
 **`CommitFilesAsync` refuses to write to Git-internal or CI-workflow paths, independent of the
 sandbox-escape check.** The Coding stage's file blocks are raw LLM output (see
 [docs/application.md](application.md#workflow-integration)'s `BuildStagePrompt`/`ParseFileChanges`

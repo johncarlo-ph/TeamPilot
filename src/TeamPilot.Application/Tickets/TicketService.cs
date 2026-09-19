@@ -7,7 +7,10 @@ using TeamPilot.Application.Common.Interfaces;
 using TeamPilot.Application.Git;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Sprints;
+using TeamPilot.Application.TicketPipelineNotes;
+using TeamPilot.Application.TicketProjectInstructions;
 using TeamPilot.Application.Tickets.Dtos;
+using TeamPilot.Application.Tickets.Mentions;
 using TeamPilot.Domain.Entities;
 using TeamPilot.Domain.Enums;
 
@@ -24,6 +27,8 @@ public sealed class TicketService(
     IUnitOfWork unitOfWork,
     IPipelineRunTracker pipelineRunTracker,
     IProjectEventBroadcaster eventBroadcaster,
+    ITicketProjectInstructionRepository ticketProjectInstructionRepository,
+    ITicketPipelineNoteRepository ticketPipelineNoteRepository,
     IValidator<CreateTicketRequest> createValidator,
     IValidator<CreateBranchRequest> createBranchValidator,
     IValidator<CancelTicketRequest> cancelValidator,
@@ -32,6 +37,88 @@ public sealed class TicketService(
     private void PublishTicketChanged(Ticket ticket) =>
         eventBroadcaster.Publish(ticket.ProjectId, new ProjectEvent(ProjectEventTypes.TicketChanged, ticket.ProjectId, ticket.Id, DateTime.UtcNow));
 
+    /// <summary>
+    /// Every "@"-mention parsed out of a submitted description (see <see cref="MentionParser"/>) -
+    /// Project, Ticket, or File category - must point at something that actually exists and that
+    /// the creating user can actually reach - otherwise the Research/Design stages would later be
+    /// asked to ground themselves in a reference nobody can resolve, or a project the user has no
+    /// business pointing agents at. A File mention's project (see <see cref="Mention.Id"/> for
+    /// <see cref="MentionType.File"/>) is checked the exact same way a direct Project mention is,
+    /// PLUS two File-specific rules: a cross-project file (one whose project isn't
+    /// <paramref name="ownProjectId"/>) is rejected (<see cref="FileMentionProjectNotReferencedException"/>)
+    /// unless that same project is also directly Project-mentioned somewhere in the description -
+    /// matching what actually grants Research/Design read access to it (see
+    /// <c>Orchestration.OrchestrationService.ResolveReferencedProjectsAsync</c>) - and the file
+    /// path itself IS checked against that project's live repository (unlike a ticket/project
+    /// mention, which points at a stable database row, a path can trivially be stale or mistyped),
+    /// which requires the project to be <see cref="ProjectStatus.Ready"/>. Reuses existing
+    /// exception types (<see cref="NotFoundException"/>, and <see cref="IProjectAccessGuard"/>'s
+    /// <see cref="ForbiddenException"/>) where it can, rather than inventing new ones.
+    /// </summary>
+    private async Task ValidateMentionsAsync(string? description, Guid ownProjectId, CancellationToken cancellationToken)
+    {
+        var mentions = MentionParser.Parse(description);
+        if (mentions.Count == 0)
+        {
+            return;
+        }
+
+        var ticketIds = mentions.Where(m => m.Type == MentionType.Ticket).Select(m => m.Id).Distinct().ToList();
+        var projectIds = mentions.Where(m => m.Type is MentionType.Project or MentionType.File).Select(m => m.Id).Distinct().ToList();
+
+        var foundTickets = ticketIds.Count > 0
+            ? await ticketRepository.GetByIdsAsync(ticketIds, cancellationToken)
+            : [];
+
+        var missingTicketIds = ticketIds.Except(foundTickets.Select(t => t.Id)).ToList();
+        if (missingTicketIds.Count > 0)
+        {
+            throw new NotFoundException(nameof(Ticket), missingTicketIds[0]);
+        }
+
+        var foundProjects = projectIds.Count > 0
+            ? await projectRepository.GetByIdsAsync(projectIds, cancellationToken)
+            : [];
+        var foundProjectsById = foundProjects.ToDictionary(p => p.Id);
+
+        var missingProjectIds = projectIds.Except(foundProjectsById.Keys).ToList();
+        if (missingProjectIds.Count > 0)
+        {
+            throw new NotFoundException(nameof(Project), missingProjectIds[0]);
+        }
+
+        var accessibleProjectIds = foundTickets.Select(t => t.ProjectId)
+            .Concat(foundProjects.Select(p => p.Id))
+            .Distinct();
+
+        foreach (var projectId in accessibleProjectIds)
+        {
+            await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
+        }
+
+        var directlyMentionedProjectIds = mentions.Where(m => m.Type == MentionType.Project).Select(m => m.Id).ToHashSet();
+
+        foreach (var fileMention in mentions.Where(m => m.Type == MentionType.File))
+        {
+            var fileProject = foundProjectsById[fileMention.Id];
+
+            if (fileMention.Id != ownProjectId && !directlyMentionedProjectIds.Contains(fileMention.Id))
+            {
+                throw new FileMentionProjectNotReferencedException(fileProject.Name, fileMention.FilePath!);
+            }
+
+            if (fileProject.Status != ProjectStatus.Ready)
+            {
+                throw new ProjectNotReadyException(fileProject.Name);
+            }
+
+            if (!await gitService.FileExistsAsync(fileProject.RepositoryPath, fileMention.FilePath!, branchName: null, cancellationToken))
+            {
+                throw new NotFoundException("File", fileMention.FilePath!);
+            }
+        }
+    }
+
     public async Task<TicketDto> CreateAsync(Guid sprintId, CreateTicketRequest request, CancellationToken cancellationToken = default)
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
@@ -39,6 +126,7 @@ public sealed class TicketService(
         var sprint = await sprintRepository.GetByIdAsync(sprintId, cancellationToken)
             ?? throw new NotFoundException(nameof(Sprint), sprintId);
 
+        await ValidateMentionsAsync(request.Description, sprint.ProjectId, cancellationToken);
         await projectAccessGuard.EnsureAccessAsync(sprint.ProjectId, cancellationToken);
 
         var project = await projectRepository.GetByIdAsync(sprint.ProjectId, cancellationToken)
@@ -69,6 +157,7 @@ public sealed class TicketService(
     public async Task<TicketDto> CreateBacklogAsync(Guid projectId, CreateTicketRequest request, CancellationToken cancellationToken = default)
     {
         await createValidator.EnsureValidAsync(request, cancellationToken);
+        await ValidateMentionsAsync(request.Description, projectId, cancellationToken);
         await projectAccessGuard.EnsureAccessAsync(projectId, cancellationToken);
 
         var project = await projectRepository.GetByIdAsync(projectId, cancellationToken)
@@ -96,7 +185,10 @@ public sealed class TicketService(
 
         await projectAccessGuard.EnsureAccessAsync(ticket.ProjectId, cancellationToken);
 
-        return TicketMappings.ToDetailDto(ticket, pipelineRunTracker.IsRunning(ticket.Id));
+        var instructions = await ticketProjectInstructionRepository.ListByTicketAsync(id, cancellationToken);
+        var pipelineNotes = await ticketPipelineNoteRepository.ListByTicketAsync(id, cancellationToken);
+
+        return TicketMappings.ToDetailDto(ticket, instructions, pipelineNotes, pipelineRunTracker.IsRunning(ticket.Id));
     }
 
     public async Task<IReadOnlyList<TicketDto>> ListAsync(Guid sprintId, TicketStatus? status, CancellationToken cancellationToken = default)

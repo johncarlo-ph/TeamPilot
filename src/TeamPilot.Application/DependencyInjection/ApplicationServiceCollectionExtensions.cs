@@ -10,6 +10,7 @@ using TeamPilot.Application.Dashboard;
 using TeamPilot.Application.Instructions;
 using TeamPilot.Application.InstructionTemplates;
 using TeamPilot.Application.LiveAgentChat;
+using TeamPilot.Application.Mentions;
 using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Sprints;
@@ -47,6 +48,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IConflictResolutionService, ConflictResolutionService>();
         services.AddScoped<IWorkflowService, WorkflowService>();
         services.AddScoped<IDashboardService, DashboardService>();
+        services.AddScoped<IMentionSearchService, MentionSearchService>();
 
         return services;
     }

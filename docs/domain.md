@@ -112,6 +112,26 @@ the review's comments as the reason) rather than introducing a separate status -
 [docs/application.md](application.md) for how `ApprovalGateService` combines it with an
 automatic branch delete.
 
+**`TicketProjectInstruction` follows the `TicketQuestion`/`StageExecution` "reference by id
+only" pattern too, for the same reason - a ticket can accumulate an unbounded number of these
+over its lifetime, so it's queried standalone through `ITicketProjectInstructionRepository`
+rather than an eagerly-loaded `Ticket` collection.** Unlike `TicketQuestion`, it's a flat,
+immutable record with no `Status`/lifecycle - it's raised by a Research or Design pipeline
+stage when the ticket's description "@"-mentions another ticket or project (see
+`MentionParser` in [docs/application.md](application.md)) and the stage decides that OTHER
+project itself needs a change. It's deliberately never an automated cross-repo write - only a
+human-readable note surfaced read-only on the ticket detail page - so it has no `Answer`/retry
+mechanism the way a blocking `TicketQuestion` does.
+
+**`TicketPipelineNote` follows the exact same "reference by id only, flat and immutable" pattern
+as `TicketProjectInstruction`, for the same reason.** It's a non-blocking, human-facing note any
+pipeline stage - any role, not just Research/Design - chose to leave behind via the optional
+`NOTES: ...` marker every stage's prompt offers (see `OrchestrationService.BuildStagePrompt` in
+[docs/application.md](application.md)): a brief summary of what it did, an assumption it made, a
+limitation, or a suggested follow-up. It never gates the run, and is surfaced read-only on the
+ticket detail page - most usefully once the ticket reaches `Done`, where there's no more raw
+agent output left to dig through.
+
 **Dependencies:** none (this is the point).
 
 ## Entities at a glance
@@ -127,6 +147,8 @@ automatic branch delete.
 | `StageExecution` | An immutable record of one agent's output for one ticket, one per stage invocation - references its `Ticket` and `Agent` by id only | *(created only via `StageExecution.Create`)* |
 | `TicketQuestion` | A record of why a ticket was blocked - a clarifying question, a proceed-or-cancel decision point, or a Git/LLM failure - references its `Ticket` and (nullable) `Agent` by id only | `CreateQuestion`, `CreateDecision`, `CreateFailure`, `Answer`, `MarkConsumed` |
 | `TicketAgentEvent` | A per-ticket agent lifecycle event (`Started`/`Completed`/`Blocked`/`Failed`) for the ticket detail page's live agent log - references its `Ticket` and (nullable) `Agent` by id only | `CreateStarted`, `CreateCompleted`, `CreateBlocked`, `CreateFailed` |
+| `TicketProjectInstruction` | A non-blocking "this referenced project needs a change" note a Research/Design stage raised about a project "@"-mentioned in the ticket's description - references its `Ticket`, the referenced `Project`, and (nullable) `Agent` by id only | *(created only via `TicketProjectInstruction.Create`)* |
+| `TicketPipelineNote` | A non-blocking human-facing note (summary/assumption/limitation/follow-up) any pipeline stage left via its optional `NOTES:` marker - references its `Ticket` and (nullable) `Agent` by id only | *(created only via `TicketPipelineNote.Create`)* |
 | `Conversation` | One chat session with a project's `LiveAgent` - a project can have any number | `Create`, `Rename`, `AddMessage` |
 | `ChatMessage` | One turn (user or assistant) in a `Conversation`, optionally carrying a drafted ticket pending approval | *(created only via `Conversation.AddMessage`)*, `MarkTicketCreated`, `RejectTicket` |
 | `InstructionTemplate` | A reusable, admin-managed instruction an admin can pick from when editing a real agent's instructions | `Create`, `Update` |

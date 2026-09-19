@@ -13,6 +13,21 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
 {
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
+        // The client navigated away, disconnected, or (e.g. a debounced typeahead search like
+        // the "@"-mention autocomplete) superseded this request with a newer one before it
+        // finished - HttpContext.RequestAborted firing mid-request is the expected, non-
+        // exceptional way that ends, the same as ProjectEventsController's SSE stream already
+        // treats it. The underlying exception's *type* varies by what was in flight when the
+        // cancellation landed (a raw OperationCanceledException, or - for an in-flight EF Core
+        // query - Microsoft.Data.SqlClient wrapping it as a SqlException instead of translating
+        // it cleanly), so this checks the token rather than pattern-matching exception types.
+        // There's no client left to write a response to either way.
+        if (httpContext.RequestAborted.IsCancellationRequested)
+        {
+            logger.LogDebug(exception, "Request cancelled by the client for {Method} {Path}", httpContext.Request.Method, httpContext.Request.Path);
+            return true;
+        }
+
         var (statusCode, title) = exception switch
         {
             ValidationException => (StatusCodes.Status400BadRequest, "Validation failed"),
@@ -26,6 +41,7 @@ public class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IE
             UnresolvedConflictsException => (StatusCodes.Status409Conflict, "Unresolved conflicts"),
             StaleConflictResolutionException => (StatusCodes.Status409Conflict, "Stale conflict resolutions"),
             ProjectNotReadyException => (StatusCodes.Status409Conflict, "Project not ready"),
+            FileMentionProjectNotReferencedException => (StatusCodes.Status409Conflict, "Referenced project not mentioned"),
             ProjectHasActiveTicketsException => (StatusCodes.Status409Conflict, "Project has active tickets"),
             SprintHasActiveTicketsException => (StatusCodes.Status409Conflict, "Sprint has active tickets"),
             TicketNotAssignedToSprintException => (StatusCodes.Status409Conflict, "Ticket not assigned to a sprint"),

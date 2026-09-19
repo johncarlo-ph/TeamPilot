@@ -705,6 +705,74 @@ namespace TeamPilot.Infrastructure.Migrations
                     b.ToTable("TicketAgentEvents", (string)null);
                 });
 
+            modelBuilder.Entity("TeamPilot.Domain.Entities.TicketPipelineNote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("AgentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int?>("Role")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("TicketId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId");
+
+                    b.HasIndex("TicketId", "CreatedAtUtc");
+
+                    b.ToTable("TicketPipelineNotes", (string)null);
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.TicketProjectInstruction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("AgentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ReferencedProjectId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid>("TicketId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentId");
+
+                    b.HasIndex("ReferencedProjectId");
+
+                    b.HasIndex("TicketId", "CreatedAtUtc");
+
+                    b.ToTable("TicketProjectInstructions", (string)null);
+                });
+
             modelBuilder.Entity("TeamPilot.Domain.Entities.TicketQuestion", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1020,6 +1088,40 @@ namespace TeamPilot.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("AgentId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.TicketPipelineNote", b =>
+                {
+                    b.HasOne("TeamPilot.Domain.Entities.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TeamPilot.Domain.Entities.TicketProjectInstruction", b =>
+                {
+                    b.HasOne("TeamPilot.Domain.Entities.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TeamPilot.Domain.Entities.Project", null)
+                        .WithMany()
+                        .HasForeignKey("ReferencedProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.HasOne("TeamPilot.Domain.Entities.Ticket", null)
                         .WithMany()

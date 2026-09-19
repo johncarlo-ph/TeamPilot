@@ -31,11 +31,14 @@ import {
 } from '../../core/models';
 import { StatusBadge } from '../../shared/components/status-badge/status-badge';
 import { CommitDiffViewer } from '../../shared/components/commit-diff-viewer/commit-diff-viewer';
+import { MentionText } from '../../shared/components/mention-text/mention-text';
 import { BranchPanel } from './branch-panel/branch-panel';
 import { ConflictsPanel } from './conflicts-panel/conflicts-panel';
 import { ReviewForm } from './review-form/review-form';
 import { TicketQuestionPanel } from './ticket-question-panel/ticket-question-panel';
 import { AgentEventLogPanel } from './agent-event-log-panel/agent-event-log-panel';
+import { CrossProjectInstructionsPanel } from './cross-project-instructions-panel/cross-project-instructions-panel';
+import { PipelineNotesPanel } from './pipeline-notes-panel/pipeline-notes-panel';
 import { buildBranchUrl } from '../../core/utils/git-url.util';
 
 // The SSE stream (see ProjectEventsService) now drives the primary refresh; this is only a
@@ -50,11 +53,14 @@ const DESCRIPTION_PREVIEW_LENGTH = 400;
     DatePipe,
     StatusBadge,
     CommitDiffViewer,
+    MentionText,
     BranchPanel,
     ConflictsPanel,
     ReviewForm,
     TicketQuestionPanel,
     AgentEventLogPanel,
+    CrossProjectInstructionsPanel,
+    PipelineNotesPanel,
   ],
   templateUrl: './ticket-detail.html',
 })
@@ -76,6 +82,7 @@ export class TicketDetail {
   readonly reviewFormOpen = signal(false);
   readonly starting = signal(false);
   readonly cancelling = signal(false);
+  readonly movingToBacklog = signal(false);
   readonly submittingReview = signal(false);
   readonly descriptionExpanded = signal(false);
 
@@ -213,6 +220,22 @@ export class TicketDetail {
         this.refresh();
       },
       error: () => this.cancelling.set(false),
+    });
+  }
+
+  moveToBacklog(): void {
+    const ticket = this.ticket();
+    if (!ticket || !confirm(`Move "${ticket.title}" back to the project's backlog?`)) {
+      return;
+    }
+    this.movingToBacklog.set(true);
+    this.ticketsService.moveToBacklog(ticket.id).subscribe({
+      next: () => {
+        this.movingToBacklog.set(false);
+        this.notifications.success('Ticket moved to the backlog.');
+        this.refresh();
+      },
+      error: () => this.movingToBacklog.set(false),
     });
   }
 

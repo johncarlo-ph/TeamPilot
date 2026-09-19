@@ -13,6 +13,8 @@ using TeamPilot.Application.Orchestration;
 using TeamPilot.Application.Projects;
 using TeamPilot.Application.Sprints;
 using TeamPilot.Application.TicketAgentEvents;
+using TeamPilot.Application.TicketPipelineNotes;
+using TeamPilot.Application.TicketProjectInstructions;
 using TeamPilot.Application.TicketQuestions;
 using TeamPilot.Application.Tickets;
 using TeamPilot.Application.Workflow;
@@ -38,6 +40,8 @@ public class OrchestrationServiceTests
     private readonly Mock<IStageExecutionRepository> _stageExecutionRepository = new();
     private readonly Mock<ITicketQuestionRepository> _ticketQuestionRepository = new();
     private readonly Mock<ITicketAgentEventRepository> _ticketAgentEventRepository = new();
+    private readonly Mock<ITicketProjectInstructionRepository> _ticketProjectInstructionRepository = new();
+    private readonly Mock<ITicketPipelineNoteRepository> _ticketPipelineNoteRepository = new();
     private readonly Mock<IProjectAccessGuard> _projectAccessGuard = new();
     private readonly Mock<IAuditLogger> _auditLogger = new();
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
@@ -151,6 +155,8 @@ public class OrchestrationServiceTests
             _stageExecutionRepository.Object,
             _ticketQuestionRepository.Object,
             _ticketAgentEventRepository.Object,
+            _ticketProjectInstructionRepository.Object,
+            _ticketPipelineNoteRepository.Object,
             _projectAccessGuard.Object,
             _auditLogger.Object,
             _unitOfWork.Object,
@@ -321,6 +327,333 @@ public class OrchestrationServiceTests
         Assert.Single(codingPrompts);
         Assert.Contains("Standing instructions for this agent:", codingPrompts[0]);
         Assert.Contains("Always write tests first.", codingPrompts[0]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_DescriptionMentionsOtherProject_ResearchAndDesignPromptsNameItButCodingAndTestingDoNot()
+    {
+        var referencedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([referencedProject]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"Depends on @[Billing Service](project:{referencedProject.Id})", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var promptsByRole = new Dictionary<AgentRole, string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                foreach (var (role, agent) in new[] { (AgentRole.Research, _researchAgent), (AgentRole.Design, _designAgent), (AgentRole.Coding, _codingAgent), (AgentRole.Testing, _testingAgent) })
+                {
+                    if (IsPromptFor(req, agent))
+                    {
+                        promptsByRole[role] = req.Prompt;
+                    }
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        // The mentioned project's name/id is always present in Coding's and Testing's prompts too
+        // (it's part of the raw <ticket_description> text every stage gets) - what distinguishes
+        // Research/Design is the added "referenced projects" guidance block itself.
+        const string referencedProjectsGuidance = "This ticket's description references other projects.";
+        Assert.Contains(referencedProjectsGuidance, promptsByRole[AgentRole.Research]);
+        Assert.Contains(referencedProject.Id.ToString(), promptsByRole[AgentRole.Research]);
+        Assert.Contains(referencedProjectsGuidance, promptsByRole[AgentRole.Design]);
+        Assert.DoesNotContain(referencedProjectsGuidance, promptsByRole[AgentRole.Coding]);
+        Assert.DoesNotContain(referencedProjectsGuidance, promptsByRole[AgentRole.Testing]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_DescriptionMentionsFileInOwnProject_ResearchPromptNamesTheFile()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"See @[src/app/foo.ts](file:{_project.Id}:src/app/foo.ts)", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        string? researchPrompt = null;
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompt = req.Prompt;
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.NotNull(researchPrompt);
+        Assert.Contains("this ticket's own project", researchPrompt);
+        Assert.Contains("src/app/foo.ts", researchPrompt);
+        _projectRepository.Verify(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_DescriptionMentionsFileInReferencedProject_ResearchPromptNamesTheFileAndItsProject()
+    {
+        var referencedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([referencedProject]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"See @[src/invoice.ts](file:{referencedProject.Id}:src/invoice.ts)", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        string? researchPrompt = null;
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                if (IsPromptFor(req, _researchAgent))
+                {
+                    researchPrompt = req.Prompt;
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.NotNull(researchPrompt);
+        Assert.Contains("src/invoice.ts", researchPrompt);
+        Assert.Contains("Billing Service", researchPrompt);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_DescriptionMentionsTicket_ResearchAndDesignPromptsIncludeItsOwnDescriptionButCodingAndTestingDoNot()
+    {
+        var mentionedTicket = Ticket.Create(_project.Id, _sprint.Id, "Other ticket", "The other ticket's own description.", "The other ticket's own acceptance criteria.");
+        _ticketRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([mentionedTicket]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"See @[Other ticket](ticket:{mentionedTicket.Id})", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var promptsByRole = new Dictionary<AgentRole, string>();
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) =>
+            {
+                foreach (var (role, agent) in new[] { (AgentRole.Research, _researchAgent), (AgentRole.Design, _designAgent), (AgentRole.Coding, _codingAgent), (AgentRole.Testing, _testingAgent) })
+                {
+                    if (IsPromptFor(req, agent))
+                    {
+                        promptsByRole[role] = req.Prompt;
+                    }
+                }
+
+                return Task.FromResult(IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20));
+            });
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Contains("The other ticket's own description.", promptsByRole[AgentRole.Research]);
+        Assert.Contains("The other ticket's own acceptance criteria.", promptsByRole[AgentRole.Research]);
+        Assert.Contains("<referenced_ticket title=\"Other ticket\"", promptsByRole[AgentRole.Research]);
+        Assert.Contains("The other ticket's own description.", promptsByRole[AgentRole.Design]);
+        Assert.DoesNotContain("The other ticket's own description.", promptsByRole[AgentRole.Coding]);
+        Assert.DoesNotContain("The other ticket's own description.", promptsByRole[AgentRole.Testing]);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_DescriptionMentionsOtherProject_GrantsResearchToolAccessToItButNeverCoding()
+    {
+        var referencedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([referencedProject]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"Depends on @[Billing Service](project:{referencedProject.Id})", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        var toolsByRole = new Dictionary<AgentRole, IReadOnlyList<LlmToolDefinition>?>();
+        _llmConnector
+            .Setup(l => l.SendConversationAsync(It.IsAny<LlmConversationRequest>(), It.IsAny<CancellationToken>()))
+            .Returns(async (LlmConversationRequest req, CancellationToken ct) =>
+            {
+                var promptText = ((LlmTextBlock)req.Messages[0].Content[0]).Text;
+
+                foreach (var (role, agent) in new[] { (AgentRole.Research, _researchAgent), (AgentRole.Design, _designAgent), (AgentRole.Coding, _codingAgent) })
+                {
+                    if (IsPromptFor(promptText, agent))
+                    {
+                        toolsByRole[role] = req.Tools;
+                    }
+                }
+
+                var response = await _llmConnector.Object.SendPromptAsync(new LlmRequest(promptText, req.MaxTokens), ct);
+                return new LlmConversationResponse([new LlmTextBlock(response.Content)], "end_turn", response.Model, response.InputTokens, response.OutputTokens);
+            });
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        var researchReadFileSchema = toolsByRole[AgentRole.Research]!.Single(t => t.Name == "read_file").InputSchemaJson;
+        Assert.Contains("\"project\"", researchReadFileSchema);
+        Assert.Contains("Billing Service", researchReadFileSchema);
+
+        var designReadFileSchema = toolsByRole[AgentRole.Design]!.Single(t => t.Name == "read_file").InputSchemaJson;
+        Assert.Contains("\"project\"", designReadFileSchema);
+
+        var codingReadFileSchema = toolsByRole[AgentRole.Coding]!.Single(t => t.Name == "read_file").InputSchemaJson;
+        Assert.DoesNotContain("\"project\"", codingReadFileSchema);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_ResearchStageRaisesCrossProjectInstruction_PersistsWithoutBlockingTicket()
+    {
+        var referencedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([referencedProject]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"Depends on @[Billing Service](project:{referencedProject.Id})", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        TicketProjectInstruction? persisted = null;
+        _ticketProjectInstructionRepository
+            .Setup(r => r.AddAsync(It.IsAny<TicketProjectInstruction>(), It.IsAny<CancellationToken>()))
+            .Callback<TicketProjectInstruction, CancellationToken>((instruction, _) => persisted = instruction)
+            .Returns(Task.CompletedTask);
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : IsPromptFor(req, _researchAgent)
+                            ? new LlmResponse($"Found the API.\n<instruction project=\"{referencedProject.Id}\">Add a /invoices/export endpoint.</instruction>", "claude-test", 10, 20)
+                            : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.ForReview, ticket.Status);
+        Assert.True(result.TestingPassed);
+        _ticketProjectInstructionRepository.Verify(r => r.AddAsync(It.IsAny<TicketProjectInstruction>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.NotNull(persisted);
+        Assert.Equal(ticket.Id, persisted!.TicketId);
+        Assert.Equal(_researchAgent.Id, persisted.AgentId);
+        Assert.Equal(referencedProject.Id, persisted.ReferencedProjectId);
+        Assert.Equal("Add a /invoices/export endpoint.", persisted.Text);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_StageRaisesMultipleCrossProjectInstructions_PersistsAllOfThem()
+    {
+        var referencedProject = Project.Create("Billing Service", "desc", "https://github.com/org/billing.git", "encrypted-token");
+        _projectRepository
+            .Setup(r => r.GetByIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([referencedProject]);
+
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", $"Depends on @[Billing Service](project:{referencedProject.Id})", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All good.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : IsPromptFor(req, _researchAgent)
+                            ? new LlmResponse(
+                                $"Found two gaps.\n<instruction project=\"{referencedProject.Id}\">Add endpoint A.</instruction>\n<instruction project=\"{referencedProject.Id}\">Add endpoint B.</instruction>",
+                                "claude-test",
+                                10,
+                                20)
+                            : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        _ticketProjectInstructionRepository.Verify(r => r.AddAsync(It.IsAny<TicketProjectInstruction>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_StageLeavesNotesMarker_PersistsPipelineNoteWithoutBlockingTicket()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", "desc", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        TicketPipelineNote? persisted = null;
+        _ticketPipelineNoteRepository
+            .Setup(r => r.AddAsync(It.IsAny<TicketPipelineNote>(), It.IsAny<CancellationToken>()))
+            .Callback<TicketPipelineNote, CancellationToken>((note, _) => persisted = note)
+            .Returns(Task.CompletedTask);
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All checks passed.\nRESULT: PASS\nNOTES: Skipped the slow integration suite - only unit tests ran.", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        var result = await _sut.RunPipelineAsync(ticket.Id);
+
+        Assert.Equal(TicketStatus.ForReview, ticket.Status);
+        Assert.True(result.TestingPassed);
+        _ticketPipelineNoteRepository.Verify(r => r.AddAsync(It.IsAny<TicketPipelineNote>(), It.IsAny<CancellationToken>()), Times.Once);
+        Assert.NotNull(persisted);
+        Assert.Equal(ticket.Id, persisted!.TicketId);
+        Assert.Equal(_testingAgent.Id, persisted.AgentId);
+        Assert.Equal(AgentRole.Testing, persisted.Role);
+        Assert.Equal("Skipped the slow integration suite - only unit tests ran.", persisted.Text);
+    }
+
+    [Fact]
+    public async Task RunPipelineAsync_StageOutputHasNoNotesMarker_DoesNotPersistPipelineNote()
+    {
+        var ticket = Ticket.Create(_project.Id, _sprint.Id, "Build feature", "desc", "Acceptance criteria");
+        _ticketRepository.Setup(r => r.GetByIdAsync(ticket.Id, It.IsAny<CancellationToken>())).ReturnsAsync(ticket);
+
+        _llmConnector
+            .Setup(l => l.SendPromptAsync(It.IsAny<LlmRequest>(), It.IsAny<CancellationToken>()))
+            .Returns((LlmRequest req, CancellationToken _) => Task.FromResult(
+                IsPromptFor(req, _testingAgent)
+                    ? new LlmResponse("All checks passed.\nRESULT: PASS", "claude-test", 10, 20)
+                    : IsPromptFor(req, _codingAgent)
+                        ? new LlmResponse(CodingOutputWithFileChange(), "claude-test", 10, 20)
+                        : new LlmResponse("Some output", "claude-test", 10, 20)));
+
+        await _sut.RunPipelineAsync(ticket.Id);
+
+        _ticketPipelineNoteRepository.Verify(r => r.AddAsync(It.IsAny<TicketPipelineNote>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     /// <summary>

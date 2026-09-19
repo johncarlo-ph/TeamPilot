@@ -195,6 +195,16 @@ though: a **Cancelled Tickets** button in the board header
 just with the API's existing `status` query filter) on open and lists each cancelled ticket's
 title, last-updated time, and cancellation reason (if any), linking through to its detail page.
 
+**Moving a ticket back to the backlog is also a detail-page button, not a board card action.**
+`features/ticket-detail/ticket-detail.html` shows **Start**/**Run Pipeline**, **Move to Backlog**,
+and **Cancel Ticket** as a button group inline with the ticket title (top-right of the header),
+rather than spread across the description area. **Move to Backlog** only renders for `ToDo`
+tickets (matching `Ticket.MoveToBacklog()`'s domain guard, which also rejects a linked branch) and
+calls `TicketsService.moveToBacklog`, then reuses the page's own `refresh()` so the now-backlogged
+ticket's `sprintId: null` flips `backLink()`/`backLabel()` over to "Back to backlog" in place.
+`features/board/ticket-card` no longer renders this button itself — it moved off the board card
+entirely, so `board.ts` no longer needs a `moveToBacklog` handler either.
+
 **`Blocked` *is* a board column, unlike `Cancelled` - the difference is that a blocked ticket
 needs a human to notice and act on it, so it stays visible in the normal kanban flow rather than
 disappearing.** `BOARD_COLUMNS` (`board.ts`) has 5 entries now (To Do/In Progress/Blocked/For
@@ -579,6 +589,87 @@ parent's request resolves. This is why forms without their own dedicated inline 
 but to reset the loading flag so a failed request doesn't leave the button stuck disabled.
 Purely local actions (opening/closing a modal, toggling a signal, drag-and-drop reordering) are
 unaffected — this convention only applies to buttons that call into the HTTP layer.
+
+**"@"-mention autocomplete on `create-ticket-form`'s description field, rendered as inline chips
+inside the field itself via a custom `contenteditable` `ControlValueAccessor` - not a plain
+`<textarea>`.** A first pass showed the raw `@[Label](ticket:<id>)` token as literal text while
+typing (a `<textarea>` has no concept of inline formatting), then a separate preview box under
+the field, then a three-trigger-character scheme (`@`/`#`/`/`) - all superseded after user
+feedback: the chip has to render inline in the field itself, and every reference type shares the
+single `@` trigger, disambiguated by a category picker instead of a different character.
+`MentionEditor` (`shared/components/mention-editor`) replaces the textarea, implements
+`ControlValueAccessor` (`NG_VALUE_ACCESSOR`), and drops into `create-ticket-form.html` via the
+same `formControlName` binding the textarea used, requiring `projectId`/`projectName` inputs (the
+ticket's own project - threaded down from `board.html`/`backlog.html` through
+`create-ticket-form`) since File-category search needs to know which project(s) it's allowed to
+search. No rich-text library is involved (none exists in this codebase, and the feature set -
+plain text plus atomic mention chips, nothing else - didn't justify adding one); it's a
+`contenteditable` div kept deliberately **flat by construction**: `(keydown)` intercepts `Enter`
+to insert a literal `"\n"` text node instead of letting the browser insert a `<div>`/`<br>`, and
+`(paste)` intercepts to insert clipboard `text/plain` only, so every direct child of the editor
+is always either a `Text` node or one atomic `contenteditable="false"` chip `<span>` - never a
+nested block element. `mention-editor.dom.ts` is the DOM layer this invariant makes tractable:
+`renderCanonicalTextIntoElement` (initial render / `writeValue`) reuses `parseMentionSegments`
+from `core/utils/mention.util.ts` to alternate text nodes and chip spans; a chip's visible text is
+`mentionDisplayLabel(type, label)` - `"@ticket: Fix login bug"`, `"@file: src/app/foo.ts"` - not
+the bare label, so the reference's category is always legible at a glance, not just distinguished
+by badge color. `getCanonicalTextAndCaretOffset` walks the flat child list to reconstruct both the
+canonical token string (fed to `findMentionTrigger` - unchanged, it only ever looks for a single
+`@` - and to the form's `onChange`) and the caret's offset into it from `window.getSelection()` -
+a chip is atomic, so a caret "inside" one is impossible, only before/after; `replaceCanonicalRange`
+maps a canonical offset pair back to DOM `(node, offset)` positions and does the
+`Range.deleteContents()`/`insertNode()` swap when a mention is selected, leaving the caret right
+after the inserted chip (plus a trailing space) via `Range.setStartAfter`. Backspacing a whole
+chip in one keystroke needs no special handling - `contenteditable="false"` makes it atomic to
+the browser's native delete behavior.
+
+**`MentionAutocomplete` is two phases, not one flat search.** Typing `@` opens it showing a fixed
+3-item category picker (Project/Ticket/File) - the query text typed at that point is deliberately
+ignored (matching against "project"/"ticket"/"file" would almost never hit a real search term
+anyway). Selecting a category (click, or arrow keys + Enter - `handleKeydown` branches on whether
+`category()` is still null) switches it to a live, debounced (200ms) search scoped to just that
+one category, using whatever's typed from then on: `searchProjects`/`searchTickets` as before
+(across every project the caller can access), or - for File - `searchFiles(projectId, query)`
+called once per candidate project in parallel (`forkJoin`) and merged, capped at 10 total.
+`MentionEditor` supplies that candidate list as `allKnownProjects` - always the current project,
+plus every project the user selects while composing (i.e. via the Project category); a File
+mention for a project not in that list is impossible to produce from the UI, matching the backend
+rule that a cross-project File mention requires that project to already be directly Project-
+mentioned (see [docs/application.md](application.md)). `MentionEditor` owns its own
+`MentionAutocomplete` dropdown internally, so `create-ticket-form.ts` itself has no mention-
+specific code left at all beyond the template binding.
+
+**Picking a category writes a literal `"@type: "` label into the editor, not just an internal
+state change.** `MentionAutocomplete.selectCategory` fires a `categorySelected` output (in
+addition to setting its own `category` signal) the instant a category is chosen - before any
+search happens - so `MentionEditor.onCategorySelected` can replace whatever's currently between
+the `"@"` trigger and the caret (discarding it; it was never used for matching anyway) with a
+literal `"@project: "`/`"@ticket: "`/`"@file: "` text node, right in the editable content. Without
+this, the field showed nothing to confirm which category was active until a result was actually
+picked. `MentionEditor` then tracks `mentionLabelEnd` (the offset right after that label) and
+switches `onInput` to slicing the query as `text.slice(mentionLabelEnd, caretOffset)` instead of
+re-running `findMentionTrigger` - that scan stops at the first whitespace it meets scanning
+backward from the caret, which the label's own `": "` would immediately hit, so it can't be
+reused once the label exists. The caret moving back before `mentionLabelEnd` (backspacing through
+the label, or clicking away) is what ends that attempt, the same as the original "@" scan failing
+did before a category was chosen. `MentionText` (`shared/components/
+mention-text`) is the separate, simpler read-only counterpart - same `mentionDisplayLabel`
+rendering, still just a parsed-segments `@for` over `{type, text, ...}[]`, never `[innerHTML]` -
+used wherever description text is only ever displayed, never edited (ticket detail, the backlog
+list). `CrossProjectInstructionsPanel` (`features/ticket-detail`) is a new read-only panel listing
+a ticket's `instructions` (embedded directly in `TicketDetailDto`, no separate fetch), resolving
+each `referencedProjectId` to a name via a batched `ProjectsService.getById` lookup the same way
+`ticket-detail.ts` already resolves its own project's name.
+
+**`PipelineNotesPanel` (`features/ticket-detail/pipeline-notes-panel`) surfaces a ticket's
+`pipelineNotes` (also embedded directly in `TicketDetailDto`, no separate fetch), but only once
+the ticket is `Done`** - unlike `CrossProjectInstructionsPanel` (visible any time it has content),
+this panel's own `visible` computed signal additionally checks `status() === 'Done'`, since a
+pipeline note is meant to be read once there's no more raw agent output left to dig through, not
+mixed in while the ticket is still actively running through stages. Kept as a distinct panel
+rather than merged into `CrossProjectInstructionsPanel` or `AgentEventLogPanel` - a cross-project
+instruction is an actionable "go do this in another project" item that shouldn't get buried in a
+general notes list, and the agent log is a raw chronological trace, not a curated summary.
 
 ## Authorization (client-side mirror, not enforcement)
 

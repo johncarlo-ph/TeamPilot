@@ -504,6 +504,86 @@ public class LibGit2SharpGitService(IOptions<GitOptions> options, IHostEnvironme
         }
     }
 
+    /// <summary>Bounds how many files a search walks before giving up, independent of how many
+    /// results it's found - protects a huge repository from a full-tree walk on every keystroke
+    /// of the mention-autocomplete's file search, at the cost of a very deep match potentially
+    /// not surfacing for an early-alphabetical query.</summary>
+    private const int MaxSearchFilesWalked = 5000;
+
+    public Task<IReadOnlyList<string>> SearchFilesAsync(string repositoryPath, string query, string? branchName, int maxResults, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                using var repo = OpenRepository(repositoryPath);
+                if (branchName is not null)
+                {
+                    Commands.Checkout(repo, GetOrCreateBranch(repo, branchName));
+                }
+
+                var root = repo.Info.WorkingDirectory;
+                var matches = new List<string>();
+                var filesWalked = 0;
+                CollectMatchingFilesRecursively(root, root, query, matches, maxResults, ref filesWalked);
+
+                matches.Sort(StringComparer.OrdinalIgnoreCase);
+                return (IReadOnlyList<string>)matches;
+            },
+            cancellationToken);
+
+    private static void CollectMatchingFilesRecursively(string root, string directory, string query, List<string> matches, int maxResults, ref int filesWalked)
+    {
+        foreach (var file in Directory.EnumerateFiles(directory))
+        {
+            if (matches.Count >= maxResults || filesWalked >= MaxSearchFilesWalked)
+            {
+                return;
+            }
+
+            filesWalked++;
+            var relativePath = Path.GetRelativePath(root, file).Replace('\\', '/');
+            if (relativePath.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                matches.Add(relativePath);
+            }
+        }
+
+        foreach (var subdirectory in Directory.EnumerateDirectories(directory))
+        {
+            if (matches.Count >= maxResults || filesWalked >= MaxSearchFilesWalked)
+            {
+                return;
+            }
+
+            var name = Path.GetFileName(subdirectory);
+            if (ListIgnoredDirectories.Contains(name, StringComparer.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            CollectMatchingFilesRecursively(root, subdirectory, query, matches, maxResults, ref filesWalked);
+        }
+    }
+
+    public Task<bool> FileExistsAsync(string repositoryPath, string relativeFilePath, string? branchName, CancellationToken cancellationToken = default) =>
+        Task.Run(
+            () =>
+            {
+                if (IsBlockedPath(relativeFilePath))
+                {
+                    return false;
+                }
+
+                using var repo = OpenRepository(repositoryPath);
+                if (branchName is not null)
+                {
+                    Commands.Checkout(repo, GetOrCreateBranch(repo, branchName));
+                }
+
+                var fullPath = ResolveSandboxedPath(repo.Info.WorkingDirectory, relativeFilePath);
+                return File.Exists(fullPath);
+            },
+            cancellationToken);
+
     public Task<GitFileReadResult> ReadFileAsync(string repositoryPath, string relativeFilePath, string? branchName = null, CancellationToken cancellationToken = default) =>
         Task.Run(
             () =>
